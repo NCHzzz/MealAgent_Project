@@ -1,0 +1,55 @@
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.32.8
+    container_name: weaviate-database
+    restart: unless-stopped
+    command: ["--host","0.0.0.0","--port","8080","--scheme","http"]
+    ports:
+      - "8078:8080"      # REST
+      - "50051:50051"    # gRPC
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      ENABLE_MODULES: "text2vec-transformers"
+      # DEFAULT_VECTORIZER_MODULE: "text2vec-transformers"
+      QUERY_MAXIMUM_RESULTS: "100000"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      TRANSFORMERS_INFERENCE_API: "http://t2v:8080"
+      ASYNC_INDEXING: "true"
+      GRPC_MAX_MESSAGE_SIZE: "104857600" 
+      CLUSTER_HOSTNAME: "node1"
+    depends_on:
+      - t2v
+    volumes:
+      - weaviate_data_v2:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/.well-known/ready || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+
+  t2v:
+    # image: semitechnologies/transformers-inference:baai-bge-m3-onnx
+    image: semitechnologies/transformers-inference:qwen-qwen3-embedding-0.6b
+    # image: semitechnologies/transformers-inference:google-gemma-3-300m-embedding
+
+    container_name: t2v
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    environment:
+      ENABLE_CUDA: 1
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility   # nếu có GPU; nếu không có GPU thì bỏ dòng này
+    ports:
+      - "9000:8080"    # optional: mở ra để test /health
+
+volumes:
+  weaviate_data_v2: {}
