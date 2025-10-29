@@ -46,8 +46,27 @@ description: Clarify the problem space, gather requirements, and define success 
 - Social features (recipe sharing, community) (v1)
 - Automated grocery ordering (v1)
 
-## User Stories & Use Cases
+#### Data Retention
+- User profiles: Retained indefinitely (or until user requests deletion)
+- Meal plans: 360 days
+- Shopping lists: 30 days
+- Activity logs: 360 days
 
+### Terminology & Definitions
+
+| Term | Definition |
+|------|------------|
+| **TDEE** | Total Daily Energy Expenditure; calories burned per day including activity |
+| **Harris-Benedict** | Formula for calculating BMR (Basal Metabolic Rate) based on age, gender, weight, height |
+| **Macronutrients (Macros)** | Protein, Fat, Carbohydrates (measured in grams) |
+| **Micronutrients (Micros)** | Vitamins and minerals (measured in mg/mcg/IU) |
+| **FDC** | FoodData Central (USDA nutritional database) |
+| **FDCPortion** | USDA portion conversion table (e.g., "1 cup" → grams) |
+| **Hybrid Search** | BM25 (keyword) + vector (semantic) search combined |
+| **Environment** | Elysia's shared state container where tool results are stored |
+| **Pantry-aware** | Shopping list generation that accounts for existing inventory |
+
+## User Stories & Use Cases
 ### Core User Stories
 
 1. **As a user**, I want to create a nutritional profile (age, gender, weight, height, activity level, allergens, diet preferences) so that meal plans match my TDEE and macro goals
@@ -72,14 +91,22 @@ description: Clarify the problem space, gather requirements, and define success 
    - Acceptance: Explanation references profile data, constraints, and nutritional fit
    - Acceptance: Decision trace available through Environment history
 
+6. **As a user tracking my nutrition**, I want to log what I've eaten by chatting with the system so that it calculates my consumed nutrition and adjusts future meal recommendations
+   - Acceptance: User can input meal via natural language chat (e.g., "I just ate a chicken salad")
+   - Acceptance: System parses meal description and calculates kcal/macros/micros
+   - Acceptance: Consumed nutrition saved to UserProfile meal history
+   - Acceptance: Remaining daily targets updated (target - consumed)
+   - Acceptance: Next meal recommendations adjusted based on remaining targets
+
 ### Key Workflows
 
 1. **Initial Setup**: Create profile → Calculate TDEE/macros → Set constraints → Save to UserProfile collection
 2. **Daily Planning**: Retrieve user targets → Search recipes (hybrid retrieval) → Rank by fit → Assemble 3-meal plan → Validate constraints → Generate shopping list
 3. **Weekly Planning**: Same as daily but 21 meals with variety enforcement across days
-4. **Gap Filling**: Calculate deficit (target - consumed) → Suggest snacks → Validate updated plan
-5. **Cooking Mode**: Select recipe → Parse into steps → Stream instructions with timing
-6. **Pantry Management**: Add/update/remove pantry items → Recalculate shopping list differential
+4. **Meal Logging & Nutrition Tracking**: User inputs meal consumed via chat → Parse meal description (LLM-assisted) → Calculate nutrition/kcal for that meal → Save to UserProfile (meal history) → Update remaining daily targets → Adjust subsequent meal recommendations
+5. **Gap Filling**: Calculate deficit (target - consumed from logged meals) → Suggest snacks → Validate updated plan
+6. **Cooking Mode**: Select recipe → Parse into steps → Stream instructions with timing
+7. **Pantry Management**: Add/update/remove pantry items → Recalculate shopping list differential
 
 ### Edge Cases to Consider
 
@@ -98,18 +125,34 @@ description: Clarify the problem space, gather requirements, and define success 
 - [ ] **Constraint Enforcement**: Zero constraint violations in generated plans (diet/allergen/time/equipment when declared)
 - [ ] **Daily Plan**: Total kcal within ±10% of target; macros within ±15% of targets; 3 meals assembled
 - [ ] **Weekly Plan**: 21 meals assembled; variety report shows <3 repetitions of primary protein/cuisine per week; macro totals within ±10%
+- [ ] **Meal Logging**: User can input consumed meal via chat; nutrition calculated and saved to UserProfile; remaining targets updated
+- [ ] **Adaptive Planning**: After meal logging, subsequent meal recommendations adjust to remaining daily targets
 - [ ] **Pantry & Shopping**: Shopping list correctly subtracts pantry items with unit conversion consistency
-- [ ] **Gap Fill**: Snack suggestions reduce largest deficit; updated plan passes validation
+- [ ] **Gap Fill**: Snack suggestions reduce largest deficit (accounting for logged meals); updated plan passes validation
 - [ ] **Substitution**: Replacement ingredients maintain ±20% macro equivalence; no allergen violations
 - [ ] **Micronutrients**: Aggregation uses FDCPortion for unit conversion; deficit detection triggers suggestions
 - [ ] **Cooking Instructions**: Steps parsed with time estimates; streaming mode yields step-by-step
 - [ ] **Explanations**: Generated text references Environment data (profile, constraints, scores)
 
 ### Performance Benchmarks
-- Hybrid retrieval (search + filter) completes in <2 seconds for 100k recipe corpus
+- Hybrid retrieval (search + filter) completes in <2 seconds for 4k demo recipe corpus (<3s for 10k+ production)
 - Daily plan generation (end-to-end) completes in <5 seconds
 - Weekly plan generation completes in <15 seconds
 - Micronutrient aggregation for 21 meals completes in <3 seconds
+- Meal logging (parse + calculate + save) completes in <2 seconds
+
+### Nutritional Accuracy
+- **Macro Calculations**: ±5% accuracy when compared to manually calculated values from FDC raw data
+- **Portion Conversions**: ±10% accuracy when benchmarked against USDA standard portions (FDCPortion table)
+- **Micronutrient Aggregation**: ±15% accuracy (acceptable due to natural ingredient variability)
+- **LLM Meal Parsing**: ≥85% accuracy on test set of 100 diverse meal descriptions (measured against human labeling)
+
+### User Experience Metrics
+- **User Satisfaction**: >85% of users rate generated plans as "helpful" or "very helpful" (post-plan survey)
+- **Plan Acceptance Rate**: >70% of generated plans are saved by users (not regenerated immediately due to dissatisfaction)
+- **Meal Logging Adoption**: >50% of users log at least one meal within first week of use
+- **Retention**: >50% of users return within 7 days of first plan generation
+
 
 ### Quality Metrics
 - Unit test coverage: 100% of new code
@@ -123,47 +166,158 @@ description: Clarify the problem space, gather requirements, and define success 
 - **Elysia Framework**: All tools must be async generators yielding Result/Text objects
 - **Weaviate**: Primary data store for Recipe, FdcFood, FdcNutrient, FDCPortion collections
 - **Environment Key Convention**: Tools write to `<branch>.<tool>.<key>` namespace only
-- **No LLM for Core Logic**: Macronutrient calculations, constraint validation, and retrieval must be deterministic (code-based); LLM optional only for ranking, substitutions, and explanations
+
+#### LLM Usage Strategy (Elysia-Integrated Architecture)
+
+**Design Principle**: LLM acts as a **cognitive enhancement layer** within Elysia's decision tree, where each LLM call is wrapped in a **Tool** that yields validated Results to the Environment. This ensures transparency, traceability, and deterministic fallbacks.
+
+**Architecture Pattern**:
+- User Input → Tree → LLM Tool (async generator) → Yield Text (streaming progress)
+- LLM Tool → Yield Result (to Environment) → Code Validation Tool → Final Validated Result
+
+---
+
+**Category 1: Code-Only (Deterministic) Components**
+*These tools contain NO LLM calls; pure algorithmic computation*
+
+| Tool Branch | Tool Name | Purpose | Environment Key |
+|-------------|-----------|---------|-----------------|
+| `profile` | `MacroCalcTool` | Harris-Benedict TDEE calculation | `profile.macro_calc.targets` |
+| `constraints` | `DietAllergenGuard` | Generate hard filters from profile | `constraints.filters.diet_allergen` |
+| `plan_day` | `PlanValidate` | Validate constraints (diet/allergen/macro) | `plan_day.validate.report` |
+| `shopping` | `PantryDiff` | Subtract pantry from shopping list | `shopping.list.diff` |
+| `gap_fill` | `GapCalc` | Calculate deficit (target - consumed) | `gap_fill.calc.deficits` |
+| `micros` | `MicronutrientCheck` | Aggregate micros using FDCPortion | `micros.check.totals` |
+
+**Rationale**: Nutritional calculations, constraint enforcement, and inventory math require 100% accuracy and auditability. No LLM hallucination risk allowed.
+
+---
+
+**Category 2: LLM-Enhanced Tools (with Code Safety Net)**
+*Each LLM tool follows this pattern:*
+1. **Yield Text**: Stream LLM reasoning to UI (transparency)
+2. **LLM Call**: Get structured output (JSON schema enforced)
+3. **Code Validation**: Verify LLM output meets hard constraints
+4. **Yield Result**: Store validated data in Environment
+5. **Error Handling**: If LLM fails or validation fails, yield Error and fallback to code-based approach
+
+| Tool Branch | Tool Name | LLM Role | Code Validation | Fallback Strategy |
+|-------------|-----------|----------|-----------------|-------------------|
+| `meal_logging` | `MealParser` | Parse "I ate chicken salad" → `{dish: "Chicken Salad", ingredients: [...], portion: 1}` | Check if parsed ingredients exist in FDC; re-prompt if missing | Ask user to select from dropdown if parsing fails 3x |
+| `search` | `QueryEnhancer` | Expand "healthy dinner" → "low-calorie high-protein dinner recipes vegetarian gluten-free" | Validate generated keywords against known tags | Use original query if expansion produces no results |
+| `search` | `ScoreAndRank` | Semantic scoring of recipe fit to user preferences | Code validates top-k recipes still pass diet/allergen filters | Fall back to pure code-based scoring (macro distance + BM25) |
+| `substitution` | `SuggestSubstitutes` | "Sour cream" → ["Greek yogurt", "Cottage cheese", "Cashew cream"] | Code validates macros within ±20%; allergen-free | Return empty if no valid substitutes; prompt user to adjust recipe |
+| `cook_mode` | `InstructionParser` | Split unstructured recipe text into structured steps with time estimates | Code validates time estimates sum to recipe total_time | Use regex-based fallback parser (less accurate but deterministic) |
+| `explain` | `ExplainGenerator` | Generate natural language explanation from Environment data | Code validates all referenced data exists in Environment | Template-based explanation if LLM fails |
+| `variety` | `CuisineClassifier` | Classify recipe cuisine/flavor profile for diversity scoring | Code validates classification against known cuisines | Use recipe tags as fallback |
+
+
+**Category 3: Hybrid Orchestration (LLM + Code in Sequence)**
+*Tree orchestrates multiple tools in sequence; LLM output feeds into code validation*
+
+| Workflow | Steps | Data Flow |
+|----------|-------|-----------|
+| **Meal Logging** | 1. `MealParser` (LLM)<br>2. `NutritionCalc` (Code)<br>3. `ProfileUpdate` (Code) | User input → LLM parses → Code calculates nutrition → Code saves to profile |
+| **Recipe Recommendation** | 1. `QueryEnhancer` (LLM)<br>2. `HybridSearch` (Code)<br>3. `ScoreAndRank` (LLM)<br>4. `ConstraintFilter` (Code) | User query → LLM expands → Code retrieves → LLM ranks → Code filters |
+| **Ingredient Substitution** | 1. `SuggestSubstitutes` (LLM)<br>2. `ValidateSubstitutes` (Code)<br>3. `ApplySubstitute` (Code) | User requests swap → LLM suggests → Code validates macros/allergens → Code updates recipe |
+
+
+**Key Advantages of This Architecture**:
+1. **Transparency**: Every LLM call yields Text (reasoning visible to user)
+2. **Traceability**: All LLM outputs stored in Environment with validation status
+3. **Safety**: Code validation catches LLM hallucinations before data is saved
+4. **Fallback**: Every LLM tool has deterministic fallback if LLM fails
+5. **Debuggability**: Environment history shows exact LLM input/output for each step
+6. **Testability**: Can mock LLM responses in tests; code validation logic is unit-testable
+
+---
+
+**Performance Considerations**:
+- **Caching**: Cache LLM responses for common queries (e.g., "healthy dinner") in Redis (TTL: 24h)
+- **Batching**: Batch multiple LLM calls when possible (e.g., parse 3 meals at once)
+- **Streaming**: Use LLM streaming API to yield Text progressively (improve perceived latency)
+
+- **Rate Limiting**: LLM calls limited to 10/minute per user (prevent abuse and cost overrun)
 
 ### Business Constraints
-- **Data Source**: USDA FoodData Central for nutritional data (public domain, no licensing fees)
-- **Recipe Corpus**: Pre-existing recipe database (source TBD - scraped, licensed, or user-contributed)
+- **Data Source**: 
+  - **FDC Nutritional Data**: USDA FoodData Central (public domain, no licensing fees)
+  - **Demo Recipe Corpus**: 4,000 sample recipes pre-loaded at `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
+  - **Production Scaling**: Plan to expand to 10k+ recipes (source TBD - community contribution, licensing, or web scraping with legal review)
 - **User Privacy**: No sharing of user profiles or meal plans without explicit consent
 
+### Regulatory Constraints
+- **HIPAA Compliance**: **NOT REQUIRED** - System is classified as a "wellness and lifestyle application," not a medical device or covered healthcare entity
+- **Legal Disclaimers**: Must include prominent disclaimer:
+  - "This application provides nutritional information for educational and wellness purposes only"
+  - "Not intended for medical diagnosis, treatment, or disease prevention"
+  - "Consult healthcare provider before making significant dietary changes"
+- **FDA Disclaimer**: Nutritional information presented "as-is" with standard FDA disclaimer
+
+
 ### Time/Budget Constraints
-- MVP delivery: 12 weeks (3-week sprints × 4)
-- Team: 2 backend engineers, 1 frontend engineer, 1 data engineer (part-time)
+- MVP delivery: 6 weeks 
+- Team: 1 backend engineer, 1 frontend engineer 
 
 ### Assumptions
-1. Recipe database contains at least 10k recipes with structured ingredients/directions
-2. FDC data is pre-loaded into Weaviate with embeddings generated
-3. Users will manually input initial pantry inventory (no barcode scanning in v1)
-4. Serving size scaling is linear (no complex recipe adjustments)
-5. Hybrid retrieval (BM25 + vector) is sufficient; no need for external reranker API in v1
-6. Users can export shopping lists as text/PDF (no direct integration with grocery apps in v1)
+1. **Recipe Corpus Availability**: Demo starts with 4k recipes (already stored); production will scale to 10k+
+2. **FDC Data Pre-loaded**: FoodData Central nutritional data loaded into Weaviate with embeddings generated
+3. **Manual Pantry Entry**: Users manually input initial pantry inventory (no barcode scanning in v1)
+4. **Linear Portion Scaling**: Serving size adjustments are linear (no complex recipe chemistry adjustments for baking)
+5. **Hybrid Search Sufficiency**: BM25 + vector retrieval adequate; no external reranker API needed in v1
+6. **Export Capability**: Users can export shopping lists as text/PDF (no direct grocery app integration)
+7. **Chat-based Meal Logging**: Users comfortable entering consumed meals via natural language chat interface
+8. **LLM Availability**: OpenAI API or equivalent available for parsing, ranking, and explanation features
 
 ## Questions & Open Items
 
 ### Unresolved Questions
-1. **Recipe Source**: Where will the initial 10k+ recipe corpus come from? (Scraping terms-of-service compliance? Licensing? Community contribution?)
-2. **Portion Mapping**: How to handle recipes with non-standard portions (e.g., "1 large onion" vs FDC's gram-based portions)? Auto-approximate or require manual mapping?
-3. **Multi-language Support**: Should UI and recipe data support multiple languages in v1, or English-only initially?
-4. **Offline Mode**: Should the frontend cache plans/recipes for offline access, or require always-on connectivity?
+1. **Recipe Expansion Strategy**: After demo (4k recipes), how to reach 10k+? (Community contribution platform? Licensed dataset? Web scraping with legal review?)
+2. **Portion Mapping Edge Cases**: How to handle non-standard portions (e.g., "1 large onion" vs FDC's gram-based portions)? Auto-approximate or require manual mapping?
+3. **Multi-language Support**: English-only for MVP, or internationalization from start? (Impacts LLM prompts, recipe corpus, UI)
+4. **Offline Mode**: Should frontend cache plans/recipes for offline access, or always-online only?
+5. **Meal Logging Accuracy**: How to validate LLM-parsed meals against user intent? (Show parsed nutrition for confirmation before saving?)
 
 ### Items Requiring Stakeholder Input
-1. **Monetization Model**: Free tier with ads? Subscription-based? One-time purchase?
-2. **Compliance**: Do we need HIPAA compliance for health-related data? (Likely not for v1 general wellness, but check with legal)
-3. **Accessibility**: WCAG 2.1 AA compliance required? (Recommend yes for public-facing web app)
+1. **HIPAA Compliance**: ✅ **RESOLVED** - Not required (wellness app, not medical device)
+2. **LLM Provider**: ✅ **RESOLVED** - Already configured and ready for use
+3. **Recipe Expansion Budget**: Allocate funds for scaling from 4k (demo) to 10k+ recipes (licensing or data acquisition)
 
 ### Research Needed
-1. **Portion Conversion Accuracy**: Benchmark FDCPortion-based conversions against known nutrition labels (sample 100 foods)
+1. **Portion Conversion Accuracy**: Benchmark FDCPortion-based conversions against known nutrition labels (sample 100 foods from demo dataset)
 2. **Variety Metrics**: What threshold for repetition feels "monotonous" to users? (User survey or A/B test in beta)
-3. **Reranker Performance**: Measure quality difference between code-based scoring vs. LLM-based reranking (precision@10 on test set)
-4. **Streaming Latency**: Profile streaming cooking instructions to ensure <500ms delay between steps
+3. **LLM Parsing Accuracy**: Test meal logging parser on 100 diverse meal descriptions; measure accuracy vs human labeling
+4. **Reranker Performance**: Measure quality difference between code-based scoring vs. LLM-based reranking (precision@10 on test set)
+5. **Streaming Latency**: Profile streaming cooking instructions to ensure <500ms delay between steps
+6. **Meal Logging User Acceptance**: Do users prefer typing natural language vs structured forms? (UX testing)
+
+---
+## Appendix
+
+### A. References & External Resources
+- [USDA FoodData Central](https://fdc.nal.usda.gov/) - Nutritional database
+- [Harris-Benedict Equation (Wikipedia)](https://en.wikipedia.org/wiki/Harris%E2%80%93Benedict_equation) - TDEE calculation
+- [Elysia Documentation](https://weaviate.github.io/elysia) - Framework reference
+- [Weaviate Hybrid Search](https://weaviate.io/developers/weaviate/search/hybrid) - Retrieval approach
+- [LLM for Nutrition Research](https://pmc.ncbi.nlm.nih.gov/articles/PMC12367769/) - LLM applications in nutrition science
+- [Nutrition Data Standards](https://www.mdpi.com/2072-6643/17/9/1492) - Best practices for nutritional databases
+
+### B. Data Sources
+- **Demo Dataset Location**: `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
+- **Demo Dataset Size**: 4,000 recipes with structured ingredients and nutritional information
+- **FDC Data**: USDA FoodData Central (to be imported during setup phase)
+- **FDCPortion Mappings**: Portion conversion table from USDA (part of FDC download)
+
+### C. Related Documentation
+- Design: `docs/ai/design/feature-meal-planning-agent.md`
+- Planning: `docs/ai/planning/feature-meal-planning-agent.md`
+- Implementation: `docs/ai/implementation/feature-meal-planning-agent.md`
+- Testing: `docs/ai/testing/feature-meal-planning-agent.md`
+
+
+
+
 
 ---
 
-**Status**: Draft - Awaiting stakeholder review on recipe sourcing and monetization model
-**Last Updated**: 2025-10-28
-**Owner**: [Your Name/Team]
-
+**Last Updated**: 2025-10-29

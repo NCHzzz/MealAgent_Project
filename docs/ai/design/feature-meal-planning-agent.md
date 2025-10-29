@@ -250,6 +250,26 @@ graph TD
 }
 ```
 
+#### MealLogEntry (NEW - For Meal Logging Feature)
+```python
+{
+    "class": "MealLogEntry",
+    "properties": [
+        {"name": "log_id", "dataType": ["text"], "indexFilterable": True},
+        {"name": "user_id", "dataType": ["text"], "indexFilterable": True},
+        {"name": "logged_at", "dataType": ["date"]},
+        {"name": "meal_description", "dataType": ["text"]},  # Original user input (e.g., "I ate chicken salad")
+        {"name": "parsed_dish", "dataType": ["text"]},  # LLM-parsed dish name
+        {"name": "ingredients", "dataType": ["object[]"]},  # Parsed ingredients with FDC links
+        {"name": "portion_size", "dataType": ["number"]},  # Portion multiplier
+        {"name": "calculated_macros", "dataType": ["object"]},  # {kcal, protein_g, fat_g, carb_g}
+        {"name": "calculated_micros", "dataType": ["object"]},  # Micronutrients if available
+        {"name": "validation_status", "dataType": ["text"]},  # "complete", "partial", "failed"
+        {"name": "parsing_method", "dataType": ["text"]},  # "llm", "manual_fallback"
+    ]
+}
+```
+
 ### Data Flow
 
 ```mermaid
@@ -284,6 +304,36 @@ sequenceDiagram
     PlanTool->>UI: Stream plan updates (via WebSocket)
 ```
 
+### Meal Logging Data Flow (NEW)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI
+    participant Tree
+    participant MealParser as MealParser (LLM)
+    participant NutritionCalc
+    participant Env as Environment
+    participant Weaviate
+    
+    User->>UI: "Tôi vừa ăn salad gà"
+    UI->>Tree: Invoke meal_logging workflow
+    Tree->>MealParser: Parse meal description
+    MealParser->>MealParser: LLM call (structured output)
+    MealParser->>Env: yield Text("Parsing meal...")
+    MealParser->>Weaviate: Validate ingredients in FDC
+    MealParser->>Env: yield Result(meal_logging.parser.parsed_meal)
+    
+    Tree->>NutritionCalc: Calculate nutrition from FDC
+    NutritionCalc->>Weaviate: Query FdcNutrient + FDCPortion
+    NutritionCalc->>Env: yield Result(meal_logging.nutrition.calculated)
+    
+    Tree->>Weaviate: Save MealLogEntry
+    Tree->>Weaviate: Update UserProfile (consumed_today, remaining_targets)
+    Tree->>UI: Display consumed nutrition + remaining targets
+    Tree->>UI: Suggest adjusted meals for next meal
+```
+
 ## API Design
 **How do components communicate?**
 
@@ -309,6 +359,10 @@ POST   /api/v1/pantry/{user_id}       # Update pantry items
 GET    /api/v1/shopping/{plan_id}     # Get shopping list for plan
 POST   /api/v1/shopping/{plan_id}/generate  # Generate shopping list from plan
 
+POST   /api/v1/meals/log              # Log consumed meal via natural language
+GET    /api/v1/meals/history/{user_id}  # Get meal log history
+GET    /api/v1/meals/consumed-today/{user_id}  # Get today's consumed nutrition
+
 POST   /api/v1/explain/{plan_id}      # Get explanation for plan decisions
 ```
 
@@ -316,6 +370,7 @@ POST   /api/v1/explain/{plan_id}      # Get explanation for plan decisions
 ```
 WS     /ws/tree/{user_id}             # Main Tree execution stream (tool results)
 WS     /ws/cook/{recipe_id}           # Cooking mode step-by-step stream
+WS     /ws/meals/log/{user_id}        # Real-time meal parsing and nutrition calculation
 ```
 
 ### Internal Interfaces (Tool Contracts)
@@ -371,10 +426,12 @@ async def tool_name(
 2. **RecipeExplorer**: Browse/search recipes with filters (diet, allergens, time, tags)
 3. **PlannerPage**: Daily/weekly plan generation with live streaming of tool results
 4. **PlanView**: Display generated plan with macros per meal/day/week
-5. **CookingMode**: Step-by-step instructions with timer and progress tracking
-6. **PantryManager**: CRUD interface for pantry items with expiry tracking
-7. **ShoppingListView**: Checklist interface with category grouping and print/export
-8. **ExplainDialog**: Modal showing decision explanation with data references
+5. **MealLoggingChat**: Chat interface for natural language meal input with real-time nutrition preview and confirmation
+6. **MealHistoryView**: Display logged meals with nutrition breakdown and daily progress tracking
+7. **CookingMode**: Step-by-step instructions with timer and progress tracking
+8. **PantryManager**: CRUD interface for pantry items with expiry tracking
+9. **ShoppingListView**: Checklist interface with category grouping and print/export
+10. **ExplainDialog**: Modal showing decision explanation with data references
 
 ### Backend Services (Elysia Python)
 
@@ -385,13 +442,14 @@ async def tool_name(
 3. **search/** (query, query_postprocessing, ScoreAndRank)
 4. **plan_day/** (TargetResolver, PlanAssembleDay, PlanValidate, BuildShoppingList)
 5. **plan_week/** (PlanAssembleWeekly, VarietyGuard)
-6. **pantry/** (PantryCRUDTool, PantryDiff)
-7. **gap_fill/** (GapCalc, SuggestSnack, ApplySnack)
-8. **substitution/** (SuggestSubstitutes, ApplySubstitute)
-9. **family/** (MergeConstraints, PlanFamily)
-10. **micros/** (MicronutrientCheck, SuggestMicrosFoods)
-11. **cook_mode/** (CookMode - parse/stream cooking steps)
-12. **explain/** (Explain - generate decision explanations)
+6. **meal_logging/** (MealParser, NutritionCalc, ProfileUpdate, MealHistoryRetrieval)
+7. **pantry/** (PantryCRUDTool, PantryDiff)
+8. **gap_fill/** (GapCalc, SuggestSnack, ApplySnack)
+9. **substitution/** (SuggestSubstitutes, ApplySubstitute)
+10. **family/** (MergeConstraints, PlanFamily)
+11. **micros/** (MicronutrientCheck, SuggestMicrosFoods)
+12. **cook_mode/** (CookMode - parse/stream cooking steps)
+13. **explain/** (Explain - generate decision explanations)
 
 #### Core Modules (elysia/)
 
@@ -403,8 +461,8 @@ async def tool_name(
 
 ### Database Layer (Weaviate)
 
-- **Collections**: 10 primary collections (Recipe, FdcFood, FdcNutrient, FDCPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, Pantry/PantryItem, ShoppingList/ShoppingItem)
-- **Indexing**: Filterable properties on user_id, fdc_id, diet_type, allergens, tags, time_min
+- **Collections**: 11 primary collections (Recipe, FdcFood, FdcNutrient, FDCPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
+- **Indexing**: Filterable properties on user_id, fdc_id, diet_type, allergens, tags, time_min, logged_at
 - **Vectorization**: text2vec-openai (or local transformers) for Recipe descriptions, FdcFood descriptions
 - **Hybrid Search**: BM25 + vector similarity with alpha=0.5 default
 
@@ -435,10 +493,21 @@ async def tool_name(
 - **Cost**: LLM calls for every calculation would be expensive and slow
 - **Trust**: Users need confidence that allergen filtering is 100% accurate (no hallucination risk)
 
-**LLM Optional For**:
-- Reranking (ScoreAndRank can use model or heuristic)
-- Substitution suggestions (generate alternatives, validate with code)
-- Explanations (natural language generation from Environment data)
+**LLM-Enhanced Components** (from Requirements):
+- **Meal Logging**: Parse natural language meal descriptions → structured data
+- **Query Enhancement**: Expand user search queries for better recipe retrieval
+- **Recipe Ranking**: Semantic scoring of recipe fit to user preferences
+- **Ingredient Substitution**: Suggest alternatives with nutritional equivalence
+- **Cooking Instructions**: Parse unstructured recipe text into structured steps
+- **Explanations**: Generate natural language explanations from Environment data
+- **Variety Optimization**: Classify cuisine/flavor profiles for diversity scoring
+
+**Pattern**: All LLM tools follow 5-step validation:
+1. Yield Text (streaming progress)
+2. LLM Call (structured JSON output)
+3. Code Validation (verify constraints)
+4. Yield Result (to Environment)
+5. Error Handling (fallback to code-based approach)
 
 ### 3. Weaviate for All Persistence
 **Decision**: Use Weaviate for both vector search (recipes) and structured data (profiles, plans, pantry)
@@ -476,15 +545,20 @@ async def tool_name(
 **How should the system perform?**
 
 ### Performance Targets
-- **Retrieval Latency**: Hybrid search returns top 100 candidates in <2 seconds (100k recipe corpus)
+- **Retrieval Latency**: Hybrid search returns top 100 candidates in <2 seconds (4k demo corpus), <3 seconds (10k+ production)
 - **Plan Generation**: Daily plan end-to-end <5 seconds; weekly plan <15 seconds
+- **Meal Logging**: Parse + calculate + save completes in <5 seconds (dependent on LLM response time)
 - **Streaming Responsiveness**: First tool result streamed to UI within 500ms of request
 - **Micronutrient Aggregation**: 21-meal plan micro totals calculated in <3 seconds
 
+**Note:** Performance benchmarks for LLM-dependent features (meal logging, query enhancement, explanations) may vary based on LLM provider latency. System focuses on delivering results reliably rather than strict time constraints for AI-enhanced features.
+
 ### Scalability Considerations
-- **Horizontal Scaling**: Stateless FastAPI workers behind load balancer
-- **Weaviate Sharding**: Partition Recipe collection by `diet_type` when corpus >1M
-- **Caching**: Redis for frequently accessed user profiles and targets (TTL: 1 hour)
+- **Horizontal Scaling**: Stateless FastAPI workers (suitable for graduation project scale)
+- **Weaviate**: Single-node deployment sufficient for demo (4k recipes, <100 users)
+- **Caching**: Optional Redis for frequently accessed data (not required for MVP)
+
+**Note:** System designed for graduation project demonstration. Production scaling (load balancers, Weaviate sharding, Redis cluster) can be added later if needed.
 
 ### Security Requirements
 - **Input Validation**: All user inputs sanitized (prevent injection attacks)
@@ -493,14 +567,32 @@ async def tool_name(
 - **Secrets Management**: API keys in environment variables (AWS Secrets Manager in prod)
 
 ### Reliability/Availability Needs
-- **Uptime**: 99.9% availability (excluding scheduled maintenance)
+- **Uptime**: Best-effort availability (suitable for demo/presentation)
 - **Error Handling**: All tools return Error objects (not exceptions) for graceful degradation
 - **Retry Logic**: Weaviate queries retry 3x with exponential backoff
-- **Fallback**: If vector search fails, fall back to BM25-only retrieval
+- **Fallback**: If vector search fails, fall back to BM25-only retrieval; if LLM fails, use manual input forms
+
+### Data Retention Policy (From Requirements)
+- **User profiles**: Retained indefinitely (or until user requests deletion)
+- **Meal plans**: 360 days (configurable)
+- **Meal log entries**: 360 days (for trend analysis)
+- **Shopping lists**: 30 days
+- **Activity logs**: 360 days
 
 ---
 
-**Status**: Draft - Pending review of FDCPortion schema and portion conversion logic
-**Last Updated**: 2025-10-28
-**Owner**: [Your Name/Team]
+**Status**: ✅ **Updated - Ready for Implementation**
+**Last Updated**: 2025-10-29
+**Owner**: MealAgent Development Team
+
+**Changelog v0.2:**
+- ✅ Added MealLogEntry collection schema
+- ✅ Added meal logging API endpoints (REST + WebSocket)
+- ✅ Added meal_logging tool branch
+- ✅ Added MealLoggingChat and MealHistoryView components
+- ✅ Added meal logging sequence diagram
+- ✅ Fixed recipe corpus size (100k → 4k demo, 10k+ production)
+- ✅ Added LLM usage strategy expansion
+- ✅ Added data retention policy
+- ✅ Simplified scalability/deployment for graduation project context
 
