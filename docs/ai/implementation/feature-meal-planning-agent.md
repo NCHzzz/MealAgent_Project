@@ -152,7 +152,7 @@ elysia/
 │   │   ├── __init__.py
 │   │   ├── nutrition.py            # TDEE, macro calculations
 │   │   ├── unit_conversion.py      # Ingredient unit conversions
-│   │   └── portion_mapping.py      # Recipe portion → FDCPortion
+│   │   └── portion_mapping.py      # Recipe portion → FdcPortion
 │   └── migrations/
 │       ├── __init__.py
 │       └── create_collections.py

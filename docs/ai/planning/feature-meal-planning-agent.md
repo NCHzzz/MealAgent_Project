@@ -11,7 +11,7 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 - [ ] **Milestone 1: Foundation & Data Setup** (Week 1-3)
   - Weaviate schema design and deployment
   - FDC data import and preprocessing
-  - Recipe corpus integration
+  - Load demo recipe corpus (4k, local path)
   - Environment and Manager setup
 
 - [ ] **Milestone 2: Core Planning Features** (Week 4-6)
@@ -19,6 +19,12 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - Constraint enforcement (diet/allergen)
   - Hybrid retrieval and ranking
   - Daily plan generation
+
+- [ ] **Milestone 2.5: Meal Logging Feature** (Week 5-6)
+  - Meal parsing (LLM-assisted) with validation and fallback
+  - Nutrition calculation from FDC + FdcPortion
+  - Profile updates (consumed_today, remaining targets)
+  - REST + WebSocket endpoints and UI hooks
 
 - [ ] **Milestone 3: Extended Features** (Week 7-9)
   - Weekly planning with variety
@@ -37,7 +43,7 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 ### Phase 1: Foundation & Data Setup (Week 1-3)
 
 #### 1.1 Weaviate Schema & Collections
-- [ ] **Task 1.1.1**: Define Weaviate schemas for all 10 collections (Recipe, FdcFood, FdcNutrient, FDCPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, Pantry/PantryItem, ShoppingList/ShoppingItem)
+- [ ] **Task 1.1.1**: Define Weaviate schemas for all 11 collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
   - **Estimated Effort**: 2 days
   - **Owner**: Data Engineer
   - **Deliverables**: `elysia/MealAgent/schemas/` Python files defining schemas
@@ -68,29 +74,29 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Owner**: Data Engineer
   - **Deliverables**: Embeddings stored in Weaviate FdcFood collection
 
-- [ ] **Task 1.2.4**: Load FdcFood, FdcNutrient, FDCPortion into Weaviate
+- [ ] **Task 1.2.4**: Load FdcFood, FdcNutrient, FdcPortion into Weaviate
   - **Estimated Effort**: 1 day
   - **Owner**: Data Engineer
   - **Deliverables**: Populated collections; validation script confirms record counts
 
 #### 1.3 Recipe Corpus Integration
-- [ ] **Task 1.3.1**: Acquire/scrape initial recipe dataset (target: 10k recipes)
-  - **Estimated Effort**: 5 days (includes legal review of scraping ToS)
+- [ ] **Task 1.3.1**: Load demo recipe dataset (4k) from `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
+  - **Estimated Effort**: 1 day
   - **Owner**: Data Engineer
-  - **Deliverables**: Raw recipe JSON files in `data/recipes/raw/`
+  - **Deliverables**: Imported recipes in Weaviate `Recipe` collection
 
-- [ ] **Task 1.3.2**: Normalize recipe schema (ingredients → FDC mapping where possible)
-  - **Estimated Effort**: 4 days
+- [ ] **Task 1.3.2**: Validate/normalize schema (ensure ingredients map to FDC ids where available)
+  - **Estimated Effort**: 2 days
   - **Owner**: Data Engineer
   - **Deliverables**: `elysia/MealAgent/etl/recipe_import.py`
 
-- [ ] **Task 1.3.3**: Calculate macros per serving for each recipe
-  - **Estimated Effort**: 2 days
+- [ ] **Task 1.3.3**: Ensure `macros_per_serving` is populated or backfilled where missing
+  - **Estimated Effort**: 1 day
   - **Owner**: Data Engineer
-  - **Deliverables**: Recipes with `macros_per_serving` field populated
+  - **Deliverables**: Recipes with `macros_per_serving` populated
 
 - [ ] **Task 1.3.4**: Generate embeddings for recipe descriptions and load into Weaviate
-  - **Estimated Effort**: 2 days
+  - **Estimated Effort**: 1 day
   - **Owner**: Data Engineer
   - **Deliverables**: Populated Recipe collection with vectors
 
@@ -198,6 +204,39 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tree/config.py`
 
+#### 2.6 Meal Logging Branch Tools (Week 5-6)
+- [ ] **Task 2.6.1**: Implement MealParser (LLM-assisted parsing with validation and fallback)
+  - **Estimated Effort**: 2 days
+  - **Owner**: Backend Engineer
+  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/meal_parser.py`
+  - **Environment Keys**: Writes `meal_logging.parser.parsed_meal`
+
+- [ ] **Task 2.6.2**: Implement NutritionCalc (calculate nutrition from FdcNutrient + FdcPortion)
+  - **Estimated Effort**: 2 days
+  - **Owner**: Backend Engineer
+  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/nutrition_calc.py`
+  - **Environment Keys**: Writes `meal_logging.nutrition.calculated`
+
+- [ ] **Task 2.6.3**: Implement ProfileUpdate (update consumed_today and remaining targets)
+  - **Estimated Effort**: 1 day
+  - **Owner**: Backend Engineer
+  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/profile_update.py`
+
+- [ ] **Task 2.6.4**: Implement MealHistoryRetrieval (list/detail endpoints)
+  - **Estimated Effort**: 1 day
+  - **Owner**: Backend Engineer
+  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/meal_history.py`
+
+- [ ] **Task 2.6.5**: Expose REST endpoints (log, history, consumed-today)
+  - **Estimated Effort**: 1 day
+  - **Owner**: Backend Engineer
+  - **Deliverables**: API routes under `elysia/elysia/api/routes/`
+
+- [ ] **Task 2.6.6**: Expose WebSocket endpoint `/ws/meals/log/{user_id}`
+  - **Estimated Effort**: 1 day
+  - **Owner**: Backend Engineer
+  - **Deliverables**: WS route and streaming integration
+
 ### Phase 3: Extended Features (Week 7-9)
 
 #### 3.1 Plan Week Branch Tools
@@ -255,7 +294,7 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Deliverables**: `elysia/MealAgent/tools/substitution/apply_substitute.py`
 
 #### 3.5 Micronutrient Tools
-- [ ] **Task 3.5.1**: Implement MicronutrientCheck (aggregate micros from FdcNutrient + FDCPortion)
+- [ ] **Task 3.5.1**: Implement MicronutrientCheck (aggregate micros from FdcNutrient + FdcPortion)
   - **Estimated Effort**: 4 days (includes portion conversion logic)
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/micros/micronutrient_check.py`
@@ -360,12 +399,13 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 ## Dependencies
 
 ### Task Dependencies and Blockers
-- **1.3.1 (Recipe corpus)** blocks **1.3.2, 1.3.3, 1.3.4** (can't normalize/load without data)
+- **1.3.1 (Load demo corpus)** blocks **1.3.2, 1.3.3, 1.3.4** (can't normalize/load without data)
 - **1.1.3 (Create collections)** blocks **1.2.4, 1.3.4** (can't load data without schema)
 - **2.1.* (Profile tools)** blocks **2.4.* (Plan tools)** (need targets before planning)
 - **2.3.* (Search tools)** blocks **2.4.2 (PlanAssemble)** (need ranked recipes before assembly)
 - **2.4.* (Daily planning)** blocks **3.1.* (Weekly planning)** (weekly extends daily logic)
 - **All backend tools** block **4.1.*, 4.2.* (Frontend)** (UI needs working API)
+- **2.6.* (Meal logging)** requires **1.2.4 (FDC loaded)** and **FdcPortion** available
 
 ### External Dependencies
 - **USDA FoodData Central**: CSV files publicly available; no API dependency
@@ -391,7 +431,7 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 ### Buffer for Unknowns
 - **2 weeks** additional buffer built into estimates for:
   - Recipe corpus acquisition delays (legal review, data quality issues)
-  - Portion conversion complexity (FDCPortion edge cases)
+  - Portion conversion complexity (FdcPortion edge cases)
   - Performance optimization (if initial implementation doesn't meet benchmarks)
   - Unexpected integration issues (Weaviate, WebSocket streaming)
 
@@ -402,7 +442,7 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 | Risk | Likelihood | Impact | Mitigation Strategy |
 |------|------------|--------|---------------------|
 | **Recipe corpus quality/availability** | High | High | Start scraping early (Week 1); have backup sources; accept smaller corpus (5k) for MVP if needed |
-| **FDCPortion coverage gaps** | Medium | Medium | Build fallback unit conversion table for common ingredients; allow manual portion entry |
+| **FdcPortion coverage gaps** | Medium | Medium | Build fallback unit conversion table for common ingredients; allow manual portion entry |
 | **Hybrid search performance** | Medium | High | Benchmark early (Week 4); optimize filters; consider pre-filtering before vector search |
 | **Portion scaling complexity** | Medium | Medium | Start with linear scaling; defer non-linear adjustments (e.g., baking) to v2 |
 | **LLM cost/latency** | Low | Medium | Use LLM only for optional features (explanations); make code-based alternatives default |
@@ -437,8 +477,8 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 
 ### Infrastructure
 - **Development**: Docker Compose on local machines
-- **Staging**: AWS EC2 (t3.medium) or equivalent ($50/month)
-- **Production**: K8s cluster (3 nodes, t3.large) or managed service ($300/month)
+- **Demo/Presentation**: Docker Compose single-node Weaviate (graduation project scope)
+- **Production (later)**: K8s cluster or managed service (out of scope for MVP/demo)
 
 ### Documentation/Knowledge
 - **Elysia Documentation**: [weaviate.github.io/elysia](https://weaviate.github.io/elysia)
@@ -448,7 +488,7 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 
 ---
 
-**Status**: Draft - Ready for team review and sprint planning
-**Last Updated**: 2025-10-28
+**Status**: Updated Draft - Aligned with requirements/design (incl. Meal Logging)
+**Last Updated**: 2025-10-31
 **Owner**: [Your Name/Team]
 

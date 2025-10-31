@@ -231,13 +231,13 @@ description: Define testing approach, test cases, and quality assurance for Meal
   - Expected: total_vitamin_c=90mg
   - Coverage: Micronutrient summation
 
-- [ ] **Test: FDCPortion conversion (1 cup → grams → nutrients)**
-  - Setup: Recipe uses "1 cup broccoli", FDCPortion maps to 91g, FdcNutrient has per-100g values
+- [ ] **Test: FdcPortion conversion (1 cup → grams → nutrients)**
+  - Setup: Recipe uses "1 cup broccoli", FdcPortion maps to 91g, FdcNutrient has per-100g values
   - Expected: Correct proportional calculation
   - Coverage: Portion conversion accuracy
 
-- [ ] **Test: Missing FDCPortion data**
-  - Setup: Ingredient without FDCPortion entry
+- [ ] **Test: Missing FdcPortion data**
+  - Setup: Ingredient without FdcPortion entry
   - Expected: Warning logged; skip or use approximation
   - Coverage: Missing data handling
 

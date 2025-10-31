@@ -61,7 +61,7 @@ description: Clarify the problem space, gather requirements, and define success 
 | **Macronutrients (Macros)** | Protein, Fat, Carbohydrates (measured in grams) |
 | **Micronutrients (Micros)** | Vitamins and minerals (measured in mg/mcg/IU) |
 | **FDC** | FoodData Central (USDA nutritional database) |
-| **FDCPortion** | USDA portion conversion table (e.g., "1 cup" → grams) |
+| **FdcPortion** | USDA portion conversion table (e.g., "1 cup" → grams) |
 | **Hybrid Search** | BM25 (keyword) + vector (semantic) search combined |
 | **Environment** | Elysia's shared state container where tool results are stored |
 | **Pantry-aware** | Shopping list generation that accounts for existing inventory |
@@ -130,7 +130,7 @@ description: Clarify the problem space, gather requirements, and define success 
 - [ ] **Pantry & Shopping**: Shopping list correctly subtracts pantry items with unit conversion consistency
 - [ ] **Gap Fill**: Snack suggestions reduce largest deficit (accounting for logged meals); updated plan passes validation
 - [ ] **Substitution**: Replacement ingredients maintain ±20% macro equivalence; no allergen violations
-- [ ] **Micronutrients**: Aggregation uses FDCPortion for unit conversion; deficit detection triggers suggestions
+- [ ] **Micronutrients**: Aggregation uses FdcPortion for unit conversion; deficit detection triggers suggestions
 - [ ] **Cooking Instructions**: Steps parsed with time estimates; streaming mode yields step-by-step
 - [ ] **Explanations**: Generated text references Environment data (profile, constraints, scores)
 
@@ -143,7 +143,7 @@ description: Clarify the problem space, gather requirements, and define success 
 
 ### Nutritional Accuracy
 - **Macro Calculations**: ±5% accuracy when compared to manually calculated values from FDC raw data
-- **Portion Conversions**: ±10% accuracy when benchmarked against USDA standard portions (FDCPortion table)
+- **Portion Conversions**: ±10% accuracy when benchmarked against USDA standard portions (FdcPortion table)
 - **Micronutrient Aggregation**: ±15% accuracy (acceptable due to natural ingredient variability)
 - **LLM Meal Parsing**: ≥85% accuracy on test set of 100 diverse meal descriptions (measured against human labeling)
 
@@ -164,7 +164,7 @@ description: Clarify the problem space, gather requirements, and define success 
 
 ### Technical Constraints
 - **Elysia Framework**: All tools must be async generators yielding Result/Text objects
-- **Weaviate**: Primary data store for Recipe, FdcFood, FdcNutrient, FDCPortion collections
+- **Weaviate**: Primary data store for Recipe, FdcFood, FdcNutrient, FdcPortion collections
 - **Environment Key Convention**: Tools write to `<branch>.<tool>.<key>` namespace only
 
 #### LLM Usage Strategy (Elysia-Integrated Architecture)
@@ -187,7 +187,7 @@ description: Clarify the problem space, gather requirements, and define success 
 | `plan_day` | `PlanValidate` | Validate constraints (diet/allergen/macro) | `plan_day.validate.report` |
 | `shopping` | `PantryDiff` | Subtract pantry from shopping list | `shopping.list.diff` |
 | `gap_fill` | `GapCalc` | Calculate deficit (target - consumed) | `gap_fill.calc.deficits` |
-| `micros` | `MicronutrientCheck` | Aggregate micros using FDCPortion | `micros.check.totals` |
+| `micros` | `MicronutrientCheck` | Aggregate micros using FdcPortion | `micros.check.totals` |
 
 **Rationale**: Nutritional calculations, constraint enforcement, and inventory math require 100% accuracy and auditability. No LLM hallucination risk allowed.
 
@@ -284,7 +284,7 @@ description: Clarify the problem space, gather requirements, and define success 
 3. **Recipe Expansion Budget**: Allocate funds for scaling from 4k (demo) to 10k+ recipes (licensing or data acquisition)
 
 ### Research Needed
-1. **Portion Conversion Accuracy**: Benchmark FDCPortion-based conversions against known nutrition labels (sample 100 foods from demo dataset)
+1. **Portion Conversion Accuracy**: Benchmark FdcPortion-based conversions against known nutrition labels (sample 100 foods from demo dataset)
 2. **Variety Metrics**: What threshold for repetition feels "monotonous" to users? (User survey or A/B test in beta)
 3. **LLM Parsing Accuracy**: Test meal logging parser on 100 diverse meal descriptions; measure accuracy vs human labeling
 4. **Reranker Performance**: Measure quality difference between code-based scoring vs. LLM-based reranking (precision@10 on test set)
@@ -306,7 +306,7 @@ description: Clarify the problem space, gather requirements, and define success 
 - **Demo Dataset Location**: `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
 - **Demo Dataset Size**: 4,000 recipes with structured ingredients and nutritional information
 - **FDC Data**: USDA FoodData Central (to be imported during setup phase)
-- **FDCPortion Mappings**: Portion conversion table from USDA (part of FDC download)
+- **FdcPortion Mappings**: Portion conversion table from USDA (part of FDC download)
 
 ### C. Related Documentation
 - Design: `docs/ai/design/feature-meal-planning-agent.md`

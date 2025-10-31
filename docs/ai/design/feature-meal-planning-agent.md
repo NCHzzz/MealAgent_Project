@@ -26,7 +26,7 @@ graph TD
     Weaviate --> Recipe[Recipe]
     Weaviate --> FdcFood[FdcFood]
     Weaviate --> FdcNutrient[FdcNutrient]
-    Weaviate --> FDCPortion[FDCPortion]
+    Weaviate --> FdcPortion[FdcPortion]
     Weaviate --> UserProfile[UserProfile]
     Weaviate --> MealPlan[MealPlan]
     Weaviate --> Pantry[Pantry]
@@ -122,10 +122,10 @@ graph TD
 }
 ```
 
-#### FDCPortion (NEW - Required)
+#### FdcPortion (NEW - Required)
 ```python
 {
-    "class": "FDCPortion",
+    "class": "FdcPortion",
     "properties": [
         {"name": "id", "dataType": ["int"], "indexFilterable": True},  # Unique portion ID
         {"name": "fdc_id", "dataType": ["int"], "indexFilterable": True},  # Links to FdcFood
@@ -325,7 +325,7 @@ sequenceDiagram
     MealParser->>Env: yield Result(meal_logging.parser.parsed_meal)
     
     Tree->>NutritionCalc: Calculate nutrition from FDC
-    NutritionCalc->>Weaviate: Query FdcNutrient + FDCPortion
+    NutritionCalc->>Weaviate: Query FdcNutrient + FdcPortion
     NutritionCalc->>Env: yield Result(meal_logging.nutrition.calculated)
     
     Tree->>Weaviate: Save MealLogEntry
@@ -461,14 +461,14 @@ async def tool_name(
 
 ### Database Layer (Weaviate)
 
-- **Collections**: 11 primary collections (Recipe, FdcFood, FdcNutrient, FDCPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
+- **Collections**: 11 primary collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
 - **Indexing**: Filterable properties on user_id, fdc_id, diet_type, allergens, tags, time_min, logged_at
 - **Vectorization**: text2vec-openai (or local transformers) for Recipe descriptions, FdcFood descriptions
 - **Hybrid Search**: BM25 + vector similarity with alpha=0.5 default
 
 ### Third-Party Integrations (v1)
 
-- **USDA FoodData Central**: Offline batch import of CSV files into FdcFood/FdcNutrient/FDCPortion collections
+- **USDA FoodData Central**: Offline batch import of CSV files into FdcFood/FdcNutrient/FdcPortion collections
 - **OpenAI (optional)**: Embeddings for recipe vectorization, optional LLM for explanations/substitutions
 
 ## Design Decisions
@@ -521,10 +521,10 @@ async def tool_name(
 - **PostgreSQL + Pinecone**: Split structured data vs vectors; more moving parts
 - **Elasticsearch**: Good full-text search but weaker vector support
 
-### 4. FDCPortion Collection (NEW)
-**Decision**: Create dedicated FDCPortion collection from FDC's food_portion table
+### 4. FdcPortion Collection (NEW)
+**Decision**: Create dedicated FdcPortion collection from FDC's food_portion table
 **Rationale**:
-- **Unit Conversion**: Recipes use "1 cup onion" but FDC nutrients are per 100g; FDCPortion bridges this gap
+- **Unit Conversion**: Recipes use "1 cup onion" but FDC nutrients are per 100g; FdcPortion bridges this gap
 - **Accuracy**: Direct gram_weight conversions avoid manual approximations
 - **Micronutrient Precision**: Essential for accurate vitamin/mineral aggregation
 
