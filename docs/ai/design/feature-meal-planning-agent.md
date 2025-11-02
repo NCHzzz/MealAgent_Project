@@ -13,30 +13,36 @@ description: Define the technical architecture, components, and data models for 
 
 ```mermaid
 graph TD
-    UI[elysia-frontend/Next.js] -->|WebSocket/HTTP| API[Elysia Python API]
-    API --> Tree[Decision Tree]
-    Tree --> Tools[Tool Branches]
-    Tools --> Env[Environment/Shared State]
+    UI[elysia-frontend/Next.js] <-->|WebSocket/HTTP<br/>Bidirectional| API[Elysia Python API<br/>FastAPI]
+    API --> Tree[Decision Tree<br/>Tree.process_tree]
+    Tree --> Tools[Tool Branches<br/>Async Generators]
+    Tools --> Env[Environment<br/>tree_data.environment]
+    Tools --> LLM[LLM Service<br/>base_lm / complex_lm]
+    LLM -.->|Structured Output| Tools
     
-    Tree --> UserMgr[UserManager]
-    UserMgr --> TreeMgr[TreeManager]
-    UserMgr --> ClientMgr[ClientManager]
+    Tree --> UserMgr[UserManager<br/>Per-user isolation]
+    UserMgr --> TreeMgr[TreeManager<br/>Multiple trees per user]
+    UserMgr --> ClientMgr[ClientManager<br/>Weaviate client]
     
-    Tools --> Weaviate[(Weaviate Collections)]
+    Tools --> ClientMgr
+    ClientMgr --> Weaviate[(Weaviate Collections)]
+    
     Weaviate --> Recipe[Recipe]
     Weaviate --> FdcFood[FdcFood]
     Weaviate --> FdcNutrient[FdcNutrient]
     Weaviate --> FdcPortion[FdcPortion]
-    Weaviate --> UserProfile[UserProfile]
+    Weaviate --> UserProfile[UserProfile<br/>+ NutrientTarget]
     Weaviate --> MealPlan[MealPlan]
+    Weaviate --> MealLogEntry[MealLogEntry]
     Weaviate --> Pantry[Pantry]
     Weaviate --> Shopping[ShoppingList]
     
-    Preprocessor[Preprocessor] -.->|Metadata Generation| Weaviate
+    Preprocessor[Preprocessor] -.->|Batch Metadata<br/>Generation| Weaviate
     
     style Tree fill:#e1f5ff
     style Env fill:#fff4e1
     style Weaviate fill:#e8f5e9
+    style LLM fill:#f3e5f5
 ```
 
 ### Component Responsibilities
@@ -45,12 +51,12 @@ graph TD
 - **Elysia API**: FastAPI-based backend exposing WebSocket (streaming) and REST endpoints
 - **Decision Tree**: Orchestrates tool execution based on Environment state and user prompts
 - **Tools (async generators)**: Implement specific functionality (search, plan, validate, etc.); yield Result/Text objects
-- **Environment**: Shared state container where all Result objects are stored with namespaced keys (`branch.tool.key`)
+- **Environment**: Shared state container (accessed via `tree_data.environment`) where all Result objects are stored with structure `environment[tool_name][name]` - each tool yields Result objects with a `name` parameter that identifies the data in the environment
 - **Managers**: 
   - **UserManager**: Per-user isolation of TreeManager and ClientManager
   - **TreeManager**: Manages decision tree instances and execution context
   - **ClientManager**: Manages Weaviate client connections and query execution
-- **Preprocessor**: Runs before serving to generate metadata, embeddings, and mappings for collections
+- **Preprocessor**: Runs during setup (batch process) via `elysia.preprocess()` to generate metadata, embeddings, and schema descriptions for collections - called once per collection before first use
 - **Weaviate**: Vector database storing recipes, nutritional data, user profiles, plans, pantry, and shopping lists
 
 ### Technology Stack
@@ -139,42 +145,103 @@ graph TD
 }
 ```
 
-#### UserProfile
+#### UserProfile (includes NutrientTarget)
 ```python
 {
     "class": "UserProfile",
     "properties": [
+        # Basic Profile Info
         {"name": "user_id", "dataType": ["text"], "indexFilterable": True},
         {"name": "age", "dataType": ["int"]},
         {"name": "gender", "dataType": ["text"]},  # "male", "female", "other"
         {"name": "weight_kg", "dataType": ["number"]},
         {"name": "height_cm", "dataType": ["number"]},
         {"name": "activity_level", "dataType": ["text"]},  # "sedentary", "light", "moderate", "very_active", "extra_active"
+        
+        # Dietary Constraints
         {"name": "diet_type", "dataType": ["text"]},
         {"name": "allergens", "dataType": ["text[]"]},
         {"name": "preferences", "dataType": ["text[]"]},  # Liked cuisines/ingredients
         {"name": "max_cooking_time_min", "dataType": ["int"]},  # Optional constraint
         {"name": "available_equipment", "dataType": ["text[]"]},  # Optional constraint
+        
+        # Nutritional Targets (calculated from profile)
+        {"name": "tdee_kcal", "dataType": ["number"]},  # Harris-Benedict calculated TDEE
+        {"name": "protein_g", "dataType": ["number"]},  # Daily protein target
+        {"name": "fat_g", "dataType": ["number"]},  # Daily fat target
+        {"name": "carb_g", "dataType": ["number"]},  # Daily carb target
+        {"name": "micronutrient_targets", "dataType": ["object"]},  # {"vitamin_c_mg": 90, "iron_mg": 18, ...}
+        
+        # Metadata
         {"name": "created_at", "dataType": ["date"]},
         {"name": "updated_at", "dataType": ["date"]},
     ]
 }
 ```
 
-#### NutrientTarget (embedded in UserProfile or separate collection)
-```python
-{
-    "class": "NutrientTarget",
-    "properties": [
-        {"name": "user_id", "dataType": ["text"], "indexFilterable": True},
-        {"name": "tdee_kcal", "dataType": ["number"]},  # Harris-Benedict calculated
-        {"name": "protein_g", "dataType": ["number"]},
-        {"name": "fat_g", "dataType": ["number"]},
-        {"name": "carb_g", "dataType": ["number"]},
-        {"name": "micronutrient_targets", "dataType": ["object"]},  # {"vitamin_c_mg": 90, "iron_mg": 18, ...}
-    ]
-}
+**Note**: NutrientTarget properties are embedded directly in UserProfile for simplicity. This avoids the need for separate collection queries and maintains data locality.
+
+### Data Relationships
+
+```mermaid
+erDiagram
+    UserProfile ||--o{ MealPlan : "creates"
+    UserProfile ||--o{ MealLogEntry : "logs"
+    UserProfile ||--o{ Pantry : "owns"
+    UserProfile ||--o{ ShoppingList : "generates"
+    
+    MealPlan ||--o{ MealPlanItem : "contains"
+    MealPlan ||--|| ShoppingList : "generates"
+    MealPlanItem }o--|| Recipe : "references"
+    
+    Recipe }o--o{ FdcFood : "ingredients linked via fdc_id"
+    FdcFood ||--o{ FdcNutrient : "has nutrients"
+    FdcFood ||--o{ FdcPortion : "has portions"
+    
+    Pantry ||--o{ PantryItem : "contains"
+    ShoppingList ||--o{ ShoppingItem : "contains"
+    
+    MealLogEntry }o--o{ FdcFood : "ingredients linked via fdc_id"
+    
+    UserProfile {
+        string user_id PK
+        number tdee_kcal
+        number protein_g
+        number fat_g
+        number carb_g
+    }
+    
+    Recipe {
+        string recipe_id PK
+        array ingredients
+    }
+    
+    FdcFood {
+        int fdc_id PK
+        string description
+    }
+    
+    FdcNutrient {
+        int fdc_id FK
+        int nutrient_id
+        number amount_per_100g
+    }
+    
+    FdcPortion {
+        int fdc_id FK
+        number gram_weight
+    }
 ```
+
+**Key Relationships:**
+- **UserProfile → MealPlan**: One user can create multiple meal plans (one-to-many)
+- **MealPlan → MealPlanItem**: One plan contains multiple meal items (one-to-many)
+- **MealPlanItem → Recipe**: Each meal item references one recipe (many-to-one)
+- **Recipe → FdcFood**: Recipe ingredients link to FDC foods via `ingredients[].fdc_id` (many-to-many)
+- **FdcFood → FdcNutrient**: One food has multiple nutrients (one-to-many, linked by `fdc_id`)
+- **FdcFood → FdcPortion**: One food has multiple portion options (one-to-many, linked by `fdc_id`)
+- **UserProfile → MealLogEntry**: User logs multiple meals (one-to-many)
+- **MealLogEntry → FdcFood**: Logged meals link ingredients to FDC foods (many-to-many via `ingredients[].fdc_id`)
 
 #### MealPlan / MealPlanItem
 ```python
@@ -276,32 +343,40 @@ graph TD
 sequenceDiagram
     participant User
     participant UI
+    participant API
     participant Tree
     participant ProfileTool
     participant SearchTool
     participant PlanTool
-    participant Env as Environment
+    participant Env as Environment<br/>tree_data.environment
     participant Weaviate
 
     User->>UI: Create Profile
-    UI->>Tree: Invoke with profile data
-    Tree->>ProfileTool: ProfileCRUDTool.run()
-    ProfileTool->>Weaviate: Save UserProfile
-    ProfileTool->>Env: yield Result(profile.profile_crud.profile)
-    ProfileTool->>Tree: MacroCalcTool.run()
-    Tree->>Env: yield Result(profile.macro_calc.targets)
+    UI->>API: POST /api/v1/user/profile
+    API->>Tree: tree.process_tree(user_id, query)
+    Tree->>ProfileTool: ProfileCRUDTool (async generator)
+    ProfileTool->>Weaviate: Save UserProfile via client_manager
+    ProfileTool->>Env: yield Result(name="profile", objects=[...])
+    Tree->>ProfileTool: MacroCalcTool
+    ProfileTool->>Env: Read environment.find("profile", "profile")
+    ProfileTool->>Env: yield Result(name="targets", objects=[...])
+    Tree->>API: Return response + objects
+    API->>UI: 200 OK + profile data
     
     User->>UI: Request Daily Plan
-    UI->>Tree: Invoke with user_id
-    Tree->>SearchTool: query (hybrid search)
-    SearchTool->>Weaviate: Retrieve + filter (diet/allergen)
-    SearchTool->>Env: yield Result(search.query.results)
-    Tree->>SearchTool: ScoreAndRank
-    SearchTool->>Env: yield Result(search.rank.topk)
-    Tree->>PlanTool: PlanAssembleDay
-    PlanTool->>Env: Read targets, topk
-    PlanTool->>Env: yield Result(plan_day.assemble.plan)
-    PlanTool->>UI: Stream plan updates (via WebSocket)
+    UI->>API: POST /api/v1/plans/day (WebSocket)
+    API->>Tree: tree.process_tree(user_id, query)
+    Tree->>SearchTool: query tool (hybrid search)
+    SearchTool->>Weaviate: client_manager.get_client().collections.query.hybrid()
+    SearchTool->>Env: yield Result(name="results", objects=[recipes])
+    Tree->>SearchTool: ScoreAndRank tool
+    SearchTool->>Env: Read environment.find("query", "results")
+    SearchTool->>Env: yield Result(name="topk", objects=[ranked_recipes])
+    Tree->>PlanTool: PlanAssembleDay tool
+    PlanTool->>Env: Read targets, topk via environment.find()
+    PlanTool->>Env: yield Result(name="plan", objects=[daily_plan])
+    Tree->>API: Stream results (yield strings = Text responses)
+    API->>UI: WebSocket stream (Text + Result objects)
 ```
 
 ### Meal Logging Data Flow (NEW)
@@ -310,28 +385,32 @@ sequenceDiagram
 sequenceDiagram
     participant User
     participant UI
+    participant API
     participant Tree
-    participant MealParser as MealParser (LLM)
+    participant MealParser as MealParser Tool<br/>Uses base_lm
     participant NutritionCalc
-    participant Env as Environment
+    participant Env as Environment<br/>tree_data.environment
     participant Weaviate
     
     User->>UI: "Tôi vừa ăn salad gà"
-    UI->>Tree: Invoke meal_logging workflow
-    Tree->>MealParser: Parse meal description
-    MealParser->>MealParser: LLM call (structured output)
-    MealParser->>Env: yield Text("Parsing meal...")
-    MealParser->>Weaviate: Validate ingredients in FDC
-    MealParser->>Env: yield Result(meal_logging.parser.parsed_meal)
+    UI->>API: POST /api/v1/meals/log (WebSocket)
+    API->>Tree: tree.process_tree(user_id, meal_description)
+    Tree->>MealParser: MealParser tool (has base_lm parameter)
+    MealParser->>MealParser: base_lm call (structured JSON output)
+    MealParser->>Tree: yield "Parsing meal..." (string = Text response)
+    Tree->>UI: Stream: "Parsing meal..."
+    MealParser->>Weaviate: Validate ingredients via client_manager
+    MealParser->>Env: yield Result(name="parsed_meal", objects=[...])
     
-    Tree->>NutritionCalc: Calculate nutrition from FDC
+    Tree->>NutritionCalc: NutritionCalc tool
+    NutritionCalc->>Env: Read environment.find("meal_parser", "parsed_meal")
     NutritionCalc->>Weaviate: Query FdcNutrient + FdcPortion
-    NutritionCalc->>Env: yield Result(meal_logging.nutrition.calculated)
+    NutritionCalc->>Env: yield Result(name="calculated", objects=[nutrition_data])
     
-    Tree->>Weaviate: Save MealLogEntry
-    Tree->>Weaviate: Update UserProfile (consumed_today, remaining_targets)
-    Tree->>UI: Display consumed nutrition + remaining targets
-    Tree->>UI: Suggest adjusted meals for next meal
+    Tree->>Weaviate: Save MealLogEntry via client_manager
+    Tree->>Weaviate: Update UserProfile (read + update)
+    Tree->>API: Stream: "Meal logged successfully"
+    API->>UI: Display consumed nutrition + remaining targets
 ```
 
 ## API Design
@@ -340,75 +419,281 @@ sequenceDiagram
 ### External API Endpoints
 
 #### REST Endpoints
+
+All endpoints use prefix `/api/v1/meal/` for consistency.
+
+**User Profile Management**
 ```
-POST   /api/v1/user/profile           # Create/update user profile
-GET    /api/v1/user/profile/{user_id} # Retrieve profile
-POST   /api/v1/user/targets/{user_id} # Calculate/update nutritional targets
-
-GET    /api/v1/recipes                # Search recipes (hybrid query)
-GET    /api/v1/recipes/{recipe_id}    # Get recipe details
-
-POST   /api/v1/plans/day              # Generate daily meal plan
-POST   /api/v1/plans/week             # Generate weekly meal plan
-GET    /api/v1/plans/{plan_id}        # Retrieve plan
-DELETE /api/v1/plans/{plan_id}        # Delete plan
-
-GET    /api/v1/pantry/{user_id}       # Get pantry inventory
-POST   /api/v1/pantry/{user_id}       # Update pantry items
-
-GET    /api/v1/shopping/{plan_id}     # Get shopping list for plan
-POST   /api/v1/shopping/{plan_id}/generate  # Generate shopping list from plan
-
-POST   /api/v1/meals/log              # Log consumed meal via natural language
-GET    /api/v1/meals/history/{user_id}  # Get meal log history
-GET    /api/v1/meals/consumed-today/{user_id}  # Get today's consumed nutrition
-
-POST   /api/v1/explain/{plan_id}      # Get explanation for plan decisions
+POST   /api/v1/meal/user/profile           # Create/update user profile
+GET    /api/v1/meal/user/profile/{user_id} # Retrieve profile
 ```
+
+**Request (POST /api/v1/meal/user/profile):**
+```json
+{
+  "user_id": "user_123",
+  "age": 30,
+  "gender": "male",
+  "weight_kg": 75.0,
+  "height_cm": 180.0,
+  "activity_level": "moderate",
+  "diet_type": "vegetarian",
+  "allergens": ["nuts", "dairy"],
+  "preferences": ["italian", "asian"],
+  "max_cooking_time_min": 45,
+  "available_equipment": ["oven", "stovetop"]
+}
+```
+
+**Response:**
+```json
+{
+  "status": "created" | "updated",
+  "profile": {
+    "user_id": "user_123",
+    "tdee_kcal": 2450.5,
+    "protein_g": 183.8,
+    "fat_g": 81.7,
+    "carb_g": 245.0,
+    ...
+  }
+}
+```
+
+**Recipe Search**
+```
+GET    /api/v1/meal/recipes?query={query}&limit={limit}  # Search recipes (hybrid query)
+GET    /api/v1/meal/recipes/{recipe_id}                  # Get recipe details
+```
+
+**Response (GET /api/v1/meal/recipes):**
+```json
+{
+  "recipes": [
+    {
+      "recipe_id": "recipe_001",
+      "title": "Vegetarian Pasta",
+      "macros_per_serving": {"kcal": 450, "protein_g": 15, ...},
+      ...
+    }
+  ],
+  "total": 42
+}
+```
+
+**Meal Planning**
+```
+POST   /api/v1/meal/plans/day              # Generate daily meal plan
+POST   /api/v1/meal/plans/week             # Generate weekly meal plan
+GET    /api/v1/meal/plans/{plan_id}         # Retrieve plan
+DELETE /api/v1/meal/plans/{plan_id}         # Delete plan
+```
+
+**Request (POST /api/v1/meal/plans/day):**
+```json
+{
+  "user_id": "user_123",
+  "query": "healthy breakfast options",
+  "date": "2025-01-27"
+}
+```
+
+**Response:**
+```json
+{
+  "plan_id": "plan_abc123",
+  "user_id": "user_123",
+  "plan_type": "day",
+  "meals": {
+    "breakfast": {...},
+    "lunch": {...},
+    "dinner": {...}
+  },
+  "total_macros": {"kcal": 2100, "protein_g": 150, ...}
+}
+```
+
+**Pantry Management**
+```
+GET    /api/v1/meal/pantry/{user_id}        # Get pantry inventory
+POST   /api/v1/meal/pantry/{user_id}        # Update pantry items
+```
+
+**Shopping Lists**
+```
+GET    /api/v1/meal/shopping/{plan_id}                   # Get shopping list for plan
+POST   /api/v1/meal/shopping/{plan_id}/generate         # Generate shopping list from plan
+```
+
+**Meal Logging**
+```
+POST   /api/v1/meal/meals/log                          # Log consumed meal via natural language
+GET    /api/v1/meal/meals/history/{user_id}             # Get meal log history
+GET    /api/v1/meal/meals/consumed-today/{user_id}      # Get today's consumed nutrition
+```
+
+**Request (POST /api/v1/meal/meals/log):**
+```json
+{
+  "user_id": "user_123",
+  "meal_description": "Tôi vừa ăn salad gà với dầu olive"
+}
+```
+
+**Response:**
+```json
+{
+  "log_id": "log_xyz789",
+  "calculated_macros": {"kcal": 320, "protein_g": 25, ...},
+  "remaining_targets": {"kcal": 1780, "protein_g": 125, ...}
+}
+```
+
+**Explanations**
+```
+POST   /api/v1/meal/explain/{plan_id}       # Get explanation for plan decisions
+```
+
+**HTTP Status Codes:**
+- `200 OK`: Success
+- `201 Created`: Resource created successfully
+- `400 Bad Request`: Validation error or invalid input
+- `404 Not Found`: Resource not found
+- `500 Internal Server Error`: Server error
 
 #### WebSocket Endpoints
+
+All WebSocket endpoints support bidirectional communication for streaming.
+
 ```
-WS     /ws/tree/{user_id}             # Main Tree execution stream (tool results)
-WS     /ws/cook/{recipe_id}           # Cooking mode step-by-step stream
-WS     /ws/meals/log/{user_id}        # Real-time meal parsing and nutrition calculation
+WS     /ws/tree/{user_id}                  # Main Tree execution stream (tool results)
+WS     /ws/cook/{recipe_id}                # Cooking mode step-by-step stream
+WS     /ws/meals/log/{user_id}             # Real-time meal parsing and nutrition calculation
+```
+
+**WebSocket Message Format:**
+
+**Client → Server:**
+```json
+{
+  "action": "generate_plan" | "search" | "log_meal",
+  "user_id": "user_123",
+  "query": "Create a healthy meal plan",
+  "conversation_id": "conv_abc"  // Optional, for resuming conversations
+}
+```
+
+**Server → Client (streaming):**
+```json
+{
+  "type": "text" | "result" | "error",
+  "data": {
+    // For type="text": string message
+    "message": "Searching recipes...",
+    
+    // For type="result": Result object structure
+    "tool_name": "query",
+    "name": "results",
+    "objects": [...],
+    "metadata": {...}
+    
+    // For type="error": error info
+    "error": "Invalid input",
+    "recoverable": true
+  }
+}
 ```
 
 ### Internal Interfaces (Tool Contracts)
 
-All tools follow the Elysia async generator pattern:
+All tools follow the Elysia async generator pattern with automatic parameter injection:
 
 ```python
 from typing import AsyncGenerator
-from elysia.util.return_types import Result, Text, Error
+from elysia import tool
+from elysia.tree.objects import TreeData, Result, Error
+from elysia.api.services.user import UserManager
+from elysia.util.client import ClientManager
 
-async def tool_name(
-    environment: dict,
-    user_manager: UserManager,
-    **kwargs
-) -> AsyncGenerator[Result | Text | Error, None]:
+@tool
+async def profile_crud_tool(
+    tree_data: TreeData,           # Automatically injected - access environment via tree_data.environment
+    client_manager: ClientManager,  # Automatically injected - Weaviate client access
+    base_lm,                       # Optional - LLM for structured output
+    complex_lm,                    # Optional - More powerful LLM if needed
+    action: str = "create",        # LLM-chosen or default parameter
+    profile_data: dict = None      # LLM-chosen parameter
+) -> AsyncGenerator[Result | str | Error, None]:
     """
-    Tool description.
+    Create, read, or update user profile in UserProfile collection.
     
-    Reads:
-        - environment["branch.tool.key"]
+    Parameters:
+        action: "create", "read", or "update"
+        profile_data: Dictionary with user profile fields (required for create/update)
     
-    Writes:
-        - environment["this_branch.this_tool.output_key"]
-    
-    Yields:
-        - Text: User-facing progress messages
-        - Result: Data to store in Environment and display in UI
-        - Error: Recoverable errors for Tree to handle
+    Environment:
+        Reads: None (first tool in workflow)
+        Writes: environment["profile_crud_tool"]["profile"] - stores profile data
     """
-    # Implementation
-    yield Text("Starting operation...")
-    result_data = perform_operation()
-    yield Result(
-        key="this_branch.this_tool.output_key",
-        value=result_data,
-        display_type="table"  # or "text", "chart", etc.
-    )
+    # Yield strings = Text responses shown to user
+    yield f"Processing profile {action}..."
+    
+    # Access environment (structure: environment[tool_name][name])
+    # Reading example:
+    # existing_profile = tree_data.environment.find("profile_crud", "profile")
+    
+    # Get Weaviate client
+    client = client_manager.get_client()
+    collection = client.collections.get("UserProfile")
+    
+    try:
+        if action == "create" or action == "update":
+            # Validate and save
+            result = collection.data.insert(profile_data)
+            
+            # Yield Result to add to environment
+            yield Result(
+                name="profile",  # Environment key: environment["profile_crud_tool"]["profile"]
+                objects=[profile_data],
+                metadata={"action": action, "user_id": profile_data.get("user_id")}
+            )
+            yield f"Profile {action}d successfully"
+            
+        elif action == "read":
+            user_id = profile_data.get("user_id") if profile_data else None
+            result = collection.query.fetch_objects(
+                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                limit=1
+            )
+            
+            if result.objects:
+                profile = result.objects[0].properties
+                yield Result(
+                    name="profile",
+                    objects=[profile],
+                    metadata={"action": "read"}
+                )
+            else:
+                yield Error(f"Profile not found for user {user_id}")
+                return
+                
+    except Exception as e:
+        yield Error(f"Profile operation failed: {str(e)}")
+        return
 ```
+
+**Key Points:**
+- **Automatic Injection**: `tree_data`, `client_manager`, `base_lm`, `complex_lm` are automatically provided by Elysia
+- **Environment Access**: Use `tree_data.environment.find(tool_name, name)` to read, `Result` objects are automatically added
+- **Result Structure**: `Result(name="key", objects=[...], metadata={...})` creates `environment[tool_name]["key"]`
+- **String Yields**: Plain strings automatically become Text responses shown to user
+- **Error Handling**: Yield `Error()` objects for recoverable errors (Tree can retry or continue)
+
+**Environment Key Convention:**
+- Use `tool_name` = function name (e.g., "profile_crud_tool" → use full function name "profile_crud_tool")
+- Use descriptive `name` parameter (e.g., "profile", "targets", "results", "plan")
+- Structure: `environment[tool_name][name]` = list of `{objects: [...], metadata: {...}}`
+- When using `@tool` decorator, the tool_name is automatically set to the function name
 
 ### Authentication/Authorization (v1 Simplified)
 
@@ -461,10 +746,10 @@ async def tool_name(
 
 ### Database Layer (Weaviate)
 
-- **Collections**: 11 primary collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
+- **Collections**: 10 primary collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile [includes NutrientTarget], MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
 - **Indexing**: Filterable properties on user_id, fdc_id, diet_type, allergens, tags, time_min, logged_at
 - **Vectorization**: text2vec-openai (or local transformers) for Recipe descriptions, FdcFood descriptions
-- **Hybrid Search**: BM25 + vector similarity with alpha=0.5 default
+- **Hybrid Search**: BM25 + vector similarity with alpha=0.5 default (configurable per query - 0.0 = BM25 only, 1.0 = vector only, 0.5 = balanced)
 
 ### Third-Party Integrations (v1)
 
@@ -528,12 +813,14 @@ async def tool_name(
 - **Accuracy**: Direct gram_weight conversions avoid manual approximations
 - **Micronutrient Precision**: Essential for accurate vitamin/mineral aggregation
 
-### 5. Environment Key Namespacing
-**Decision**: Enforce `branch.tool.key` pattern for all Result keys
+### 5. Environment Key Namespacing (Elysia Standard)
+**Decision**: Use Elysia's standard `environment[tool_name][name]` structure where `tool_name` is derived from the tool function name and `name` is the Result's `name` parameter
 **Rationale**:
-- **No Collisions**: Different tools can't overwrite each other's data
-- **Auditability**: Easy to trace which tool produced which data
-- **Scoping**: Tools only write to their own namespace (read from anywhere)
+- **Elysia Convention**: Follows framework's built-in environment structure
+- **No Collisions**: Each tool writes to its own `tool_name` namespace
+- **Auditability**: Easy to trace which tool produced which data via `tool_name`
+- **Scoping**: Tools write to their namespace (`tool_name`) with descriptive `name` keys (read from anywhere via `environment.find()`)
+**Implementation**: Tools use `Result(name="descriptive_key", ...)` which automatically creates `environment[tool_name]["descriptive_key"]`
 
 ### 6. Session-Based Auth (v1)
 **Decision**: Simple session cookies for MVP
@@ -582,8 +869,20 @@ async def tool_name(
 ---
 
 **Status**: ✅ **Updated - Ready for Implementation**
-**Last Updated**: 2025-10-29
+**Last Updated**: 2025-01-27
 **Owner**: MealAgent Development Team
+
+**Changelog v0.3:**
+- ✅ **Gộp NutrientTarget vào UserProfile**: Embedded nutrient targets directly in UserProfile collection to simplify data model
+- ✅ **Cập nhật Architecture Diagram**: Added MealLogEntry, LLM service node, bidirectional WebSocket connections
+- ✅ **Cải thiện Tool Contracts**: Updated to match Elysia framework conventions (tree_data, client_manager auto-injection)
+- ✅ **Thêm API Schemas**: Added detailed request/response formats for all REST endpoints
+- ✅ **Thêm WebSocket Message Format**: Documented client/server message structures
+- ✅ **Cập nhật Environment Structure**: Corrected to match Elysia's `environment[tool_name][name]` pattern
+- ✅ **Thêm Data Relationship Diagram**: ER diagram showing all collection relationships
+- ✅ **Cập nhật Data Flow Diagrams**: More accurate sequence diagrams with Elysia API patterns
+- ✅ **Clarify Preprocessor**: Documented batch execution timing
+- ✅ **Hybrid Search Alpha**: Added explanation of alpha parameter meaning
 
 **Changelog v0.2:**
 - ✅ Added MealLogEntry collection schema

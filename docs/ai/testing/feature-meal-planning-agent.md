@@ -22,7 +22,7 @@ description: Define testing approach, test cases, and quality assurance for Meal
 #### ProfileCRUDTool (`tools/profile/profile_crud.py`)
 - [ ] **Test: Create new profile with valid data**
   - Input: Complete profile data (user_id, age, gender, weight, height, activity_level)
-  - Expected: Profile saved to Weaviate; Result yielded with `profile.profile_crud.profile` key
+  - Expected: Profile saved to Weaviate; Result yielded with `environment["profile_crud_tool"]["profile"]` key
   - Coverage: Happy path
 
 - [ ] **Test: Create profile with missing required field**
@@ -62,7 +62,7 @@ description: Define testing approach, test cases, and quality assurance for Meal
   - Coverage: Macro ratio calculation
 
 - [ ] **Test: Missing profile in environment**
-  - Setup: Empty environment (no profile.profile_crud.profile)
+  - Setup: Empty environment (no `environment["profile_crud_tool"]["profile"]`)
   - Expected: Error yielded prompting to run ProfileCRUDTool first
   - Coverage: Dependency check
 
@@ -287,47 +287,88 @@ async def test_daily_plan_workflow():
     """
     # Setup
     environment = {}
-    user_manager = MockUserManager()
+    # Note: In Elysia, tools receive tree_data and client_manager automatically
+    tree_data = TreeData(...)
+    client_manager = MockClientManager()
     
     # Step 1: Create profile
-    async for output in profile_crud_tool(environment, user_manager, action="create", profile_data={...}):
+    async for output in profile_crud_tool(
+        tree_data=tree_data,
+        client_manager=client_manager,
+        action="create",
+        profile_data={...}
+    ):
         if isinstance(output, Result):
-            assert output.key == "profile.profile_crud.profile"
+            assert output.name == "profile"
+            # Check environment: environment["profile_crud_tool"]["profile"]
+            profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+            assert profile_results and len(profile_results[0].objects) > 0
     
     # Step 2: Calculate macros
-    async for output in macro_calc_tool(environment, user_manager):
+    async for output in macro_calc_tool(
+        tree_data=tree_data,
+        client_manager=client_manager
+    ):
         if isinstance(output, Result):
-            assert output.key == "profile.macro_calc.targets"
-            assert output.value["tdee_kcal"] > 0
+            assert output.name == "targets"
+            # Check environment: environment["macro_calc_tool"]["targets"]
+            targets_results = tree_data.environment.find("macro_calc_tool", "targets")
+            assert targets_results and targets_results[0].objects[0]["tdee_kcal"] > 0
     
     # Step 3: Apply constraints
-    async for output in diet_allergen_guard_tool(environment, user_manager):
+    async for output in diet_allergen_guard_tool(
+        tree_data=tree_data,
+        client_manager=client_manager
+    ):
         if isinstance(output, Result):
-            assert output.key == "constraints.filters.diet_allergen"
+            assert output.name == "filters"
+            # Check environment: environment["diet_allergen_guard_tool"]["filters"]
     
     # Step 4: Search recipes
-    async for output in query_tool(environment, user_manager, query_text="healthy meals"):
+    async for output in query_tool(
+        tree_data=tree_data,
+        client_manager=client_manager,
+        query_text="healthy meals"
+    ):
         if isinstance(output, Result):
-            assert len(output.value) > 0
+            # Check environment: environment["query_tool"]["results"]
+            results = tree_data.environment.find("query_tool", "results")
+            assert results and len(results[0].objects) > 0
     
     # Step 5: Rank recipes
-    async for output in score_and_rank_tool(environment, user_manager, top_k=20):
+    async for output in score_and_rank_tool(
+        tree_data=tree_data,
+        client_manager=client_manager,
+        top_k=20
+    ):
         if isinstance(output, Result):
-            assert len(output.value) == 20
+            # Check environment: environment["score_and_rank_tool"]["topk"]
+            topk_results = tree_data.environment.find("score_and_rank_tool", "topk")
+            assert topk_results and len(topk_results[0].objects) == 20
     
     # Step 6: Assemble plan
-    async for output in plan_assemble_day_tool(environment, user_manager):
+    async for output in plan_assemble_day_tool(
+        tree_data=tree_data,
+        client_manager=client_manager
+    ):
         if isinstance(output, Result):
-            plan = output.value
-            assert "breakfast" in plan["meals"]
-            assert "lunch" in plan["meals"]
-            assert "dinner" in plan["meals"]
+            # Check environment: environment["plan_assemble_day_tool"]["plan"]
+            plan_results = tree_data.environment.find("plan_assemble_day_tool", "plan")
+            plan = plan_results[0].objects[0] if plan_results else {}
+            assert "breakfast" in plan.get("meals", {})
+            assert "lunch" in plan.get("meals", {})
+            assert "dinner" in plan.get("meals", {})
     
     # Step 7: Validate plan
-    async for output in plan_validate_tool(environment, user_manager):
+    async for output in plan_validate_tool(
+        tree_data=tree_data,
+        client_manager=client_manager
+    ):
         if isinstance(output, Result):
-            report = output.value
-            assert report["valid"] == True
+            # Check environment: environment["plan_validate_tool"]["report"]
+            report_results = tree_data.environment.find("plan_validate_tool", "report")
+            report = report_results[0].objects[0] if report_results else {}
+            assert report.get("valid") == True
 ```
 
 - [ ] **Test: Profile → Plan workflow (vegetarian user)**

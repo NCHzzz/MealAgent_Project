@@ -165,7 +165,7 @@ description: Clarify the problem space, gather requirements, and define success 
 ### Technical Constraints
 - **Elysia Framework**: All tools must be async generators yielding Result/Text objects
 - **Weaviate**: Primary data store for Recipe, FdcFood, FdcNutrient, FdcPortion collections
-- **Environment Key Convention**: Tools write to `<branch>.<tool>.<key>` namespace only
+- **Environment Key Convention**: Tools write to `environment[tool_name][name]` where `tool_name` is the function name (for @tool decorator) and `name` is the Result's name parameter
 
 #### LLM Usage Strategy (Elysia-Integrated Architecture)
 
@@ -182,12 +182,12 @@ description: Clarify the problem space, gather requirements, and define success 
 
 | Tool Branch | Tool Name | Purpose | Environment Key |
 |-------------|-----------|---------|-----------------|
-| `profile` | `MacroCalcTool` | Harris-Benedict TDEE calculation | `profile.macro_calc.targets` |
-| `constraints` | `DietAllergenGuard` | Generate hard filters from profile | `constraints.filters.diet_allergen` |
-| `plan_day` | `PlanValidate` | Validate constraints (diet/allergen/macro) | `plan_day.validate.report` |
-| `shopping` | `PantryDiff` | Subtract pantry from shopping list | `shopping.list.diff` |
-| `gap_fill` | `GapCalc` | Calculate deficit (target - consumed) | `gap_fill.calc.deficits` |
-| `micros` | `MicronutrientCheck` | Aggregate micros using FdcPortion | `micros.check.totals` |
+| `profile` | `MacroCalcTool` | Harris-Benedict TDEE calculation | `environment["macro_calc_tool"]["targets"]` |
+| `constraints` | `DietAllergenGuard` | Generate hard filters from profile | `environment["diet_allergen_guard_tool"]["filters"]` |
+| `plan_day` | `PlanValidate` | Validate constraints (diet/allergen/macro) | `environment["plan_validate_tool"]["report"]` |
+| `shopping` | `PantryDiff` | Subtract pantry from shopping list | `environment["pantry_diff_tool"]["diff"]` |
+| `gap_fill` | `GapCalc` | Calculate deficit (target - consumed) | `environment["gap_calc_tool"]["deficits"]` |
+| `micros` | `MicronutrientCheck` | Aggregate micros using FdcPortion | `environment["micronutrient_check_tool"]["totals"]` |
 
 **Rationale**: Nutritional calculations, constraint enforcement, and inventory math require 100% accuracy and auditability. No LLM hallucination risk allowed.
 
@@ -210,6 +210,8 @@ description: Clarify the problem space, gather requirements, and define success 
 | `cook_mode` | `InstructionParser` | Split unstructured recipe text into structured steps with time estimates | Code validates time estimates sum to recipe total_time | Use regex-based fallback parser (less accurate but deterministic) |
 | `explain` | `ExplainGenerator` | Generate natural language explanation from Environment data | Code validates all referenced data exists in Environment | Template-based explanation if LLM fails |
 | `variety` | `CuisineClassifier` | Classify recipe cuisine/flavor profile for diversity scoring | Code validates classification against known cuisines | Use recipe tags as fallback |
+
+**Note**: Environment keys follow Elysia's standard: `environment[tool_name][name]` where `tool_name` is the function name (e.g., `meal_parser_tool`) and `name` is the Result's name parameter.
 
 
 **Category 3: Hybrid Orchestration (LLM + Code in Sequence)**

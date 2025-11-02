@@ -128,70 +128,70 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/profile/profile_crud.py`
-  - **Environment Keys**: Writes `profile.profile_crud.profile`
+  - **Environment Keys**: Writes `environment["profile_crud_tool"]["profile"]`
 
 - [ ] **Task 2.1.2**: Implement MacroCalcTool (Harris-Benedict TDEE calculation)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/profile/macro_calc.py`
-  - **Environment Keys**: Reads `profile.profile_crud.profile`, Writes `profile.macro_calc.targets`
+  - **Environment Keys**: Reads `environment["profile_crud_tool"]["profile"]`, Writes `environment["macro_calc_tool"]["targets"]`
 
 #### 2.2 Constraint Branch Tools
 - [ ] **Task 2.2.1**: Implement DietAllergenGuard (generate hard filters for Weaviate)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/constraints/diet_allergen_guard.py`
-  - **Environment Keys**: Writes `constraints.filters.diet_allergen`
+  - **Environment Keys**: Writes `environment["diet_allergen_guard_tool"]["filters"]`
 
 - [ ] **Task 2.2.2**: Implement TimeDeviceGuard (optional time/equipment constraints)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/constraints/time_device_guard.py`
-  - **Environment Keys**: Writes `constraints.filters.time_device`
+  - **Environment Keys**: Writes `environment["time_device_guard_tool"]["filters"]`
 
 #### 2.3 Search Branch Tools
 - [ ] **Task 2.3.1**: Implement query tool (hybrid search with filters)
   - **Estimated Effort**: 3 days (includes Weaviate client integration)
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/search/query.py`
-  - **Environment Keys**: Reads `constraints.filters.*`, Writes `search.query.results`
+  - **Environment Keys**: Reads `environment["diet_allergen_guard_tool"]["filters"]`, `environment["time_device_guard_tool"]["filters"]`, Writes `environment["query_tool"]["results"]`
 
 - [ ] **Task 2.3.2**: Implement query_postprocessing (deduplication, normalization)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/search/query_postprocessing.py`
-  - **Environment Keys**: Reads `search.query.results`, Writes `search.post.deduped`
+  - **Environment Keys**: Reads `environment["query_tool"]["results"]`, Writes `environment["query_postprocessing_tool"]["deduped"]`
 
 - [ ] **Task 2.3.3**: Implement ScoreAndRank (multi-criteria scoring)
   - **Estimated Effort**: 3 days (includes scoring algorithm design)
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/search/score_and_rank.py`
-  - **Environment Keys**: Reads `search.post.deduped`, `profile.macro_calc.targets`, Writes `search.rank.topk`
+  - **Environment Keys**: Reads `environment["query_postprocessing_tool"]["deduped"]`, `environment["macro_calc_tool"]["targets"]`, Writes `environment["score_and_rank_tool"]["topk"]`
 
 #### 2.4 Plan Day Branch Tools
 - [ ] **Task 2.4.1**: Implement TargetResolver (resolve query vs profile targets)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/plan_day/target_resolver.py`
-  - **Environment Keys**: Writes `plan_day.target.resolved`
+  - **Environment Keys**: Writes `environment["target_resolver_tool"]["resolved"]`
 
 - [ ] **Task 2.4.2**: Implement PlanAssembleDay (3-meal assembly)
   - **Estimated Effort**: 3 days (includes portion scaling logic)
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/plan_day/plan_assemble.py`
-  - **Environment Keys**: Reads `search.rank.topk`, Writes `plan_day.assemble.plan`
+  - **Environment Keys**: Reads `environment["score_and_rank_tool"]["topk"]`, Writes `environment["plan_assemble_day_tool"]["plan"]`
 
 - [ ] **Task 2.4.3**: Implement PlanValidate (constraint and macro validation)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/plan_day/plan_validate.py`
-  - **Environment Keys**: Reads `plan_day.assemble.plan`, Writes `plan_day.validate.report`
+  - **Environment Keys**: Reads `environment["plan_assemble_day_tool"]["plan"]`, Writes `environment["plan_validate_tool"]["report"]`
 
 - [ ] **Task 2.4.4**: Implement BuildShoppingList (extract ingredients from plan)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/plan_day/build_shopping.py`
-  - **Environment Keys**: Reads `plan_day.assemble.plan`, Writes `shopping.list.items`
+  - **Environment Keys**: Reads `environment["plan_assemble_day_tool"]["plan"]`, Writes `environment["build_shopping_tool"]["items"]`
 
 #### 2.5 Decision Tree Logic
 - [ ] **Task 2.5.1**: Implement main decision tree for daily planning workflow
@@ -209,13 +209,13 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/meal_logging/meal_parser.py`
-  - **Environment Keys**: Writes `meal_logging.parser.parsed_meal`
+  - **Environment Keys**: Writes `environment["meal_parser_tool"]["parsed_meal"]`
 
 - [ ] **Task 2.6.2**: Implement NutritionCalc (calculate nutrition from FdcNutrient + FdcPortion)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/meal_logging/nutrition_calc.py`
-  - **Environment Keys**: Writes `meal_logging.nutrition.calculated`
+  - **Environment Keys**: Writes `environment["nutrition_calc_tool"]["calculated"]`
 
 - [ ] **Task 2.6.3**: Implement ProfileUpdate (update consumed_today and remaining targets)
   - **Estimated Effort**: 1 day
@@ -244,33 +244,33 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Estimated Effort**: 3 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/plan_week/plan_assemble_weekly.py`
-  - **Environment Keys**: Writes `plan_week.assemble.plan`
+  - **Environment Keys**: Writes `environment["plan_assemble_weekly_tool"]["plan"]`
 
 - [ ] **Task 3.1.2**: Implement VarietyGuard (repetition detection and scoring)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/plan_week/variety_guard.py`
-  - **Environment Keys**: Reads `plan_week.assemble.plan`, Writes `plan_week.variety.report`
+  - **Environment Keys**: Reads `environment["plan_assemble_weekly_tool"]["plan"]`, Writes `environment["variety_guard_tool"]["report"]`
 
 #### 3.2 Pantry & Shopping Tools
 - [ ] **Task 3.2.1**: Implement PantryCRUDTool (CRUD operations on PantryItem)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/pantry/pantry_crud.py`
-  - **Environment Keys**: Writes `pantry.crud.state`
+  - **Environment Keys**: Writes `environment["pantry_crud_tool"]["state"]`
 
 - [ ] **Task 3.2.2**: Implement PantryDiff (subtract pantry from shopping list)
   - **Estimated Effort**: 3 days (includes unit conversion logic)
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/shopping/pantry_diff.py`
-  - **Environment Keys**: Reads `shopping.list.items`, `pantry.crud.state`, Writes `shopping.list.diff`
+  - **Environment Keys**: Reads `environment["build_shopping_tool"]["items"]`, `environment["pantry_crud_tool"]["state"]`, Writes `environment["pantry_diff_tool"]["diff"]`
 
 #### 3.3 Gap Fill Branch Tools
 - [ ] **Task 3.3.1**: Implement GapCalc (calculate macro deficits)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/gap_fill/gap_calc.py`
-  - **Environment Keys**: Reads `plan_*.assemble.plan`, Writes `gap_fill.calc.deficits`
+  - **Environment Keys**: Reads `environment["plan_assemble_day_tool"]["plan"]` or `environment["plan_assemble_weekly_tool"]["plan"]`, Writes `environment["gap_calc_tool"]["deficits"]`
 
 - [ ] **Task 3.3.2**: Implement SuggestSnack (recommend deficit-filling snacks)
   - **Estimated Effort**: 2 days
