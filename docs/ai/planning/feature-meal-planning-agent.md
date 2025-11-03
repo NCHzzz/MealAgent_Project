@@ -43,15 +43,17 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 ### Phase 1: Foundation & Data Setup (Week 1-3)
 
 #### 1.1 Weaviate Schema & Collections
-- [ ] **Task 1.1.1**: Define Weaviate schemas for all 11 collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
+- [x] **Task 1.1.1**: Define Weaviate schemas for all 11 collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile, NutrientTarget, MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
   - **Estimated Effort**: 2 days
   - **Owner**: Data Engineer
   - **Deliverables**: `elysia/MealAgent/schemas/` Python files defining schemas
+  - **Status**: ✅ **COMPLETED** - Created schema definition files in `elysia/MealAgent/schemas/` with all 12 collections (11 main + nested items). UserProfile embeds NutrientTarget per design doc. Migration script created at `elysia/MealAgent/migrations/create_collections.py`.
 
-- [ ] **Task 1.1.2**: Set up Weaviate instance (Docker Compose for dev, cloud for prod)
+- [x] **Task 1.1.2**: Set up Weaviate instance (Docker Compose for dev, cloud for prod)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `Docker/docker-compose.yml` with Weaviate service
+  - **Status**: ✅ **COMPLETED** - Verified existing docker-compose.yml configuration. Added documentation in `Docker/README.md` with usage instructions, connection parameters for MealAgent (ports 8078/50051), and production considerations. Weaviate 1.32.8 with text2vec-transformers (Qwen) configured.
 
 - [ ] **Task 1.1.3**: Create collections in Weaviate with vectorizer configuration
   - **Estimated Effort**: 1 day
@@ -59,20 +61,19 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Deliverables**: Migration script `elysia/MealAgent/migrations/create_collections.py`
 
 #### 1.2 FDC Data Import
-- [ ] **Task 1.2.1**: Download FoodData Central CSV files (food, nutrient, portion tables)
-  - **Estimated Effort**: 0.5 days
-  - **Owner**: Data Engineer
-  - **Deliverables**: Raw CSV files in `data/fdc/raw/`
+- [x] **Task 1.2.1**: Download FoodData Central CSV files (food, nutrient, portion tables)
+  - **Status**: ✅ Already available at `D:\Elysia_cursor\elysia\elysia\MealAgent\data` (FDC_data.csv)
+  - **Deliverables**: Raw CSV present
 
-- [ ] **Task 1.2.2**: Write ETL pipeline to parse and clean FDC data
-  - **Estimated Effort**: 3 days
+- [x] **Task 1.2.2**: Write ETL pipeline to parse and clean FDC data
+  - **Status**: ✅ Implemented
   - **Owner**: Data Engineer
-  - **Deliverables**: `elysia/MealAgent/etl/fdc_import.py`
+  - **Deliverables**: `elysia/elysia/MealAgent/etl/ingest_fdc.py`
 
 - [ ] **Task 1.2.3**: Generate embeddings for FdcFood descriptions
-  - **Estimated Effort**: 2 days (includes batching and error handling)
+  - **Note**: Handled by Weaviate `text2vec-transformers` on insert; verify vectors exist
   - **Owner**: Data Engineer
-  - **Deliverables**: Embeddings stored in Weaviate FdcFood collection
+  - **Deliverables**: Vectorization enabled; verification checklist
 
 - [ ] **Task 1.2.4**: Load FdcFood, FdcNutrient, FdcPortion into Weaviate
   - **Estimated Effort**: 1 day
@@ -83,12 +84,12 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 - [ ] **Task 1.3.1**: Load demo recipe dataset (4k) from `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
   - **Estimated Effort**: 1 day
   - **Owner**: Data Engineer
-  - **Deliverables**: Imported recipes in Weaviate `Recipe` collection
+  - **Deliverables**: Imported recipes in Weaviate `Recipe` collection via `elysia/elysia/MealAgent/etl/ingest_recipes.py`
 
 - [ ] **Task 1.3.2**: Validate/normalize schema (ensure ingredients map to FDC ids where available)
   - **Estimated Effort**: 2 days
   - **Owner**: Data Engineer
-  - **Deliverables**: `elysia/MealAgent/etl/recipe_import.py`
+  - **Deliverables**: `elysia/elysia/MealAgent/etl/ingest_recipes.py` (validation step)
 
 - [ ] **Task 1.3.3**: Ensure `macros_per_serving` is populated or backfilled where missing
   - **Estimated Effort**: 1 day
@@ -96,9 +97,9 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Deliverables**: Recipes with `macros_per_serving` populated
 
 - [ ] **Task 1.3.4**: Generate embeddings for recipe descriptions and load into Weaviate
-  - **Estimated Effort**: 1 day
+  - **Note**: Handled by `text2vec-transformers` on insert; verify vectors exist
   - **Owner**: Data Engineer
-  - **Deliverables**: Populated Recipe collection with vectors
+  - **Deliverables**: Vectorization enabled; verification checklist
 
 #### 1.4 Elysia Framework Setup
 - [ ] **Task 1.4.1**: Configure Elysia Settings and environment variables

@@ -1,12 +1,14 @@
 services:
+  # Weaviate vector database for MealAgent
+  # See README.md for usage instructions
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.32.8
     container_name: weaviate-database
     restart: unless-stopped
     command: ["--host","0.0.0.0","--port","8080","--scheme","http"]
     ports:
-      - "8078:8080"      # REST
-      - "50051:50051"    # gRPC
+      - "8078:8080"      # REST API (MealAgent migration scripts use this port)
+      - "50051:50051"    # gRPC API
     environment:
       QUERY_DEFAULTS_LIMIT: "25"
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
@@ -30,11 +32,12 @@ services:
       retries: 10
       start_period: 15s
 
+  # Transformers inference service for text2vec-transformers module
+  # Provides Qwen Qwen3-Embedding-0.6B model for semantic search
   t2v:
     # image: semitechnologies/transformers-inference:baai-bge-m3-onnx
     image: semitechnologies/transformers-inference:qwen-qwen3-embedding-0.6b
     # image: semitechnologies/transformers-inference:google-gemma-3-300m-embedding
-
     container_name: t2v
     restart: unless-stopped
     deploy:

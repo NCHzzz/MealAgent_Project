@@ -146,8 +146,8 @@ elysia/
 │   │   └── config.py               # Tool registration
 │   ├── etl/                        # Data import scripts
 │   │   ├── __init__.py
-│   │   ├── fdc_import.py
-│   │   └── recipe_import.py
+│   │   ├── ingest_fdc.py           # Ingest FDC_data.csv → FdcFood/FdcNutrient/FdcPortion
+│   │   └── ingest_recipes.py       # Ingest recipe.csv → Recipe properties (CSV fields)
 │   ├── utils/                      # Helper utilities
 │   │   ├── __init__.py
 │   │   ├── nutrition.py            # TDEE, macro calculations
@@ -179,6 +179,26 @@ elysia/
 ### Core Features
 
 #### 1. Profile Management (ProfileCRUDTool, MacroCalcTool)
+#### Recipe ETL Mapping (demo dataset)
+```text
+Input CSV columns:
+- food_id, dish_name, dish_type, serving_size, cooking_time,
+  ingredients_with_qty (text[]), ingredients (text[]),
+  cooking_method_array (text[]), image_link
+
+Mapping to Weaviate Recipe properties:
+- food_id → Recipe.food_id (text, indexed)
+- dish_name → Recipe.dish_name (text) and also copied to Recipe.title for search
+- dish_type → Recipe.dish_type (text)
+- serving_size → Recipe.serving_size (int)
+- cooking_time → Recipe.cooking_time (int)
+- ingredients_with_qty → Recipe.ingredients_with_qty (text[])
+- ingredients → Recipe.ingredients (text[])
+- cooking_method_array → Recipe.cooking_method_array (text[]), and optionally Recipe.directions
+- image_link → Recipe.image_link (text)
+
+Vectorization uses Weaviate `text2vec-transformers` (see `ingest_fdc.py` example). Sources should include: dish_name, ingredients_with_qty, ingredients, cooking_method_array.
+```
 
 **ProfileCRUDTool Implementation**:
 ```python

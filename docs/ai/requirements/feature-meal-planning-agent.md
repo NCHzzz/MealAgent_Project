@@ -270,6 +270,7 @@ description: Clarify the problem space, gather requirements, and define success 
 6. **Export Capability**: Users can export shopping lists as text/PDF (no direct grocery app integration)
 7. **Chat-based Meal Logging**: Users comfortable entering consumed meals via natural language chat interface
 8. **LLM Availability**: OpenAI API or equivalent available for parsing, ranking, and explanation features
+9. **Session-based Auth (MVP)**: Simplified session cookie approach; cross-origin access will require CORS + SameSite=None; Secure cookies in production
 
 ## Questions & Open Items
 
@@ -279,6 +280,28 @@ description: Clarify the problem space, gather requirements, and define success 
 3. **Multi-language Support**: English-only for MVP, or internationalization from start? (Impacts LLM prompts, recipe corpus, UI)
 4. **Offline Mode**: Should frontend cache plans/recipes for offline access, or always-online only?
 5. **Meal Logging Accuracy**: How to validate LLM-parsed meals against user intent? (Show parsed nutrition for confirmation before saving?)
+
+### Additional Requirements Clarifications
+- **Data provenance & validation**: ETL must map source FDC data into collections as follows:
+  - FdcFood: base macro/micro per 100g columns only
+  - FdcNutrient: rows derived from source for (fdc_id, nutrient_id, amount_100g)
+  - FdcPortion: rows derived from source for (fdc_id, amount, measure_unit, gram_weight)
+  - Optional enrichment of nutrient name/unit via lookup table
+
+- **Recipe CSV mapping (demo dataset)**:
+  - Input columns: `food_id`, `dish_name`, `dish_type`, `serving_size`, `cooking_time`, `ingredients_with_qty` (text[]), `ingredients` (text[]), `cooking_method_array` (text[]), `image_link`
+  - Mapped properties in `Recipe`:
+    - `food_id` → `food_id` (text, indexed)
+    - `dish_name` → `dish_name` (text) and `title` (duplicate for search)
+    - `dish_type` → `dish_type` (text, filterable)
+    - `serving_size` → `serving_size` (int)
+    - `cooking_time` → `cooking_time` (int, filterable)
+    - `ingredients_with_qty` → `ingredients_with_qty` (text[])
+    - `ingredients` → `ingredients` (text[])
+    - `cooking_method_array` → `cooking_method_array` (text[]); legacy alias `directions` kept
+    - `image_link` → `image_link` (text); legacy alias `image_url` kept
+- **Meal logging confirmation UX**: After parsing, show calculated nutrition for user confirmation before saving; allow edit/cancel.
+- **LLM parsing metric definition**: ≥85% accuracy measured against a labeled test set of 100 meal descriptions (to be curated); report precision/recall for ingredient identification and macro error (MAE per meal).
 
 ### Items Requiring Stakeholder Input
 1. **HIPAA Compliance**: ✅ **RESOLVED** - Not required (wellness app, not medical device)

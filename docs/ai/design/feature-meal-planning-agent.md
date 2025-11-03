@@ -76,71 +76,87 @@ graph TD
 
 ### Core Collections (Weaviate Schema)
 
-#### Recipe
+#### Recipe (CSV-aligned minimal schema)
 ```python
 {
     "class": "Recipe",
     "properties": [
-        {"name": "recipe_id", "dataType": ["text"], "indexFilterable": True},
-        {"name": "title", "dataType": ["text"]},
-        {"name": "description", "dataType": ["text"]},
-        {"name": "ingredients", "dataType": ["object[]"]},  # [{"name": str, "amount": float, "unit": str, "fdc_id": int?}]
-        {"name": "directions", "dataType": ["text[]"]},  # Step-by-step instructions
-        {"name": "servings", "dataType": ["number"]},
-        {"name": "time_min", "dataType": ["int"], "indexFilterable": True},  # Total cooking time
-        {"name": "tags", "dataType": ["text[]"], "indexFilterable": True},  # ["vegetarian", "quick", "italian"]
-        {"name": "diet_type", "dataType": ["text"], "indexFilterable": True},  # "vegetarian", "vegan", "keto", etc.
-        {"name": "allergens", "dataType": ["text[]"], "indexFilterable": True},  # ["dairy", "nuts", "gluten"]
-        {"name": "image_url", "dataType": ["text"]},
-        {"name": "macros_per_serving", "dataType": ["object"]},  # {"kcal": float, "protein_g": float, "fat_g": float, "carb_g": float}
-        {"name": "equipment", "dataType": ["text[]"]},  # ["oven", "blender", "stovetop"]
+        {"name": "food_id", "dataType": ["text"], "indexFilterable": True},
+        {"name": "dish_name", "dataType": ["text"]},
+        {"name": "dish_type", "dataType": ["text"], "indexFilterable": True},
+        {"name": "serving_size", "dataType": ["int"]},
+        {"name": "cooking_time", "dataType": ["int"], "indexFilterable": True},
+        {"name": "ingredients_with_qty", "dataType": ["text[]"]},
+        {"name": "ingredients", "dataType": ["text[]"]},
+        {"name": "cooking_method_array", "dataType": ["text[]"]},
+        {"name": "image_link", "dataType": ["text"]},
     ],
-    "vectorizer": "text2vec-openai"  # Or local model via text2vec-transformers
+    "vectorizer": "text2vec-transformers"
 }
 ```
 
-#### FdcFood
+Note: We intentionally keep only the CSV fields to reduce redundancy and simplify ingestion.
+
+#### FdcFood 
 ```python
 {
     "class": "FdcFood",
     "properties": [
         {"name": "fdc_id", "dataType": ["int"], "indexFilterable": True},
         {"name": "description", "dataType": ["text"]},
-        {"name": "data_type", "dataType": ["text"]},  # "sr_legacy_food", "survey_food", etc.
-        {"name": "food_category", "dataType": ["text"]},
-        {"name": "scientific_name", "dataType": ["text"]},
+
+        # Macronutrients (per 100g)
+        {"name": "energy_kcal_100g", "dataType": ["number"]},
+        {"name": "protein_g_100g", "dataType": ["number"]},
+        {"name": "fat_g_100g", "dataType": ["number"]},
+        {"name": "carbohydrate_g_100g", "dataType": ["number"]},
+        {"name": "sugars_g_100g", "dataType": ["number"]},
+        {"name": "fiber_g_100g", "dataType": ["number"]},
+        {"name": "sodium_mg_100g", "dataType": ["number"]},
+        {"name": "sat_fat_g_100g", "dataType": ["number"]},
+
+        # Micronutrients (per 100g)
+        {"name": "calcium_mg_100g", "dataType": ["number"]},
+        {"name": "iron_mg_100g", "dataType": ["number"]},
+        {"name": "potassium_mg_100g", "dataType": ["number"]},
+        {"name": "magnesium_mg_100g", "dataType": ["number"]},
+        {"name": "zinc_mg_100g", "dataType": ["number"]},
+        {"name": "vitamin_a_rae_ug_100g", "dataType": ["number"]},
+        {"name": "vitamin_b6_mg_100g", "dataType": ["number"]},
+        {"name": "vitamin_b12_ug_100g", "dataType": ["number"]},
+        {"name": "thiamin_b1_mg_100g", "dataType": ["number"]},
+        {"name": "riboflavin_b2_mg_100g", "dataType": ["number"]},
+        {"name": "niacin_b3_mg_100g", "dataType": ["number"]},
+        {"name": "vitamin_c_mg_100g", "dataType": ["number"]},
+        {"name": "vitamin_d_ug_100g", "dataType": ["number"]},
+        {"name": "vitamin_e_mg_100g", "dataType": ["number"]}
     ],
-    "vectorizer": "text2vec-openai"
+    "vectorizer": "text2vec_transformers"
 }
 ```
 
-#### FdcNutrient
+#### FdcNutrient (derived via ETL from source data)
 ```python
 {
     "class": "FdcNutrient",
     "properties": [
         {"name": "fdc_id", "dataType": ["int"], "indexFilterable": True},  # Links to FdcFood
-        {"name": "nutrient_id", "dataType": ["int"]},  # FDC nutrient ID (e.g., 1008 = Energy)
-        {"name": "nutrient_name", "dataType": ["text"]},  # "Protein", "Vitamin C", etc.
-        {"name": "amount_per_100g", "dataType": ["number"]},
-        {"name": "unit", "dataType": ["text"]},  # "g", "mg", "mcg", "IU"
+        {"name": "nutrient_id", "dataType": ["int"], "indexFilterable": True},
+        {"name": "amount_100g", "dataType": ["number"]}
+        # Optional enrichments (if you have a lookup table): nutrient_name, unit
     ]
 }
 ```
 
-#### FdcPortion (NEW - Required)
+#### FdcPortion (derived via ETL from source data)
 ```python
 {
     "class": "FdcPortion",
     "properties": [
-        {"name": "id", "dataType": ["int"], "indexFilterable": True},  # Unique portion ID
         {"name": "fdc_id", "dataType": ["int"], "indexFilterable": True},  # Links to FdcFood
-        {"name": "seq_num", "dataType": ["int"]},
         {"name": "amount", "dataType": ["number"]},
-        {"name": "measure_unit", "dataType": ["text"]},  # "cup", "oz", "tbsp", etc.
-        {"name": "gram_weight", "dataType": ["number"]},  # Conversion to grams
-        {"name": "modifier", "dataType": ["text"]},
-        {"name": "portion_description", "dataType": ["text"]},
+        {"name": "measure_unit", "dataType": ["text"]},  # "waffle, square", "cup", "oz", etc.
+        {"name": "gram_weight", "dataType": ["number"]}
     ]
 }
 ```
@@ -232,6 +248,18 @@ erDiagram
         number gram_weight
     }
 ```
+
+### ETL Mapping Notes (FDC)
+
+- FdcFood stores base macro/micro values per 100g as columns; no JSON payloads are persisted in FdcFood.
+- FdcNutrient rows are created via ETL from the source dataset for each (fdc_id, nutrient_id, amount_100g).
+- FdcPortion rows are created via ETL for each (fdc_id, amount, measure_unit, gram_weight) available in the source.
+- Optional enrichment: a nutrient-id lookup table can be used during ETL to add `nutrient_name` and `unit`; this is not required by the schema.
+
+### Environment Keys Reference
+
+- Tools follow the `environment[tool_name][name]` convention.
+- Keep a brief quick reference in `docs/ai/design/environment_keys.md` (planned) and link it from implementation docs.
 
 **Key Relationships:**
 - **UserProfile → MealPlan**: One user can create multiple meal plans (one-to-many)
