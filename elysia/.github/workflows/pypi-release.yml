@@ -1,0 +1,118 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'weaviate'
+    permissions:
+      id-token: write
+      contents: write
+
+    environment:
+      name: pypi
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1  
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update version in pyproject.toml
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "Setting version to $TAG_VERSION in pyproject.toml"
+          # Use sed without the '' flag for Linux compatibility
+          sed -i "/#replace_package_version_marker/{n;s/version *= *\"[^\"]*\"/version=\"$TAG_VERSION\"/;}" pyproject.toml
+          sed -i "/# replace_package_version_marker/{n;s/__version__ *= *\"[^\"]*\"/__version__=\"$TAG_VERSION\"/;}" ./elysia/__metadata__.py
+
+      - name: Install pypa/build
+        run: >-
+          python3 -m
+          pip install
+          build
+          --user
+
+      - name: Build a binary wheel and a source tarball
+        run: python3 -m build
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+    
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+      - name: Create test environment
+        run: python -m venv test_before_pypi
+
+      - name: Check the install
+        run: |
+            source test_before_pypi/bin/activate
+            pip install dist/*.whl
+            deactivate
+            rm -r test_before_pypi
+
+      - uses: stefanzweifel/git-auto-commit-action@v5 # auto commit changes to main
+        with:
+          commit_message: Update versions
+          create_branch: true
+          branch: release/${{ github.ref }}
+
+      - name: Checkout main branch
+        run: |
+          git fetch origin
+          git checkout main
+
+      - name: Configure git user
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "Github Actions"
+
+      - name: Merge release branch into main
+        run: |
+          git merge --no-ff release/${{ github.ref }}
+
+      - name: Push changes to main
+        run: |
+          git push origin main
+
+
+  create-release:
+    name: Create Release
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@master
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          draft: true
+          prerelease: false
