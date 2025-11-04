@@ -56,7 +56,7 @@ graph TD
   - **UserManager**: Per-user isolation of TreeManager and ClientManager
   - **TreeManager**: Manages decision tree instances and execution context
   - **ClientManager**: Manages Weaviate client connections and query execution
-- **Preprocessor**: Runs during setup (batch process) via `elysia.preprocess()` to generate metadata, embeddings, and schema descriptions for collections - called once per collection before first use
+- **Preprocessor**: Runs during setup (batch process) via Elysia's official `preprocess` API to generate collection summaries, field statistics, return type mappings, and save to `ELYSIA_METADATA__` (one-time per collection) [Preprocessor]
 - **Weaviate**: Vector database storing recipes, nutritional data, user profiles, plans, pantry, and shopping lists
 
 ### Technology Stack
@@ -76,7 +76,7 @@ graph TD
 
 ### Core Collections (Weaviate Schema)
 
-#### Recipe (CSV-aligned minimal schema)
+#### Recipe (CSV-aligned minimal schema + cached macros)
 ```python
 {
     "class": "Recipe",
@@ -90,12 +90,41 @@ graph TD
         {"name": "ingredients", "dataType": ["text[]"]},
         {"name": "cooking_method_array", "dataType": ["text[]"]},
         {"name": "image_link", "dataType": ["text"]},
+        # Cached field, computed on-demand by tool (VN→EN translation + FDC lookup)
+        {"name": "macros_per_serving", "dataType": ["object"],
+         "nestedProperties": [
+            {"name": "kcal", "dataType": ["number"]},
+            {"name": "protein_g", "dataType": ["number"]},
+            {"name": "fat_g", "dataType": ["number"]},
+            {"name": "carb_g", "dataType": ["number"]}
+         ]
+        },
+        # Cached ingredient mapping to FDC for faster subsequent queries
+        {"name": "ingredient_fdc_map", "dataType": ["object[]"],
+         "nestedProperties": [
+            {"name": "ingredient_vn", "dataType": ["text"]},
+            {"name": "ingredient_en", "dataType": ["text"]},
+            {"name": "fdc_id", "dataType": ["int"]},
+            {"name": "quantity_g", "dataType": ["number"]},
+            {"name": "confidence", "dataType": ["number"]}
+         ]
+        }
     ],
     "vectorizer": "text2vec-transformers"
 }
 ```
 
 Note: We intentionally keep only the CSV fields to reduce redundancy and simplify ingestion.
+
+##### Macros-per-serving strategy (VN→EN tool-only)
+- Recipes are Vietnamese; FDC is English. We do NOT precompute mappings during ETL.
+- A runtime tool translates ingredients (VN→EN), searches `FdcFood`, computes macros, and caches to `Recipe.macros_per_serving`.
+- Subsequent calls read the cached value; no re-computation.
+
+##### Ingredient-to-FDC mapping cache
+- To speed up subsequent calculations and queries, each Recipe also stores `ingredient_fdc_map` (object[]):
+  - `ingredient_vn` (text), `ingredient_en` (text), `fdc_id` (int), `quantity_g` (number), `confidence` (number)
+- The VN→EN macro tool writes/updates this array when it resolves ingredients.
 
 #### FdcFood 
 ```python
@@ -131,7 +160,7 @@ Note: We intentionally keep only the CSV fields to reduce redundancy and simplif
         {"name": "vitamin_d_ug_100g", "dataType": ["number"]},
         {"name": "vitamin_e_mg_100g", "dataType": ["number"]}
     ],
-    "vectorizer": "text2vec_transformers"
+    "vectorizer": "text2vec-transformers"
 }
 ```
 
@@ -143,7 +172,7 @@ Note: We intentionally keep only the CSV fields to reduce redundancy and simplif
         {"name": "fdc_id", "dataType": ["int"], "indexFilterable": True},  # Links to FdcFood
         {"name": "nutrient_id", "dataType": ["int"], "indexFilterable": True},
         {"name": "amount_100g", "dataType": ["number"]}
-        # Optional enrichments (if you have a lookup table): nutrient_name, unit
+        # Optional enrichments during ETL: nutrient_name, unit (filled from mapping)
     ]
 }
 ```
@@ -254,12 +283,76 @@ erDiagram
 - FdcFood stores base macro/micro values per 100g as columns; no JSON payloads are persisted in FdcFood.
 - FdcNutrient rows are created via ETL from the source dataset for each (fdc_id, nutrient_id, amount_100g).
 - FdcPortion rows are created via ETL for each (fdc_id, amount, measure_unit, gram_weight) available in the source.
-- Optional enrichment: a nutrient-id lookup table can be used during ETL to add `nutrient_name` and `unit`; this is not required by the schema.
+- Optional enrichment: a nutrient-id lookup table can be used during ETL to add `nutrient_name` and `unit`; schema supports these as optional properties.
+
+### Runtime Tool: CalculateRecipeMacrosTool (VN→EN)
+Purpose: On-demand calculation of `macros_per_serving` for a recipe whose ingredients are Vietnamese.
+
+Flow:
+1) Check `Recipe.macros_per_serving`. If present → return cached.
+2) For each item in `ingredients_with_qty`:
+   - Translate/normalize to English (LLM or local model)
+   - Hybrid search on `FdcFood.description`
+   - Take best match above threshold
+3) Accumulate macros using per-100g fields on `FdcFood`; scale by quantity; divide by `serving_size`.
+4) Write back `macros_per_serving` to the Recipe object.
+
+Notes:
+- No ETL-side Vietnamese→English mapping is maintained; translation occurs at runtime for flexibility.
+- Implemented as an async tool and invoked by scoring/plan tools when macros are missing.
+
+#### VN→EN Macro Calculation Sequence (mermaid)
+```mermaid
+sequenceDiagram
+    participant UI
+    participant API
+    participant Tool as CalculateRecipeMacrosTool
+    participant LLM as LLM (VN→EN)
+    participant Wvt as Weaviate (FdcFood)
+
+    UI->>API: Request recipes / planning
+    API->>Tool: For recipe without macros_per_serving
+    Tool->>LLM: Translate ingredient (VN) → English JSON
+    LLM-->>Tool: {name: "beef", quantity: 100, unit: "g"}
+    Tool->>Wvt: Hybrid search FdcFood by English name
+    Wvt-->>Tool: Best match (fdc_id, per-100g macros)
+    Tool->>Tool: Sum macros (scaled), divide by serving_size
+    Tool->>Wvt: Update Recipe.macros_per_serving (cache)
+    Tool-->>API: macros_per_serving
+    API-->>UI: Response (with macros)
+```
+
+### Non-Functional Requirements (Design Summary)
+- Hybrid search latency: < 2s for 4k corpus; < 3s for 10k+
+- Daily plan generation: < 5s end-to-end
+- Weekly plan generation: < 15s
+- Macro aggregation for 21 meals: < 3s
+- Meal logging (parse + calc + save): < 2s
+- Vectorizer: `text2vec-transformers`; consistent across collections
+
+### API Notes (Macros Cache)
+- `Recipe.macros_per_serving` is a cached, optional field; may be absent on first read.
+- When absent, backend calls CalculateRecipeMacrosTool to compute and persist it before returning.
+- `Recipe.ingredient_fdc_map` may also be populated on-demand by the same tool and persisted for subsequent requests.
+
+Cross-reference:
+- Environment key conventions and per-tool keys: `docs/ai/design/environment_keys.md`
+- Implementation patterns and route integration: `docs/ai/implementation/feature-meal-planning-agent.md`
+- Elysia Preprocessor reference: [Preprocessor]
+
+### Environment Keys (Minimal Reference)
+| Tool | Reads | Writes |
+|------|-------|--------|
+| query_tool | constraints filters | query_tool.results |
+| query_postprocessing_tool | query_tool.results | query_postprocessing_tool.deduped |
+| score_and_rank_tool | deduped, targets | score_and_rank_tool.topk |
+| plan_assemble_day_tool | topk, targets | plan_assemble_day_tool.plan |
+| calculate_recipe_macros_tool | Recipe (by id) | calculate_recipe_macros_tool.macros and Recipe.macros_per_serving |
 
 ### Environment Keys Reference
 
 - Tools follow the `environment[tool_name][name]` convention.
-- Keep a brief quick reference in `docs/ai/design/environment_keys.md` (planned) and link it from implementation docs.
+- Quick reference is maintained in `docs/ai/design/environment_keys.md`. Keep this file updated alongside tool changes and link it from implementation docs.
 
 **Key Relationships:**
 - **UserProfile → MealPlan**: One user can create multiple meal plans (one-to-many)
@@ -501,8 +594,11 @@ GET    /api/v1/meal/recipes/{recipe_id}                  # Get recipe details
     {
       "recipe_id": "recipe_001",
       "title": "Vegetarian Pasta",
-      "macros_per_serving": {"kcal": 450, "protein_g": 15, ...},
-      ...
+      "macros_per_serving": {"kcal": 450, "protein_g": 15, "fat_g": 12, "carb_g": 70},
+      "ingredient_fdc_map": [
+        {"ingredient_vn": "mì ống", "ingredient_en": "pasta", "fdc_id": 174506, "quantity_g": 80, "confidence": 0.9},
+        {"ingredient_vn": "cà chua", "ingredient_en": "tomato", "fdc_id": 169091, "quantity_g": 100, "confidence": 0.93}
+      ]
     }
   ],
   "total": 42
@@ -533,7 +629,14 @@ DELETE /api/v1/meal/plans/{plan_id}         # Delete plan
   "user_id": "user_123",
   "plan_type": "day",
   "meals": {
-    "breakfast": {...},
+    "breakfast": {
+      "recipe_id": "recipe_001",
+      "title": "Vegetarian Pasta",
+      "macros_per_serving": {"kcal": 450, "protein_g": 15, "fat_g": 12, "carb_g": 70},
+      "ingredient_fdc_map": [
+        {"ingredient_vn": "mì ống", "ingredient_en": "pasta", "fdc_id": 174506, "quantity_g": 80, "confidence": 0.9}
+      ]
+    },
     "lunch": {...},
     "dinner": {...}
   },
@@ -783,6 +886,16 @@ async def profile_crud_tool(
 
 - **USDA FoodData Central**: Offline batch import of CSV files into FdcFood/FdcNutrient/FdcPortion collections
 - **OpenAI (optional)**: Embeddings for recipe vectorization, optional LLM for explanations/substitutions
+
+### References
+- Preprocessor: https://weaviate.github.io/elysia/Reference/Preprocessor/
+- Tree: https://weaviate.github.io/elysia/Reference/Tree/
+- Client: https://weaviate.github.io/elysia/Reference/Client/
+- Managers: https://weaviate.github.io/elysia/Reference/Managers/
+- Settings: https://weaviate.github.io/elysia/Reference/Settings/
+- Objects: https://weaviate.github.io/elysia/Reference/Objects/
+- Payload Types: https://weaviate.github.io/elysia/Reference/PayloadTypes/
+- Util: https://weaviate.github.io/elysia/Reference/Util/
 
 ## Design Decisions
 **Why did we choose this approach?**

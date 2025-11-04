@@ -98,6 +98,7 @@ description: Define testing approach, test cases, and quality assurance for Meal
 ### Component: Search Tools
 
 #### query (`tools/search/query.py`)
+- Note: The demo `Recipe` schema aligns with CSV fields and may not include logical filters like `diet_type` or `allergens` as first-class properties. Such constraints are typically enforced via post-processing or dataset enrichment. Tests below assume either you enrich the `Recipe` schema with these properties, or you implement equivalent constraint filtering in a post-processing tool.
 - [ ] **Test: Hybrid search with diet filter**
   - Setup: Mock Weaviate with 100 recipes (50 vegetarian, 50 not)
   - Input: query_text="pasta", filters={"diet_type": "vegetarian"}
@@ -111,9 +112,9 @@ description: Define testing approach, test cases, and quality assurance for Meal
   - Coverage: Allergen filtering
 
 - [ ] **Test: Time constraint filter**
-  - Setup: Recipes with time_min=[15, 30, 45, 60]
+  - Setup: Recipes with cooking_time=[15, 30, 45, 60]
   - Input: filters={"max_time_min": 30}
-  - Expected: Only recipes with time_min <= 30 returned
+  - Expected: Only recipes with cooking_time <= 30 returned
   - Coverage: Time filtering
 
 - [ ] **Test: Empty search results**
@@ -407,6 +408,13 @@ async def test_daily_plan_workflow():
   - Expected: Steps yielded progressively (not all at once)
   - Coverage: Streaming behavior
 
+### Workflow: Meal Logging with Confirmation
+
+- [ ] **Test: Log meal requires confirmation before save**
+  - Flow: parse → calculate nutrition → show preview → confirm=false → no `MealLogEntry` persisted
+  - Then confirm=true → `MealLogEntry` created and profile updated
+  - Coverage: UX confirmation gate per requirements
+
 ### Error Handling Integration
 
 - [ ] **Test: Weaviate connection failure during search**
@@ -484,7 +492,7 @@ VEGETARIAN_PASTA = {
     "macros_per_serving": {"kcal": 450, "protein_g": 15, "fat_g": 12, "carb_g": 70},
     "ingredients": [{"name": "pasta", "amount": 200, "unit": "g"}],
     "directions": ["Boil water", "Cook pasta", "Add vegetables"],
-    "time_min": 25
+    "cooking_time": 25
 }
 
 VEGAN_SMOOTHIE = {
@@ -495,7 +503,7 @@ VEGAN_SMOOTHIE = {
     "macros_per_serving": {"kcal": 200, "protein_g": 5, "fat_g": 3, "carb_g": 40},
     "ingredients": [{"name": "spinach", "amount": 100, "unit": "g"}],
     "directions": ["Blend ingredients"],
-    "time_min": 5
+    "cooking_time": 5
 }
 ```
 

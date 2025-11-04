@@ -25,6 +25,29 @@ RECIPE_SCHEMA = {
         Property(name="ingredients", data_type=DataType.TEXT_ARRAY),
         Property(name="cooking_method_array", data_type=DataType.TEXT_ARRAY),
         Property(name="image_link", data_type=DataType.TEXT),
+        # Computed field: macros per serving (object requires nested properties in Weaviate)
+        Property(
+            name="macros_per_serving",
+            data_type=DataType.OBJECT,
+            nested_properties=[
+                Property(name="kcal", data_type=DataType.NUMBER),
+                Property(name="protein_g", data_type=DataType.NUMBER),
+                Property(name="fat_g", data_type=DataType.NUMBER),
+                Property(name="carb_g", data_type=DataType.NUMBER),
+            ],
+        ),
+        # Cached VN→EN ingredient mapping to FDC for faster subsequent queries
+        Property(
+            name="ingredient_fdc_map",
+            data_type=DataType.OBJECT_ARRAY,
+            nested_properties=[
+                Property(name="ingredient_vn", data_type=DataType.TEXT),
+                Property(name="ingredient_en", data_type=DataType.TEXT),
+                Property(name="fdc_id", data_type=DataType.INT),
+                Property(name="quantity_g", data_type=DataType.NUMBER),
+                Property(name="confidence", data_type=DataType.NUMBER),
+            ],
+        ),
     ],
     "vector_config": Configure.Vectors.text2vec_transformers(
         source_properties=[

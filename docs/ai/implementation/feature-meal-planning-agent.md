@@ -57,9 +57,10 @@ description: Technical implementation notes, patterns, and code guidelines for M
 WEAVIATE_URL=http://localhost:8080
 WEAVIATE_API_KEY=  # Optional for local dev
 
-# OpenAI (for embeddings and optional LLM features)
+# OpenAI (optional – used for LLM features; embeddings default to Weaviate text2vec-transformers)
 OPENAI_API_KEY=your_key_here
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+# If you explicitly choose OpenAI embeddings, set a model, otherwise leave unset
+# OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
 # Elysia Settings
 ELYSIA_ENV=development
@@ -74,88 +75,102 @@ DEFAULT_TDEE_MULTIPLIER=1.2  # Sedentary activity level
 ## Code Structure
 **How is the code organized?**
 
-### Directory Structure
+### Directory Structure (complete)
 ```
 elysia/
-├── MealAgent/
-│   ├── __init__.py
-│   ├── managers.py                 # UserManager, TreeManager, ClientManager
-│   ├── config.py                   # MealAgent-specific settings
-│   ├── schemas/                    # Weaviate collection schemas
-│   │   ├── recipe.py
-│   │   ├── fdc_food.py
-│   │   ├── fdc_nutrient.py
-│   │   ├── fdc_portion.py
-│   │   └── user_profile.py
-│   ├── preprocessing/              # Preprocessor for collections
-│   │   ├── __init__.py
-│   │   └── preprocessor.py
-│   ├── tools/                      # All async generator tools
-│   │   ├── __init__.py
-│   │   ├── profile/
-│   │   │   ├── __init__.py
-│   │   │   ├── profile_crud.py     # ProfileCRUDTool
-│   │   │   └── macro_calc.py       # MacroCalcTool
-│   │   ├── constraints/
-│   │   │   ├── __init__.py
-│   │   │   ├── diet_allergen_guard.py
-│   │   │   └── time_device_guard.py
-│   │   ├── search/
-│   │   │   ├── __init__.py
-│   │   │   ├── query.py
-│   │   │   ├── query_postprocessing.py
-│   │   │   └── score_and_rank.py
-│   │   ├── plan_day/
-│   │   │   ├── __init__.py
-│   │   │   ├── target_resolver.py
-│   │   │   ├── plan_assemble.py
-│   │   │   ├── plan_validate.py
-│   │   │   └── build_shopping.py
-│   │   ├── plan_week/
-│   │   │   ├── __init__.py
-│   │   │   ├── plan_assemble_weekly.py
-│   │   │   └── variety_guard.py
-│   │   ├── pantry/
-│   │   │   ├── __init__.py
-│   │   │   └── pantry_crud.py
-│   │   ├── shopping/
-│   │   │   ├── __init__.py
-│   │   │   └── pantry_diff.py
-│   │   ├── gap_fill/
-│   │   │   ├── __init__.py
-│   │   │   ├── gap_calc.py
-│   │   │   ├── suggest_snack.py
-│   │   │   └── apply_snack.py
-│   │   ├── substitution/
-│   │   │   ├── __init__.py
-│   │   │   ├── suggest_substitutes.py
-│   │   │   └── apply_substitute.py
-│   │   ├── micros/
-│   │   │   ├── __init__.py
-│   │   │   ├── micronutrient_check.py
-│   │   │   └── suggest_micros_foods.py
-│   │   ├── cook_mode/
-│   │   │   ├── __init__.py
-│   │   │   └── cook_mode.py
-│   │   └── explain/
-│   │       ├── __init__.py
-│   │       └── explain.py
-│   ├── tree/
-│   │   ├── __init__.py
-│   │   ├── meal_tree.py            # Main decision tree
-│   │   └── config.py               # Tool registration
-│   ├── etl/                        # Data import scripts
-│   │   ├── __init__.py
-│   │   ├── ingest_fdc.py           # Ingest FDC_data.csv → FdcFood/FdcNutrient/FdcPortion
-│   │   └── ingest_recipes.py       # Ingest recipe.csv → Recipe properties (CSV fields)
-│   ├── utils/                      # Helper utilities
-│   │   ├── __init__.py
-│   │   ├── nutrition.py            # TDEE, macro calculations
-│   │   ├── unit_conversion.py      # Ingredient unit conversions
-│   │   └── portion_mapping.py      # Recipe portion → FdcPortion
-│   └── migrations/
-│       ├── __init__.py
-│       └── create_collections.py
+└── elysia/
+    ├── MealAgent/
+    │   ├── __init__.py
+    │   ├── config.py                       # MealAgent-specific settings (optional)
+    │   ├── preprocessing/
+    │   │   └── preprocessor.py             # Phase 1 warmup/verification
+    │   ├── schemas/                        # Weaviate collections
+    │   │   ├── recipe.py                   # + macros_per_serving, ingredient_fdc_map
+    │   │   ├── fdc_food.py
+    │   │   ├── fdc_nutrient.py
+    │   │   └── fdc_portion.py
+    │   ├── etl/
+    │   │   ├── ingest_fdc.py               # Load FdcFood/FdcNutrient/FdcPortion
+    │   │   └── ingest_recipes.py           # Load Recipe CSV-aligned fields
+    │   ├── tools/                          # Async generator tools
+    │   │   ├── profile/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── profile_crud.py         # Task 2.1.1
+    │   │   │   └── macro_calc.py           # Task 2.1.2
+    │   │   ├── constraints/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── diet_allergen_guard.py  # Task 2.2.1
+    │   │   │   └── time_device_guard.py    # Task 2.2.2
+    │   │   ├── search/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── query.py                # Task 2.3.1
+    │   │   │   ├── query_postprocessing.py # Task 2.3.2
+    │   │   │   └── score_and_rank.py       # Task 2.3.3
+    │   │   ├── nutrition/
+    │   │   │   ├── __init__.py
+    │   │   │   └── calculate_recipe_macros.py # Task 2.3.4 (VN→EN on-demand + cache)
+    │   │   ├── plan_day/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── target_resolver.py      # Task 2.4.1
+    │   │   │   ├── plan_assemble.py        # Task 2.4.2
+    │   │   │   ├── plan_validate.py        # Task 2.4.3
+    │   │   │   └── build_shopping.py       # Task 2.4.4
+    │   │   ├── plan_week/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── plan_assemble_weekly.py # Task 3.1.1
+    │   │   │   └── variety_guard.py        # Task 3.1.2
+    │   │   ├── pantry/
+    │   │   │   ├── __init__.py
+    │   │   │   └── pantry_crud.py          # Task 3.2.1
+    │   │   ├── shopping/
+    │   │   │   ├── __init__.py
+    │   │   │   └── pantry_diff.py          # Task 3.2.2
+    │   │   ├── gap_fill/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── gap_calc.py             # Task 3.3.1
+    │   │   │   ├── suggest_snack.py        # Task 3.3.2
+    │   │   │   └── apply_snack.py          # Task 3.3.3
+    │   │   ├── substitution/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── suggest_substitutes.py  # Task 3.4.1
+    │   │   │   └── apply_substitute.py     # Task 3.4.2
+    │   │   ├── micros/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── micronutrient_check.py  # Task 3.5.1
+    │   │   │   └── suggest_micros_foods.py # Task 3.5.2
+    │   │   ├── meal_logging/
+    │   │   │   ├── __init__.py
+    │   │   │   ├── meal_parser.py          # Task 2.6.1
+    │   │   │   ├── nutrition_calc.py       # Task 2.6.2
+    │   │   │   ├── profile_update.py       # Task 2.6.3
+    │   │   │   └── meal_history.py         # Task 2.6.4
+    │   │   ├── cook_mode/
+    │   │   │   ├── __init__.py
+    │   │   │   └── cook_mode.py            # Task 4.3.1
+    │   │   └── explain/
+    │   │       ├── __init__.py
+    │   │       └── explain.py              # Task 4.3.2
+    │   ├── tree/
+    │   │   ├── __init__.py
+    │   │   ├── meal_tree.py                # Task 2.5.1
+    │   │   └── config.py                   # Task 2.5.2 tool registration
+    │   └── migrations/
+    │       └── create_collections.py       # + --drop-only/--create-only
+    │
+    ├── api/
+    │   ├── routes/                         # REST/WS endpoints (Phase 2.6, later)
+    │   └── services/
+    │       ├── user.py                     # UserManager
+    │       └── tree.py                     # TreeManager
+    │
+    └── util/
+        └── client.py                       # ClientManager
+
+elysia-frontend/
+└── app/
+    ├── pages/                              # ProfilePage, RecipeExplorer, PlannerPage, etc.
+    ├── components/                         # PlanView, ShoppingListView, dialogs
+    └── api/                                # Frontend API layer
 ```
 
 ### Module Organization
@@ -170,7 +185,7 @@ elysia/
 
 - **Tool files**: `snake_case.py` (e.g., `profile_crud.py`)
 - **Tool functions**: `snake_case_tool` (e.g., `profile_crud_tool`) when using `@tool` decorator
-- **Environment keys**: `environment[tool_name][name]` where `tool_name` is function name and `name` is Result's name parameter (e.g., `environment["profile_crud_tool"]["profile"]`)
+- **Environment keys**: `environment[tool_name][name]` where `tool_name` is function name and `name` is Result's name parameter (e.g., `environment["profile_crud_tool"]["profile]")`. See `docs/ai/design/environment_keys.md` for the quick reference of actual keys by tool.
 - **Collections**: `PascalCase` (e.g., `Recipe`, `FdcFood`)
 - **Functions**: `snake_case` (e.g., `calculate_tdee`)
 
@@ -198,7 +213,40 @@ Mapping to Weaviate Recipe properties:
 - image_link → Recipe.image_link (text)
 
 Vectorization uses Weaviate `text2vec-transformers` (see `ingest_fdc.py` example). Sources should include: dish_name, ingredients_with_qty, ingredients, cooking_method_array.
+
+Cached fields on Recipe (per Design):
+- `macros_per_serving` (object with nested properties `kcal`, `protein_g`, `fat_g`, `carb_g`)
+- `ingredient_fdc_map` (object[] with nested properties `ingredient_vn`, `ingredient_en`, `fdc_id`, `quantity_g`, `confidence`)
 ```
+
+#### CalculateRecipeMacrosTool (VN→EN on-demand)
+```python
+# Purpose: Compute macros_per_serving when missing on Recipe objects
+# Strategy: Translate Vietnamese ingredient names to English, find FDC foods, compute and cache macros
+
+async def calculate_recipe_macros_tool(recipe_id: str, client_manager, llm_client) -> Dict[str, float]:
+    # 1) Fetch recipe; return cached if present
+    # 2) Translate ingredients_with_qty (VN→EN) using LLM JSON mode
+    # 3) Search FdcFood via hybrid query; pick best match > threshold
+    # 4) Sum kcal/protein/fat/carb using per-100g fields scaled by quantity; divide by serving_size
+    # 5) Update Recipe.macros_per_serving and return value
+    # 6) Persist ingredient_fdc_map entries for resolved ingredients to speed up next runs
+```
+
+Integration points:
+- In `score_and_rank_tool`: before scoring, if a recipe lacks `macros_per_serving`, call this tool and enrich the recipe object in-memory.
+- In `plan_assemble_day_tool`: ensure selected recipes have macros; call tool if missing.
+
+Performance:
+- Cache hit: read from Recipe in Weaviate
+- Cache miss: LLM + FDC search; optimize via batching and result caching per ingredient
+
+Ingredient mapping cache:
+- Field: `Recipe.ingredient_fdc_map` (object[]: ingredient_vn, ingredient_en, fdc_id, quantity_g, confidence)
+- On each resolution, upsert entry; reuse on later calculations to bypass LLM/search.
+
+API contract note:
+- Responses that include recipes may return objects without `macros_per_serving` on first read; backend will compute and persist on-demand via this tool when needed.
 
 **ProfileCRUDTool Implementation**:
 ```python
@@ -379,7 +427,7 @@ def calculate_harris_benedict_tdee(
 
 #### 2. Hybrid Search (query, ScoreAndRank)
 
-**query Tool Implementation** (`tools/search/query.py`):
+**query Tool Implementation** (`tools/search/query.py`) — aligned with minimal Recipe schema:
 ```python
 from typing import AsyncGenerator
 from elysia.tree.objects import TreeData, Result, Error
@@ -395,11 +443,10 @@ async def query_tool(
     **kwargs
 ) -> AsyncGenerator[Result | str | Error, None]:
     """
-    Hybrid search on Recipe collection with hard filters.
+    Hybrid search on Recipe collection with supported filters.
     
     Environment:
-        Reads: environment["diet_allergen_guard_tool"]["filters"], 
-               environment["time_device_guard_tool"]["filters"]
+        Reads: optional filters (e.g., dish_type), and time constraints if available
         Writes: environment["query_tool"]["results"]
     """
     yield f"Searching recipes: '{query_text}'..."
@@ -407,38 +454,26 @@ async def query_tool(
     client = client_manager.get_client()
     collection = client.collections.get("Recipe")
     
-    # Build filters from constraints
+    # Build filters from available properties in current Recipe schema
     where_conditions = []
     
-    # Read diet/allergen filters
-    diet_filters = tree_data.environment.find("diet_allergen_guard_tool", "filters")
-    if diet_filters and diet_filters[0].objects:
-        filter_data = diet_filters[0].objects[0]
-        if "diet_type" in filter_data:
-            where_conditions.append({
-                "path": ["diet_type"],
-                "operator": "Equal",
-                "valueString": filter_data["diet_type"]
-            })
-        if "allergens_exclude" in filter_data and filter_data["allergens_exclude"]:
-            # Exclude recipes containing any of the allergens
-            for allergen in filter_data["allergens_exclude"]:
-                where_conditions.append({
-                    "path": ["allergens"],
-                    "operator": "NotEqual",
-                    "valueString": allergen
-                })
+    # Example: filter by dish_type if provided via environment or kwargs
+    dish_type = kwargs.get("dish_type")
+    if dish_type:
+        where_conditions.append({
+            "path": ["dish_type"],
+            "operator": "Equal",
+            "valueString": dish_type
+        })
     
-    # Read time/device filters
-    time_filters = tree_data.environment.find("time_device_guard_tool", "filters")
-    if time_filters and time_filters[0].objects:
-        filter_data = time_filters[0].objects[0]
-        if "max_time_min" in filter_data:
-            where_conditions.append({
-                "path": ["time_min"],
-                "operator": "LessThanEqual",
-                "valueInt": filter_data["max_time_min"]
-            })
+    # Example: filter by cooking_time
+    max_cooking_time = kwargs.get("max_cooking_time")
+    if isinstance(max_cooking_time, int):
+        where_conditions.append({
+            "path": ["cooking_time"],
+            "operator": "LessThanEqual",
+            "valueInt": max_cooking_time
+        })
     
     # Build where clause (combine with AND)
     where_clause = None
@@ -452,10 +487,10 @@ async def query_tool(
     
     # Execute hybrid search
     try:
-    results = collection.query.hybrid(
+        results = collection.query.hybrid(
         query=query_text,
         alpha=0.5,  # 50% BM25, 50% vector
-            where=where_clause,
+        where=where_clause,
         limit=limit
     )
     
@@ -848,8 +883,8 @@ async def nutrition_calc_tool(
         for nutrient_obj in nutrient_results.objects:
             nutrient = nutrient_obj.properties
             nutrient_id = nutrient.get("nutrient_id")
-            nutrient_name = nutrient.get("nutrient_name", "").lower()
-            amount_per_100g = nutrient.get("amount_per_100g", 0)
+        nutrient_name = nutrient.get("nutrient_name", "").lower()
+        amount_per_100g = nutrient.get("amount_100g", 0)
             
             # Calculate actual amount (proportional to grams)
             actual_amount = (amount_per_100g * grams * portion_size) / 100.0
@@ -1100,7 +1135,20 @@ results = collection.query.fetch_objects(
 
 ### API Integration Details
 
-**FastAPI Endpoints** (wrap Elysia Tree calls):
+Note: The following endpoint snippets are illustrative examples to show integration patterns. Actual route files will be added in Phase 2.6.
+
+Cross-reference:
+- Environment key conventions: `docs/ai/design/environment_keys.md`
+- Test cases for endpoints and workflows: `docs/ai/testing/feature-meal-planning-agent.md`
+- Tree reference: https://weaviate.github.io/elysia/Reference/Tree/
+- Client reference: https://weaviate.github.io/elysia/Reference/Client/
+- Managers reference: https://weaviate.github.io/elysia/Reference/Managers/
+- Settings reference: https://weaviate.github.io/elysia/Reference/Settings/
+- Objects reference: https://weaviate.github.io/elysia/Reference/Objects/
+- Payload Types reference: https://weaviate.github.io/elysia/Reference/PayloadTypes/
+- Util reference: https://weaviate.github.io/elysia/Reference/Util/
+
+**FastAPI Endpoints (examples)** — wrap Elysia Tree calls:
 ```python
 # elysia/api/routes/meal_agent.py
 from fastapi import APIRouter, WebSocket, HTTPException
@@ -1384,6 +1432,69 @@ WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 logger.info(f"Using API key: {OPENAI_API_KEY[:8]}...")  # ❌ DON'T
 logger.info("OpenAI API key loaded")  # ✅ DO
 ```
+
+## Operations
+
+### Managing Collections (targeted)
+Use targeted flags to drop/create specific collections without touching others:
+```bash
+# Drop only Recipe
+python -m elysia.MealAgent.migrations.create_collections --drop-only Recipe
+
+# Create only Recipe
+python -m elysia.MealAgent.migrations.create_collections --create-only Recipe
+```
+
+### Weaviate schema gotcha (OBJECT types)
+- In Weaviate, `object` / `object[]` properties require `nestedProperties` to be defined.
+- Examples used:
+  - `Recipe.macros_per_serving` → nested: `kcal`, `protein_g`, `fat_g`, `carb_g`
+  - `Recipe.ingredient_fdc_map[]` → nested: `ingredient_vn`, `ingredient_en`, `fdc_id`, `quantity_g`, `confidence`
+
+### Preprocessor (Phase 1 warmup)
+Use Elysia's official Preprocessor API to generate collection summaries and mappings and save to `ELYSIA_METADATA__`.
+
+Commands:
+```bash
+# Activate venv and install backend (required for dspy/litellm, etc.)
+cd elysia
+python -m venv venv
+venv\Scripts\activate  # Windows; use source venv/bin/activate on Unix
+pip install -U pip
+pip install -e .
+
+# Run preprocessor over target collections (defaults: Recipe,FdcFood,FdcNutrient,FdcPortion)
+python -m elysia.MealAgent.preprocessing.preprocessor
+
+# Override target collections (comma-separated)
+$env:MEAL_AGENT_PREPROCESS_COLLECTIONS="Recipe,FdcFood"   # Windows PowerShell
+export MEAL_AGENT_PREPROCESS_COLLECTIONS="Recipe,FdcFood" # Unix
+
+# Optional knobs
+export PREPROCESS_MIN_SAMPLE=10
+export PREPROCESS_MAX_SAMPLE=50
+export PREPROCESS_NUM_TOKENS=30000
+export PREPROCESS_FORCE=true
+```
+
+Reference: [Preprocessor]
+
+## Tool Registration (tree/config.py)
+Tools are registered in the decision tree configuration so they can be invoked by name.
+Pattern (example):
+```python
+# elysia/elysia/MealAgent/tree/config.py (example)
+from elysia.MealAgent.tools.search.query import query_tool
+from elysia.MealAgent.tools.search.score_and_rank import score_and_rank_tool
+from elysia.MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+
+TOOLS = {
+    "query_tool": query_tool,
+    "score_and_rank_tool": score_and_rank_tool,
+    "calculate_recipe_macros_tool": calculate_recipe_macros_tool,
+}
+```
+Tree logic (e.g., `meal_tree.py`) will import `TOOLS` and orchestrate calls based on Environment state.
 
 ---
 

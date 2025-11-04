@@ -121,3 +121,20 @@ async def serve_frontend():
         return FileResponse(os.path.join(BASE_DIR, "static/index.html"))
     else:
         return None
+
+
+# Serve root-level icons expected by the frontend
+@app.get("/icon.svg")
+async def serve_icon_svg():
+    icon_path = os.path.join(BASE_DIR, "static", "icon.svg")
+    if os.path.exists(icon_path):
+        return FileResponse(icon_path)
+    return {"detail": "Not Found"}
+
+
+@app.get("/logo.svg")
+async def serve_logo_svg():
+    logo_path = os.path.join(BASE_DIR, "static", "logo.svg")
+    if os.path.exists(logo_path):
+        return FileResponse(logo_path)
+    return {"detail": "Not Found"}

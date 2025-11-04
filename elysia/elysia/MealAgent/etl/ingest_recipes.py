@@ -119,7 +119,7 @@ def ingest_recipes_csv(
     # 1) Đọc header để map cột
     with open_maybe_gzip(csv_path) as f:
         reader = csv.DictReader(f)
-        header = reader.fieldnames or []
+        header = reader.fieldnames or [] 
         id_col    = find_col(header, ID_SYNS)
         title_col = find_col(header, TITLE_SYNS)
         ingr_col  = find_col(header, INGR_SYNS)
