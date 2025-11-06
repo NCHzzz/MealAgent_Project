@@ -137,30 +137,34 @@ description: Break down work into actionable tasks and estimate timeline for Mea
 ### Phase 2: Core Planning Features (Week 4-6)
 
 #### 2.1 Profile Branch Tools
-- [ ] **Task 2.1.1**: Implement ProfileCRUDTool (create/update/read UserProfile)
+- [x] **Task 2.1.1**: Implement ProfileCRUDTool (create/update/read UserProfile)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/profile/profile_crud.py`
   - **Environment Keys**: Writes `environment["profile_crud_tool"]["profile"]`
+  - **Status**: ✅ COMPLETED - Tool implemented with upsert/read via Weaviate, required field validation, writes environment result `profile`.
 
-- [ ] **Task 2.1.2**: Implement MacroCalcTool (Harris-Benedict TDEE calculation)
+- [x] **Task 2.1.2**: Implement MacroCalcTool (Harris-Benedict TDEE calculation)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/profile/macro_calc.py`
   - **Environment Keys**: Reads `environment["profile_crud_tool"]["profile"]`, Writes `environment["macro_calc_tool"]["targets"]`
+  - **Status**: ✅ COMPLETED - Computes TDEE and 30/30/40 macro targets; utility added at `elysia/MealAgent/utils/nutrition.py`.
 
 #### 2.2 Constraint Branch Tools
-- [ ] **Task 2.2.1**: Implement DietAllergenGuard (generate hard filters for Weaviate)
+- [x] **Task 2.2.1**: Implement DietAllergenGuard (generate hard filters for Weaviate)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/constraints/diet_allergen_guard.py`
   - **Environment Keys**: Writes `environment["diet_allergen_guard_tool"]["filters"]`
+  - **Status**: ✅ COMPLETED - Generates Weaviate where-clause for diet types and allergen exclusions; outputs `{"where": ...}` object to environment.
 
-- [ ] **Task 2.2.2**: Implement TimeDeviceGuard (optional time/equipment constraints)
+- [x] **Task 2.2.2**: Implement TimeDeviceGuard (optional time/equipment constraints)
   - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/constraints/time_device_guard.py`
   - **Environment Keys**: Writes `environment["time_device_guard_tool"]["filters"]`
+  - **Status**: ✅ COMPLETED - Builds optional filters for `cooking_time` and `devices` (required/excluded) and emits `{"where": ...}`.
 
 #### 2.3 Search Branch Tools
 - [ ] **Task 2.3.1**: Implement query tool (hybrid search with filters)
