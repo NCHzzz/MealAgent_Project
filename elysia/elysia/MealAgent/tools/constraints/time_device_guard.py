@@ -17,9 +17,23 @@ async def time_device_guard_tool(
     """
     Generate optional time/equipment filters for Weaviate Recipe queries.
 
+    Environment reads:
+      - environment["profile_crud_tool"]["profile"] (optional - reads max_cooking_time_min, available_equipment)
     Writes: environment["time_device_guard_tool"]["filters"]
     """
     yield "Generating time/device filters..."
+
+    # Try to read from profile first, then fallback to parameters
+    profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+    if profile_results and profile_results[0].objects:
+        profile = profile_results[0].objects[0]
+        if not max_cooking_time and profile.get("max_cooking_time_min"):
+            max_cooking_time = profile.get("max_cooking_time_min")
+        if not required_device and profile.get("available_equipment"):
+            # Use first available equipment as required (or could use all)
+            available = profile.get("available_equipment", [])
+            if available and isinstance(available, list) and len(available) > 0:
+                required_device = available[0]  # Or could require all via ContainsAll
 
     max_cooking_time = max_cooking_time if isinstance(max_cooking_time, int) else kwargs.get("max_cooking_time")
     required_device = (required_device or kwargs.get("required_device") or "").strip() or None
@@ -34,7 +48,8 @@ async def time_device_guard_tool(
             "valueInt": int(max_cooking_time),
         })
 
-    # Assume Recipe has `devices` (text[]). If not present, filters will be benign.
+    # Recipe schema should have `devices` (text[]) field.
+    # Note: If Recipe schema doesn't have this field, filter will be skipped by Weaviate.
     if required_device:
         operands.append({
             "path": ["devices"],

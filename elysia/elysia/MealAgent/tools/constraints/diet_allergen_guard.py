@@ -22,17 +22,29 @@ async def diet_allergen_guard_tool(
     """
     Generate Weaviate 'where' filters for diet types and allergens.
 
+    Environment reads:
+      - environment["profile_crud_tool"]["profile"] (optional - reads diet_type, allergens)
     Writes: environment["diet_allergen_guard_tool"]["filters"]
     """
     yield "Generating diet/allergen filters..."
 
-    # Accept from kwargs or environment in future; for now prioritize parameters
+    # Try to read from profile first, then fallback to parameters
+    profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+    if profile_results and profile_results[0].objects:
+        profile = profile_results[0].objects[0]
+        if not diet_types and profile.get("diet_type"):
+            diet_types = [profile.get("diet_type")] if isinstance(profile.get("diet_type"), str) else profile.get("diet_type", [])
+        if not exclude_allergens and profile.get("allergens"):
+            exclude_allergens = profile.get("allergens", [])
+
+    # Accept from kwargs or parameters as fallback
     diet_types = diet_types or kwargs.get("diet_types") or []
     exclude_allergens = exclude_allergens or kwargs.get("exclude_allergens") or []
 
     operands: List[Dict] = []
 
-    # Diet types: assume Recipe has `diet_type` (text or text[]). Use ContainsAny for arrays or Equal for single.
+    # Diet types: Recipe schema should have `diet_type` (text or text[]).
+    # Note: If Recipe schema doesn't have this field, filter will be skipped by Weaviate.
     if diet_types:
         # Use ContainsAny to match any requested diets
         operands.append(
@@ -41,7 +53,8 @@ async def diet_allergen_guard_tool(
             ], "ContainsAny", "valueTextArray", diet_types)
         )
 
-    # Allergens: assume Recipe has `allergens` (text[]). Exclude any that are in user's allergens.
+    # Allergens: Recipe schema should have `allergens` (text[]).
+    # Note: If Recipe schema doesn't have this field, filter will be skipped by Weaviate.
     if exclude_allergens:
         # Use Not over ContainsAny to exclude recipes containing any of these allergens
         allergens_filter = _build_filter_operand(["allergens"], "ContainsAny", "valueTextArray", exclude_allergens)
