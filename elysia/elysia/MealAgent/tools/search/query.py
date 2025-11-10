@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, Dict, Any
 
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -61,7 +62,7 @@ async def query_tool(
             results = collection.query.hybrid(
                 query=query_text,
                 alpha=alpha,
-                where=where_clause,
+                filters=where_clause,
                 limit=limit,
             )
 
@@ -75,6 +76,6 @@ async def query_tool(
             yield f"Found {len(recipes)} matching recipes"
 
     except Exception as e:
-        yield Error(f"Search failed: {str(e)}")
+        yield Error(f"Search failed for query '{query_text}': {str(e)}")
         return
 

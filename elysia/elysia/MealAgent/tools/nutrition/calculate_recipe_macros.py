@@ -1,7 +1,8 @@
 from typing import AsyncGenerator, Dict, Any, List, Optional
 import json
 
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
 

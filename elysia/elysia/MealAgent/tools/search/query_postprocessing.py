@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, List, Dict, Any
 
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -63,7 +64,7 @@ async def query_postprocessing_tool(
 
     results = tree_data.environment.find("query_tool", "results")
     if not results or not results[0].objects:
-        yield Error("No search results found. Run query_tool first.")
+        yield Error("No search results found in environment. Run query_tool first.")
         return
 
     recipes = results[0].objects

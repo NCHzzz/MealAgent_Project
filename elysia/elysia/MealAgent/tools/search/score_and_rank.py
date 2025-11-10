@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, List, Dict, Any
 
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -98,13 +99,17 @@ async def score_and_rank_tool(
     # Score each recipe
     scored_recipes = []
     seen_ingredients: set[str] = set()
+    missing_macros_count = 0
 
     for recipe in recipes:
         macros = recipe.get("macros_per_serving", {})
-        if isinstance(macros, dict):
-            macro_score = _calculate_macro_fit_score(macros, target_per_meal)
-        else:
+        if not macros or not isinstance(macros, dict) or not macros.get("kcal"):
+            # Recipe missing macros - will score 0 for macro fit
+            # Note: CalculateRecipeMacrosTool should be called to populate macros_per_serving
+            missing_macros_count += 1
             macro_score = 0.0
+        else:
+            macro_score = _calculate_macro_fit_score(macros, target_per_meal)
 
         # Semantic score (from hybrid search, if available in metadata)
         semantic_score = 50.0  # Default
@@ -146,6 +151,7 @@ async def score_and_rank_tool(
         metadata={
             "top_k": top_k,
             "total_scored": len(scored_recipes),
+            "missing_macros_count": missing_macros_count,
             "weights": {
                 "macro": macro_weight,
                 "semantic": semantic_weight,
@@ -153,5 +159,8 @@ async def score_and_rank_tool(
             },
         },
     )
-    yield f"Top {len(top_recipes)} recipes ranked by fit"
+    warning_msg = ""
+    if missing_macros_count > 0:
+        warning_msg = f" Warning: {missing_macros_count} recipes missing macros_per_serving (consider running calculate_recipe_macros_tool)."
+    yield f"Top {len(top_recipes)} recipes ranked by fit.{warning_msg}"
 

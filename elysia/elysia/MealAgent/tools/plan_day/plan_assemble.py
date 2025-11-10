@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, List, Dict, Any
 
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -84,6 +85,11 @@ async def plan_assemble_day_tool(
     if len(recipes) < 3:
         yield Error("Insufficient recipes for 3-meal plan. Need at least 3 recipes.")
         return
+    
+    # Check for missing macros
+    missing_macros = [r for r in recipes if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict) or not r.get("macros_per_serving", {}).get("kcal")]
+    if missing_macros:
+        yield f"Warning: {len(missing_macros)} recipes missing macros_per_serving. Consider running calculate_recipe_macros_tool for accurate planning."
 
     # Select meals by strategy
     breakfast = _select_meal_by_strategy(recipes, "highest_carb")

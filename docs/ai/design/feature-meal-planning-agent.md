@@ -59,6 +59,26 @@ graph TD
 - **Preprocessor**: Runs during setup (batch process) via Elysia's official `preprocess` API to generate collection summaries, field statistics, return type mappings, and save to `ELYSIA_METADATA__` (one-time per collection) [Preprocessor]
 - **Weaviate**: Vector database storing recipes, nutritional data, user profiles, plans, pantry, and shopping lists
 
+### Tree Integration (Elysia)
+
+- A dedicated MealAgent Tree is created and populated with branches matching feature areas.
+- Tools are registered into branches so Elysia can orchestrate execution per Environment state.
+- Factory function:
+  - `build_meal_agent_tree(settings: Settings | None = None, user_id: str | None = None) -> Tree`
+  - Location: `elysia/elysia/MealAgent/tree/meal_tree.py`
+- Alternative registration (when Tree already exists via Managers):
+  - `get_meal_agent_tools()` and `try_register_meal_agent_tools(tree_or_manager)`
+  - Location: `elysia/elysia/MealAgent/tree/config.py`
+
+Branch layout:
+- `profile`, `constraints`, `search`, `nutrition`, `plan_day`, `plan_week`, `pantry`, `shopping`,
+  `gap_fill`, `substitution`, `micros`, `logging`, `cooking`, `explain`
+
+Registration rules (align with Elysia docs):
+- Tool functions decorated with `@tool` are added to branches via `tree.add_tool(fn, branch_id=...)`.
+- Environment key convention: `environment[tool_function_name][result_name]`.
+- Workflows in `meal_tree.py` call tools in sequence and stream `Text`/`Result`/`Error`.
+
 ### Technology Stack
 
 | Layer | Technology | Rationale |
@@ -108,7 +128,15 @@ graph TD
             {"name": "quantity_g", "dataType": ["number"]},
             {"name": "confidence", "dataType": ["number"]}
          ]
-        }
+        },
+        # Constraint filtering fields (required for diet_allergen_guard_tool and time_device_guard_tool)
+        # TODO: Add these fields to Recipe schema during migration/ETL
+        {"name": "diet_type", "dataType": ["text[]"], "indexFilterable": True,
+         "description": "Diet types this recipe supports (e.g., 'vegetarian', 'vegan', 'keto', 'paleo')"},
+        {"name": "allergens", "dataType": ["text[]"], "indexFilterable": True,
+         "description": "Allergens present in this recipe (e.g., 'peanuts', 'dairy', 'gluten')"},
+        {"name": "devices", "dataType": ["text[]"], "indexFilterable": True,
+         "description": "Required cooking equipment (e.g., 'oven', 'stovetop', 'microwave', 'blender')"}
     ],
     "vectorizer": "text2vec-transformers"
 }
@@ -448,15 +476,17 @@ Cross-reference:
         {"name": "logged_at", "dataType": ["date"]},
         {"name": "meal_description", "dataType": ["text"]},  # Original user input (e.g., "I ate chicken salad")
         {"name": "parsed_dish", "dataType": ["text"]},  # LLM-parsed dish name
-        {"name": "ingredients", "dataType": ["object[]"]},  # Parsed ingredients with FDC links
+        {"name": "ingredients", "dataType": ["text"]},  # JSON string: [{"name": str, "amount": float, "unit": str, "fdc_id": int?}]
         {"name": "portion_size", "dataType": ["number"]},  # Portion multiplier
-        {"name": "calculated_macros", "dataType": ["object"]},  # {kcal, protein_g, fat_g, carb_g}
-        {"name": "calculated_micros", "dataType": ["object"]},  # Micronutrients if available
+        {"name": "calculated_macros", "dataType": ["text"]},  # JSON string: {"kcal": float, "protein_g": float, "fat_g": float, "carb_g": float}
+        {"name": "calculated_micros", "dataType": ["text"]},  # JSON string: micronutrients if available
         {"name": "validation_status", "dataType": ["text"]},  # "complete", "partial", "failed"
         {"name": "parsing_method", "dataType": ["text"]},  # "llm", "manual_fallback"
     ]
 }
 ```
+
+Note: `ingredients`, `calculated_macros`, and `calculated_micros` are stored as TEXT (JSON strings) in Weaviate. Tools must serialize/deserialize these fields when reading/writing.
 
 ### Data Flow
 

@@ -181,6 +181,27 @@ elysia-frontend/
 - **`etl/`**: Data import pipelines (run once during setup)
 - **`utils/`**: Shared helper functions (stateless, pure functions preferred)
 
+### Cooking & Explanation (Phase 4.3)
+
+- `cook_mode_tool` (`elysia/MealAgent/tools/cook_mode/cook_mode.py`)
+  - Inputs: optional `food_id`; otherwise reads from `plan_assemble_day_tool.plan` / `plan_assemble_weekly_tool.plan` / `score_and_rank_tool.topk`
+  - Outputs (Environment): `environment["cook_mode_tool"]["steps"]` with fields `index`, `instruction`, `estimated_seconds`
+  - Streaming: yields text per step
+  - Notes: deterministic from `cooking_method_array`; fallback to `ingredients`
+
+- `explain_tool` (`elysia/MealAgent/tools/explain/explain.py`)
+  - Inputs: reads context from Environment (profile, targets, constraints, ranking, plan, deficits, snacks, substitutes, variety)
+  - Outputs (Environment): `environment["explain_tool"]["explanation"]` (and streams final text)
+  - Optional: `base_lm` to polish explanation
+
+API Endpoints:
+- `POST /api/v1/meal/cook` (non-stream): returns steps from `cook_mode_tool`
+- `WS /ws/meal/cook/{user_id}`: streams steps and intermediate messages
+- `POST /api/v1/meal/explain` (non-stream): returns explanation text
+
+Routers:
+- `elysia/api/routes/cooking.py`, included in `elysia/api/app.py`
+
 ### Naming Conventions
 
 - **Tool files**: `snake_case.py` (e.g., `profile_crud.py`)

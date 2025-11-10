@@ -372,6 +372,20 @@ async def test_daily_plan_workflow():
             assert report.get("valid") == True
 ```
 
+### Tree-Based Execution (Elysia)
+For tests that execute via the Elysia Tree (instead of calling tools directly), instantiate a MealAgent Tree and register tools as per docs:
+
+```python
+from elysia.MealAgent.tree.meal_tree import build_meal_agent_tree
+from elysia.config import Settings
+
+def test_tree_based_daily_plan():
+    # Build a dedicated MealAgent Tree with branches & tools registered
+    tree = build_meal_agent_tree(settings=Settings(), user_id="test_user")
+    # Run process_tree or specific workflows depending on your test harness
+    # e.g., via UserManager/TreeManager in API layer
+```
+
 - [ ] **Test: Profile → Plan workflow (vegetarian user)**
   - Coverage: Full happy path with diet constraint
 

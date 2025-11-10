@@ -1,6 +1,7 @@
 from typing import AsyncGenerator, Optional
 
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -16,11 +17,36 @@ REQUIRED_FIELDS = [
 
 
 def _validate_profile_payload(profile_data: Optional[dict]) -> Optional[str]:
+    """Validate profile data with type and range checks."""
     if not isinstance(profile_data, dict):
         return "profile_data must be an object"
+    
     missing = [f for f in REQUIRED_FIELDS if f not in profile_data]
     if missing:
         return f"Missing required fields: {missing}"
+    
+    # Type and range validation
+    age = profile_data.get("age")
+    if not isinstance(age, int) or age <= 0 or age > 120:
+        return f"age must be an integer between 1 and 120, got: {age}"
+    
+    gender = profile_data.get("gender", "").lower()
+    if gender not in ["male", "female", "other"]:
+        return f"gender must be 'male', 'female', or 'other', got: {profile_data.get('gender')}"
+    
+    weight_kg = profile_data.get("weight_kg")
+    if not isinstance(weight_kg, (int, float)) or weight_kg <= 0 or weight_kg > 500:
+        return f"weight_kg must be a positive number <= 500, got: {weight_kg}"
+    
+    height_cm = profile_data.get("height_cm")
+    if not isinstance(height_cm, (int, float)) or height_cm <= 0 or height_cm > 300:
+        return f"height_cm must be a positive number <= 300, got: {height_cm}"
+    
+    activity_level = profile_data.get("activity_level", "").lower()
+    valid_activities = ["sedentary", "light", "moderate", "very_active", "extra_active"]
+    if activity_level not in valid_activities:
+        return f"activity_level must be one of {valid_activities}, got: {profile_data.get('activity_level')}"
+    
     return None
 
 
@@ -114,7 +140,8 @@ async def profile_crud_tool(
                 yield f"Profile read successfully for user {user_id}"
 
     except Exception as e:
-        yield Error(f"Profile operation failed: {str(e)}")
+        action_str = f" ({action})" if action else ""
+        yield Error(f"Profile operation{action_str} failed: {str(e)}")
         return
 
 
