@@ -4,7 +4,7 @@ Suggest snacks to fill macro deficits.
 from typing import AsyncGenerator, Dict, Any, List
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -45,7 +45,7 @@ async def suggest_snack_tool(
     Environment writes:
       - environment["suggest_snack_tool"]["suggestions"]
     """
-    yield "Suggesting snacks to fill deficits..."
+    yield Response("Suggesting snacks to fill deficits...")
 
     # Read deficits
     deficit_results = tree_data.environment.find("gap_calc_tool", "deficits")
@@ -61,60 +61,61 @@ async def suggest_snack_tool(
         return
 
     try:
-        with client_manager.connect_to_client() as client:
-            recipe_collection = client.collections.get("Recipe")
+        client = client_manager.get_client()
+        recipe_collection = client.collections.get("Recipe")
 
-            # Search for recipes that could fill deficits
-            # Filter by dish_type="snack" if available, otherwise get all recipes
-            try:
-                # Try to filter by snack dish_type
-                results = recipe_collection.query.fetch_objects(
-                    where={"path": ["dish_type"], "operator": "Equal", "valueString": "snack"},
-                    limit=100,
-                )
-                if not results.objects:
-                    # Fallback: get all recipes if no snacks found
-                    results = recipe_collection.query.fetch_objects(limit=100)
-            except Exception:
-                # If dish_type filtering fails, get all recipes
-                results = recipe_collection.query.fetch_objects(limit=100)
-
-            # Score recipes by how well they fit deficits
-            scored_recipes = []
-            for obj in results.objects:
-                recipe = obj.properties
-                macros = recipe.get("macros_per_serving", {})
-                if isinstance(macros, dict) and macros.get("kcal"):
-                    fit_score = _calculate_macro_fit(macros, deficit_macros)
-                    if fit_score > 0:
-                        scored_recipes.append({
-                            **recipe,
-                            "fit_score": fit_score,
-                        })
-
-            # Sort by fit score and take top_k
-            scored_recipes.sort(key=lambda x: x.get("fit_score", 0.0), reverse=True)
-            suggestions = scored_recipes[:top_k]
-
-            suggestions_output = {
-                "deficit_macros": deficit_macros,
-                "suggestions": suggestions,
-                "count": len(suggestions),
-            }
-
-            yield Result(
-                name="suggestions",
-                objects=[suggestions_output],
-                metadata={
-                    "suggestion_count": len(suggestions),
-                    "deficit_count": len(deficit_macros),
-                },
+        # Search for recipes that could fill deficits
+        # Filter by dish_type="snack" if available, otherwise get all recipes
+        try:
+            # Try to filter by snack dish_type
+            results = recipe_collection.query.fetch_objects(
+                where={"path": ["dish_type"], "operator": "Equal", "valueString": "snack"},
+                limit=100,
             )
+            if not results.objects:
+                # Fallback: get all recipes if no snacks found
+                results = recipe_collection.query.fetch_objects(limit=100)
+        except Exception:
+            # If dish_type filtering fails, get all recipes
+            results = recipe_collection.query.fetch_objects(limit=100)
 
-            if suggestions:
-                yield f"Found {len(suggestions)} snack suggestions to fill deficits"
-            else:
-                yield "No suitable snacks found to fill deficits"
+        # Score recipes by how well they fit deficits
+        scored_recipes = []
+        for obj in results.objects:
+            recipe = obj.properties
+            macros = recipe.get("macros_per_serving", {})
+            if isinstance(macros, dict) and macros.get("kcal"):
+                fit_score = _calculate_macro_fit(macros, deficit_macros)
+                if fit_score > 0:
+                    scored_recipes.append({
+                        **recipe,
+                        "fit_score": fit_score,
+                    })
+
+        # Sort by fit score and take top_k
+        scored_recipes.sort(key=lambda x: x.get("fit_score", 0.0), reverse=True)
+        suggestions = scored_recipes[:top_k]
+
+        suggestions_output = {
+            "deficit_macros": deficit_macros,
+            "suggestions": suggestions,
+            "count": len(suggestions),
+        }
+
+        yield Result(
+            name="suggestions",
+            objects=[suggestions_output],
+            metadata={
+                "suggestion_count": len(suggestions),
+                "deficit_count": len(deficit_macros),
+            },
+            payload_type="generic",
+        )
+
+        if suggestions:
+            yield Response(f"Found {len(suggestions)} snack suggestions to fill deficits")
+        else:
+            yield Response("No suitable snacks found to fill deficits")
 
     except Exception as e:
         yield Error(f"Snack suggestion failed: {str(e)}")

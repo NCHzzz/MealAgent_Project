@@ -4,7 +4,7 @@ Subtract pantry items from shopping list to get final shopping list.
 from typing import AsyncGenerator, Dict, Any, List
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -77,7 +77,7 @@ async def pantry_diff_tool(
     Environment writes:
       - environment["pantry_diff_tool"]["diff"]
     """
-    yield "Calculating shopping list after pantry deduction..."
+    yield Response("Calculating shopping list after pantry deduction...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -101,89 +101,100 @@ async def pantry_diff_tool(
     pantry_items = pantry_state.get("items", [])
 
     try:
-        with client_manager.connect_to_client() as client:
-            # Build pantry lookup (by normalized ingredient name)
-            pantry_lookup: Dict[str, Dict[str, Any]] = {}
-            for item in pantry_items:
-                name = _normalize_ingredient_name(item.get("ingredient_name", ""))
-                if name:
-                    pantry_lookup[name] = item
+        client = client_manager.get_client()
+        # Build pantry lookup (by normalized ingredient name)
+        pantry_lookup: Dict[str, Dict[str, Any]] = {}
+        for item in pantry_items:
+            name = _normalize_ingredient_name(item.get("ingredient_name", ""))
+            if name:
+                pantry_lookup[name] = item
 
-            # Process shopping items
-            final_items = []
-            warnings = []
+        # Process shopping items
+        final_items = []
+        warnings = []
 
-            for shop_item in shopping_items:
-                ingredient_name = shop_item.get("ingredient_name", "")
-                shop_quantity = float(shop_item.get("quantity", 0.0))
-                shop_unit = shop_item.get("unit", "g")
-                shop_fdc_id = shop_item.get("fdc_id")
+        for shop_item in shopping_items:
+            ingredient_name = shop_item.get("ingredient_name", "")
+            shop_quantity = float(shop_item.get("quantity", 0.0))
+            shop_unit = shop_item.get("unit", "g")
+            shop_fdc_id = shop_item.get("fdc_id")
 
-                # Convert shopping item to grams
-                shop_grams = _convert_to_grams(shop_quantity, shop_unit, shop_fdc_id, client)
+            # Convert shopping item to grams
+            shop_grams = _convert_to_grams(shop_quantity, shop_unit, shop_fdc_id, client)
 
-                # Check if in pantry
-                normalized_name = _normalize_ingredient_name(ingredient_name)
-                pantry_item = pantry_lookup.get(normalized_name)
+            # Check if in pantry
+            normalized_name = _normalize_ingredient_name(ingredient_name)
+            pantry_item = pantry_lookup.get(normalized_name)
 
-                if pantry_item:
-                    # Item exists in pantry
-                    pantry_quantity = float(pantry_item.get("quantity", 0.0))
-                    pantry_unit = pantry_item.get("unit", "g")
-                    pantry_fdc_id = pantry_item.get("fdc_id")
+            if pantry_item:
+                # Item exists in pantry
+                pantry_quantity = float(pantry_item.get("quantity", 0.0))
+                pantry_unit = pantry_item.get("unit", "g")
+                pantry_fdc_id = pantry_item.get("fdc_id")
 
-                    # Convert pantry item to grams
-                    pantry_grams = _convert_to_grams(pantry_quantity, pantry_unit, pantry_fdc_id, client)
+                # Convert pantry item to grams
+                pantry_grams = _convert_to_grams(pantry_quantity, pantry_unit, pantry_fdc_id, client)
 
-                    # Calculate difference
-                    needed_grams = shop_grams - pantry_grams
+                # Calculate difference
+                needed_grams = shop_grams - pantry_grams
 
-                    if needed_grams > 0:
-                        # Still need to buy
-                        # Note: Quantity is in grams after conversion. 
-                        # For non-gram units, we keep the original unit but quantity represents grams.
-                        # In production, consider converting back to original unit using FdcPortion.
-                        final_item = {
-                            "ingredient_name": ingredient_name,
-                            "quantity": needed_grams,  # Always in grams after conversion
-                            "unit": "g",  # Standardized to grams for consistency
-                            "fdc_id": shop_fdc_id,
-                            "original_quantity": shop_quantity,
-                            "original_unit": shop_unit,
-                            "pantry_deducted": pantry_grams,
-                        }
-                        final_items.append(final_item)
-                    elif needed_grams < -0.1:  # Small tolerance
-                        # Have more than needed
-                        warnings.append(f"{ingredient_name}: pantry has {pantry_grams:.1f}g, only need {shop_grams:.1f}g")
-                    # If needed_grams is ~0, skip (have exactly what's needed)
-                else:
-                    # Not in pantry, need to buy all
-                    final_items.append(shop_item)
+                if needed_grams > 0:
+                    # Still need to buy
+                    # Note: Quantity is in grams after conversion. 
+                    # For non-gram units, we keep the original unit but quantity represents grams.
+                    # In production, consider converting back to original unit using FdcPortion.
+                    final_item = {
+                        "ingredient_name": ingredient_name,
+                        "quantity": needed_grams,  # Always in grams after conversion
+                        "unit": "g",  # Standardized to grams for consistency
+                        "fdc_id": shop_fdc_id,
+                        "original_quantity": shop_quantity,
+                        "original_unit": shop_unit,
+                        "pantry_deducted": pantry_grams,
+                    }
+                    final_items.append(final_item)
+                elif needed_grams < -0.1:  # Small tolerance
+                    # Have more than needed
+                    warnings.append(f"{ingredient_name}: pantry has {pantry_grams:.1f}g, only need {shop_grams:.1f}g")
+                # If needed_grams is ~0, skip (have exactly what's needed)
+            else:
+                # Not in pantry, need to buy all
+                final_items.append(shop_item)
 
-            diff_output = {
+        diff_output = {
+            "user_id": user_id,
+            "original_items": shopping_items,
+            "final_items": final_items,
+            "items_removed": len(shopping_items) - len(final_items),
+            "warnings": warnings,
+        }
+
+        yield Result(
+            name="diff",
+            objects=[diff_output],
+            metadata={
                 "user_id": user_id,
-                "original_items": shopping_items,
-                "final_items": final_items,
-                "items_removed": len(shopping_items) - len(final_items),
-                "warnings": warnings,
-            }
+                "original_count": len(shopping_items),
+                "final_count": len(final_items),
+                "removed_count": len(shopping_items) - len(final_items),
+            },
+            payload_type="generic",
+        )
+        # Table view of final items (rows) for display
+        yield Result(
+            name="final_items",
+            objects=final_items,
+            metadata={
+                "user_id": user_id,
+                "final_count": len(final_items),
+            },
+            payload_type="table",
+        )
 
-            yield Result(
-                name="diff",
-                objects=[diff_output],
-                metadata={
-                    "user_id": user_id,
-                    "original_count": len(shopping_items),
-                    "final_count": len(final_items),
-                    "removed_count": len(shopping_items) - len(final_items),
-                },
-            )
-
-            warning_msg = ""
-            if warnings:
-                warning_msg = f" Warnings: {len(warnings)} items have excess pantry stock."
-            yield f"Shopping list updated: {len(final_items)} items needed (removed {len(shopping_items) - len(final_items)} from pantry)"
+        warning_msg = ""
+        if warnings:
+            warning_msg = f" Warnings: {len(warnings)} items have excess pantry stock."
+        yield Response(f"Shopping list updated: {len(final_items)} items needed (removed {len(shopping_items) - len(final_items)} from pantry)")
 
     except Exception as e:
         yield Error(f"Pantry diff calculation failed for user {user_id}: {str(e)}")

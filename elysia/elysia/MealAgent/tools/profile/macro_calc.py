@@ -1,7 +1,8 @@
 from typing import AsyncGenerator
+import logging
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -20,21 +21,36 @@ async def macro_calc_tool(
     """
     Calculate TDEE and macro targets (default 30/30/40 split).
 
-    Environment reads:
-      - environment["profile_crud_tool"]["profile"]
-    Environment writes:
-      - environment["macro_calc_tool"]["targets"]
+    Environment interface:
+    - Reads:
+      - profile_crud_tool.profile (required; if absent, tool will skip)
+    - Writes:
+      - macro_calc_tool.targets: [{ tdee_kcal, protein_g, fat_g, carb_g, split }]
+
+    Decision hints:
+    - If macro_calc_tool.targets exists, planning/ranking tools can use them.
+    - If profile missing, this tool emits a skip Response to prevent noisy errors.
     """
-    yield "Calculating nutritional targets..."
-
-    results = tree_data.environment.find("profile_crud_tool", "profile")
-    if not results or not results[0].objects:
-        yield Error("Profile not found in environment. Run profile_crud_tool first.")
-        return
-
-    profile = results[0].objects[0]
+    logging.info(f"macro_calc_tool: start (protein_share={protein_share}, fat_share={fat_share}, carb_share={carb_share})")
+    yield Response("Calculating nutritional targets...")
 
     try:
+        # If main goal (e.g., cooking) already completed for this prompt, skip entirely
+        try:
+            completed = tree_data.environment.find("cook_mode_tool", "completed")
+            if completed and completed[0]["objects"]:
+                yield Response("Skipping macro calculation: current user goal already completed")
+                return
+        except Exception:
+            pass
+
+        results = tree_data.environment.find("profile_crud_tool", "profile")
+        if not results or not results[0]["objects"]:
+            logging.info("macro_calc_tool: no profile in environment; skipping macro calc")
+            yield Response("Skipping macro calculation: no profile available")
+            return
+
+        profile = results[0]["objects"][0]
         tdee = calculate_harris_benedict_tdee(
             age=profile["age"],
             gender=profile["gender"],
@@ -61,12 +77,22 @@ async def macro_calc_tool(
             "split": {"protein": p_share, "fat": f_share, "carb": c_share},
         }
 
-        yield Result(name="targets", objects=[targets], metadata={"calculated_from": profile.get("user_id")})
-        yield (
-            f"Target: {tdee:.0f} kcal | {protein_g:.0f}g P | {fat_g:.0f}g F | {carb_g:.0f}g C"
+        logging.info(
+            f"macro_calc_tool: complete (tdee={tdee:.0f} kcal, protein={protein_g:.0f}g, "
+            f"fat={fat_g:.0f}g, carb={carb_g:.0f}g)"
         )
+        
+        yield Result(name="targets", objects=[targets], metadata={"calculated_from": profile.get("user_id")}, payload_type="generic")
+        yield Response(f"Target: {tdee:.0f} kcal | {protein_g:.0f}g P | {fat_g:.0f}g F | {carb_g:.0f}g C")
+    except ValueError as e:
+        error_msg = f"Invalid input: {str(e)}"
+        logging.error(f"macro_calc_tool: {error_msg}", exc_info=True)
+        yield Error(error_msg)
+        return
     except Exception as e:
-        yield Error(f"Macro calculation failed: {str(e)}")
+        error_msg = f"Macro calculation failed: {str(e)}"
+        logging.error(f"macro_calc_tool: {error_msg}", exc_info=True)
+        yield Error(error_msg)
         return
 
 

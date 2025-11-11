@@ -5,6 +5,8 @@ from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error
 from elysia.util.client import ClientManager
 from elysia import tool
+import dspy
+from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
 
 
 async def _translate_ingredients_vn_to_en(
@@ -15,37 +17,43 @@ async def _translate_ingredients_vn_to_en(
     if not ingredients_vn:
         return []
 
-    prompt = f"""Translate these Vietnamese ingredient names to English. Return JSON array with:
-- "vn": original Vietnamese name
-- "en": English translation
-- "quantity": extract numeric quantity if present (default 100)
-- "unit": extract unit if present (default "g")
-
-Ingredients:
-{json.dumps(ingredients_vn, ensure_ascii=False)}
-
-Return JSON array only, no other text."""
-
     try:
-        response = await base_lm.generate_structured(
-            prompt=prompt,
-            schema={
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "vn": {"type": "string"},
-                        "en": {"type": "string"},
-                        "quantity": {"type": "number"},
-                        "unit": {"type": "string"},
-                    },
-                    "required": ["vn", "en"],
-                },
-            },
+        class TranslationPrompt(dspy.Signature):
+            """
+            Translate Vietnamese ingredient names to English and extract quantity/unit when present.
+            Output a list of objects with fields: vn, en, quantity, unit.
+            """
+            ingredients_vn = dspy.InputField(description="Array of Vietnamese ingredient strings.")
+            message_update = dspy.OutputField(description="One-sentence update describing the translation progress.")
+            translations = dspy.OutputField(description="List of translated objects with vn, en, quantity, unit.")
+
+        cot = ElysiaChainOfThought(
+            TranslationPrompt,
+            tree_data=TreeData,  # not used inside prompt content, placeholder for interface
+            reasoning=False,
+            impossible=False,
+            message_update=True,
         )
-        if isinstance(response, str):
-            return json.loads(response)
-        return response
+        # Call the prediction - pass raw list; dspy will serialize
+        pred = await cot.aforward(lm=base_lm, ingredients_vn=ingredients_vn)
+        # Expect pred.translations to be JSON-like; enforce shape
+        translations = pred.translations
+        # Ensure type safety
+        if isinstance(translations, str):
+            translations = json.loads(translations)
+        if not isinstance(translations, list):
+            raise ValueError("Invalid translation output")
+        cleaned = []
+        for t in translations:
+            if not isinstance(t, dict):
+                continue
+            cleaned.append({
+                "vn": t.get("vn", ""),
+                "en": t.get("en", t.get("vn", "")),
+                "quantity": float(t.get("quantity", 100.0)) if isinstance(t.get("quantity", 100.0), (int, float)) else 100.0,
+                "unit": t.get("unit", "g") if isinstance(t.get("unit", "g"), str) else "g",
+            })
+        return cleaned
     except Exception:
         # Fallback: return original names as English
         return [{"vn": ing, "en": ing, "quantity": 100, "unit": "g"} for ing in ingredients_vn]
@@ -116,104 +124,106 @@ async def calculate_recipe_macros_tool(
     yield "Calculating recipe macros..."
 
     try:
-        with client_manager.connect_to_client() as client:
-            collection = client.collections.get("Recipe")
+        client = client_manager.get_client()
+        collection = client.collections.get("Recipe")
 
-            # Get recipe
-            recipe_obj = recipe
-            if not recipe_obj and recipe_id:
-                results = collection.query.fetch_objects(
-                    where={"path": ["food_id"], "operator": "Equal", "valueString": recipe_id},
-                    limit=1,
-                )
-                if not results.objects:
-                    yield Error(f"Recipe not found: {recipe_id}")
-                    return
-                recipe_obj = results.objects[0].properties
-                recipe_uuid = results.objects[0].uuid
-            elif recipe_obj:
-                # If recipe passed in, fetch UUID for update
-                results = collection.query.fetch_objects(
-                    where={"path": ["food_id"], "operator": "Equal", "valueString": recipe_obj.get("food_id")},
-                    limit=1,
-                )
-                recipe_uuid = results.objects[0].uuid if results.objects else None
-            else:
-                yield Error("Either recipe_id or recipe must be provided")
+        # Get recipe
+        recipe_obj = recipe
+        if not recipe_obj and recipe_id:
+            results = collection.query.fetch_objects(
+                where={"path": ["food_id"], "operator": "Equal", "valueString": recipe_id},
+                limit=1,
+            )
+            if not results.objects:
+                yield Error(f"Recipe not found: {recipe_id}")
                 return
+            recipe_obj = results.objects[0].properties
+            recipe_uuid = results.objects[0].uuid
+        elif recipe_obj:
+            # If recipe passed in, fetch UUID for update
+            results = collection.query.fetch_objects(
+                where={"path": ["food_id"], "operator": "Equal", "valueString": recipe_obj.get("food_id")},
+                limit=1,
+            )
+            recipe_uuid = results.objects[0].uuid if results.objects else None
+        else:
+            yield Error("Either recipe_id or recipe must be provided")
+            return
 
-            # Check if macros already cached
-            macros = recipe_obj.get("macros_per_serving")
-            if macros and isinstance(macros, dict) and macros.get("kcal"):
-                yield Result(
-                    name="macros",
-                    objects=[macros],
-                    metadata={"source": "cached", "recipe_id": recipe_obj.get("food_id")},
-                )
-                yield "Macros retrieved from cache"
-                return
-
-            # Need to calculate: translate ingredients
-            ingredients_vn = recipe_obj.get("ingredients_with_qty", []) or recipe_obj.get("ingredients", [])
-            if not ingredients_vn:
-                yield Error("Recipe has no ingredients to calculate macros from")
-                return
-
-            translated = await _translate_ingredients_vn_to_en(ingredients_vn, base_lm)
-
-            # Find FDC foods and calculate macros
-            total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-            ingredient_map = []
-
-            for item in translated:
-                ingredient_en = item.get("en", "")
-                quantity_g = float(item.get("quantity", 100.0))
-
-                fdc_food = await _find_fdc_food(ingredient_en, client)
-                if fdc_food:
-                    ingredient_macros = _calculate_macros_from_fdc(fdc_food, quantity_g)
-                    for key in total_macros:
-                        total_macros[key] += ingredient_macros[key]
-
-                    ingredient_map.append({
-                        "ingredient_vn": item.get("vn", ""),
-                        "ingredient_en": ingredient_en,
-                        "fdc_id": int(fdc_food.get("fdc_id", 0)),
-                        "quantity_g": quantity_g,
-                        "confidence": 0.8,  # Could be improved with actual match score
-                    })
-
-            # Divide by serving_size to get per-serving macros
-            serving_size = float(recipe_obj.get("serving_size", 1.0))
-            if serving_size > 0:
-                macros_per_serving = {k: v / serving_size for k, v in total_macros.items()}
-            else:
-                macros_per_serving = total_macros
-
-            # Update Recipe in Weaviate
-            if recipe_uuid:
-                # Merge with existing ingredient_fdc_map
-                existing_map = recipe_obj.get("ingredient_fdc_map", []) or []
-                existing_map.extend(ingredient_map)
-
-                collection.data.update(
-                    uuid=recipe_uuid,
-                    properties={
-                        "macros_per_serving": macros_per_serving,
-                        "ingredient_fdc_map": existing_map,
-                    },
-                )
-
+        # Check if macros already cached
+        macros = recipe_obj.get("macros_per_serving")
+        if macros and isinstance(macros, dict) and macros.get("kcal"):
             yield Result(
                 name="macros",
-                objects=[macros_per_serving],
-                metadata={
-                    "source": "calculated",
-                    "recipe_id": recipe_obj.get("food_id"),
-                    "ingredients_mapped": len(ingredient_map),
+                objects=[macros],
+                metadata={"source": "cached", "recipe_id": recipe_obj.get("food_id")},
+                payload_type="generic",
+            )
+            yield "Macros retrieved from cache"
+            return
+
+        # Need to calculate: translate ingredients
+        ingredients_vn = recipe_obj.get("ingredients_with_qty", []) or recipe_obj.get("ingredients", [])
+        if not ingredients_vn:
+            yield Error("Recipe has no ingredients to calculate macros from")
+            return
+
+        translated = await _translate_ingredients_vn_to_en(ingredients_vn, base_lm)
+
+        # Find FDC foods and calculate macros
+        total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+        ingredient_map = []
+
+        for item in translated:
+            ingredient_en = item.get("en", "")
+            quantity_g = float(item.get("quantity", 100.0))
+
+            fdc_food = await _find_fdc_food(ingredient_en, client)
+            if fdc_food:
+                ingredient_macros = _calculate_macros_from_fdc(fdc_food, quantity_g)
+                for key in total_macros:
+                    total_macros[key] += ingredient_macros[key]
+
+                ingredient_map.append({
+                    "ingredient_vn": item.get("vn", ""),
+                    "ingredient_en": ingredient_en,
+                    "fdc_id": int(fdc_food.get("fdc_id", 0)),
+                    "quantity_g": quantity_g,
+                    "confidence": 0.8,  # Could be improved with actual match score
+                })
+
+        # Divide by serving_size to get per-serving macros
+        serving_size = float(recipe_obj.get("serving_size", 1.0))
+        if serving_size > 0:
+            macros_per_serving = {k: v / serving_size for k, v in total_macros.items()}
+        else:
+            macros_per_serving = total_macros
+
+        # Update Recipe in Weaviate
+        if recipe_uuid:
+            # Merge with existing ingredient_fdc_map
+            existing_map = recipe_obj.get("ingredient_fdc_map", []) or []
+            existing_map.extend(ingredient_map)
+
+            collection.data.update(
+                uuid=recipe_uuid,
+                properties={
+                    "macros_per_serving": macros_per_serving,
+                    "ingredient_fdc_map": existing_map,
                 },
             )
-            yield f"Calculated macros: {macros_per_serving['kcal']:.0f} kcal per serving"
+
+        yield Result(
+            name="macros",
+            objects=[macros_per_serving],
+            metadata={
+                "source": "calculated",
+                "recipe_id": recipe_obj.get("food_id"),
+                "ingredients_mapped": len(ingredient_map),
+            },
+            payload_type="generic",
+        )
+        yield f"Calculated macros: {macros_per_serving['kcal']:.0f} kcal per serving"
 
     except Exception as e:
         yield Error(f"Macro calculation failed: {str(e)}")

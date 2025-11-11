@@ -194,13 +194,9 @@ elysia-frontend/
   - Outputs (Environment): `environment["explain_tool"]["explanation"]` (and streams final text)
   - Optional: `base_lm` to polish explanation
 
-API Endpoints:
-- `POST /api/v1/meal/cook` (non-stream): returns steps from `cook_mode_tool`
-- `WS /ws/meal/cook/{user_id}`: streams steps and intermediate messages
-- `POST /api/v1/meal/explain` (non-stream): returns explanation text
-
-Routers:
-- `elysia/api/routes/cooking.py`, included in `elysia/api/app.py`
+API Integration:
+- Không tạo thêm endpoint mới. Những workflow này được kích hoạt thông qua payload `action` tương ứng trên WebSocket `/query`.
+- Frontend hoặc client khác gửi `{"action": "meal.cook", ...}` hoặc `{"action": "meal.explain", ...}` cùng `user_id`, `conversation_id`, Tree sẽ điều phối `cook_mode_tool` và `explain_tool`.
 
 ### Naming Conventions
 
@@ -1156,137 +1152,36 @@ results = collection.query.fetch_objects(
 
 ### API Integration Details
 
-Note: The following endpoint snippets are illustrative examples to show integration patterns. Actual route files will be added in Phase 2.6.
+- MealAgent **không thêm** REST/WS endpoint mới; mọi workflow chạy qua WebSocket `/query` mặc định của Elysia.
+- Client gửi payload chứa `user_id`, `conversation_id`, `query_id`, `action` và các `parameters` cần thiết; Tree chọn chuỗi tool tương ứng.
+- Route/minh kiến `elysia/elysia/api/routes/*.py` hiện hữu chỉ làm nhiệm vụ chuẩn Elysia (vd. `/query`, `/tools`, `/collections`); không cần chỉnh sửa khi phát triển MealAgent.
 
-Cross-reference:
-- Environment key conventions: `docs/ai/design/environment_keys.md`
-- Test cases for endpoints and workflows: `docs/ai/testing/feature-meal-planning-agent.md`
-- Tree reference: https://weaviate.github.io/elysia/Reference/Tree/
-- Client reference: https://weaviate.github.io/elysia/Reference/Client/
-- Managers reference: https://weaviate.github.io/elysia/Reference/Managers/
-- Settings reference: https://weaviate.github.io/elysia/Reference/Settings/
-- Objects reference: https://weaviate.github.io/elysia/Reference/Objects/
-- Payload Types reference: https://weaviate.github.io/elysia/Reference/PayloadTypes/
-- Util reference: https://weaviate.github.io/elysia/Reference/Util/
-
-**FastAPI Endpoints (examples)** — wrap Elysia Tree calls:
-```python
-# elysia/api/routes/meal_agent.py
-from fastapi import APIRouter, WebSocket, HTTPException
-from elysia.api.services.user import UserManager
-import uuid
-
-router = APIRouter(prefix="/api/v1/meal")
-
-# Global UserManager instance (or inject via dependency)
-user_manager = UserManager()
-
-@router.post("/plans/day")
-async def generate_daily_plan(user_id: str, query: str = "", conversation_id: str = None):
-    """Generate daily meal plan via REST endpoint."""
-    if not conversation_id:
-        conversation_id = f"conv_{uuid.uuid4().hex[:8]}"
-    query_id = f"query_{uuid.uuid4().hex[:8]}"
-    
-    results = []
-    errors = []
-    
-    async for payload in user_manager.process_tree(
-        query=query,
-        user_id=user_id,
-        conversation_id=conversation_id,
-        query_id=query_id
-    ):
-        # Payloads from process_tree are dictionaries
-        if payload and payload.get("type") == "result":
-            results.append(payload.get("data", {}))
-        elif payload and payload.get("type") == "error":
-            errors.append(payload.get("data", {}))
-    
-    if errors:
-        raise HTTPException(status_code=400, detail=errors[-1])
-    
-    # Find plan result
-    plan_result = next(
-        (r for r in results if r.get("name") == "plan"),
-        None
-    )
-    
-    return {"plan": plan_result if plan_result else None, "conversation_id": conversation_id}
-
-@router.websocket("/ws/plan/{user_id}")
-async def plan_stream(websocket: WebSocket, user_id: str):
-    """Stream daily meal plan generation via WebSocket."""
-    await websocket.accept()
-    
-    conversation_id = f"conv_{uuid.uuid4().hex[:8]}"
-    
-    try:
-        # Receive initial query
-        data = await websocket.receive_json()
-        query = data.get("query", "")
-        
-        query_id = f"query_{uuid.uuid4().hex[:8]}"
-        
-        async for payload in user_manager.process_tree(
-            query=query,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            query_id=query_id
-        ):
-            # Send all payloads directly to client
-            if payload and payload.get("type") != "timer" and payload.get("type") != "training_update":
-                await websocket.send_json(payload)
-                
-    except Exception as e:
-        await websocket.send_json({
-            "type": "error",
-            "data": {"error": str(e)}
-        })
-    finally:
-        await websocket.close()
-
-@router.post("/meals/log")
-async def log_meal(user_id: str, meal_description: str, conversation_id: str = None):
-    """Log consumed meal via natural language."""
-    if not conversation_id:
-        conversation_id = f"conv_{uuid.uuid4().hex[:8]}"
-    query_id = f"query_{uuid.uuid4().hex[:8]}"
-    
-    query = f"Log meal: {meal_description}"
-    results = []
-    errors = []
-    
-    async for payload in user_manager.process_tree(
-        query=query,
-        user_id=user_id,
-        conversation_id=conversation_id,
-        query_id=query_id
-    ):
-        if payload and payload.get("type") == "result":
-            results.append(payload.get("data", {}))
-        elif payload and payload.get("type") == "error":
-            errors.append(payload.get("data", {}))
-    
-    if errors:
-        raise HTTPException(status_code=400, detail=errors[-1])
-    
-    # Find nutrition calculation result
-    nutrition_result = next(
-        (r for r in results if r.get("name") == "calculated"),
-        None
-    )
-    profile_result = next(
-        (r for r in results if r.get("name") == "updated_profile"),
-        None
-    )
-    
-    return {
-        "calculated_macros": nutrition_result.get("objects", [{}])[0].get("calculated_macros") if nutrition_result and nutrition_result.get("objects") else {},
-        "remaining_targets": profile_result.get("objects", [{}])[0].get("remaining_targets") if profile_result and profile_result.get("objects") else {},
-        "conversation_id": conversation_id
-    }
+Ví dụ payload kích hoạt daily plan:
+```json
+{
+  "action": "meal.generate_daily_plan",
+  "user_id": "user_123",
+  "query": "healthy breakfast options",
+  "parameters": {
+    "plan_type": "day"
+  }
+}
 ```
+
+Tree stream về:
+```json
+{
+  "type": "result",
+  "data": {
+    "tool_name": "plan_assemble_day_tool",
+    "name": "plan",
+    "objects": [...],
+    "metadata": {...}
+  }
+}
+```
+
+Frontend chiếu trực tiếp cấu trúc `Result`/`Text` này; không cần adapter bổ sung.
 
 ### Database Connections
 

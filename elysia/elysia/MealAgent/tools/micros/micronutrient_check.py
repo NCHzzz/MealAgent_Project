@@ -8,7 +8,7 @@ collection which provides detailed nutrient breakdowns with proper units.
 from typing import AsyncGenerator, Dict, Any, List
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -58,7 +58,7 @@ async def micronutrient_check_tool(
     Environment writes:
       - environment["micronutrient_check_tool"]["micros"]
     """
-    yield "Calculating micronutrients..."
+    yield Response("Calculating micronutrients...")
 
     # Read plan
     weekly_results = tree_data.environment.find("plan_assemble_weekly_tool", "plan")
@@ -74,16 +74,51 @@ async def micronutrient_check_tool(
         return
 
     try:
-        with client_manager.connect_to_client() as client:
-            fdc_collection = client.collections.get("FdcFood")
-            # Note: FdcNutrient collection is available but not used in this simplified implementation
-            # For production, consider querying FdcNutrient for more accurate micronutrient data
+        client = client_manager.get_client()
+        fdc_collection = client.collections.get("FdcFood")
+        # Note: FdcNutrient collection is available but not used in this simplified implementation
+        # For production, consider querying FdcNutrient for more accurate micronutrient data
 
-            # Aggregate micronutrients
-            total_micros: Dict[str, float] = {}
+        # Aggregate micronutrients
+        total_micros: Dict[str, float] = {}
 
-            if plan.get("plan_type") == "day":
-                for meal_data in plan.get("meals", {}).values():
+        if plan.get("plan_type") == "day":
+            for meal_data in plan.get("meals", {}).values():
+                recipe = meal_data.get("recipe", {})
+                servings = float(meal_data.get("servings", 1.0))
+                ingredient_map = recipe.get("ingredient_fdc_map", [])
+
+                for ing_entry in ingredient_map:
+                    if isinstance(ing_entry, dict):
+                        fdc_id = ing_entry.get("fdc_id")
+                        quantity_g = float(ing_entry.get("quantity_g", 0.0))
+
+                        if fdc_id:
+                            # Get FdcFood
+                            fdc_results = fdc_collection.query.fetch_objects(
+                                where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)},
+                                limit=1,
+                            )
+                            if fdc_results.objects:
+                                fdc_food = fdc_results.objects[0].properties
+                                scale = (quantity_g * servings) / 100.0
+
+                                # Get micronutrients from FdcFood (simplified - using per-100g fields)
+                                micro_fields = [
+                                    "calcium_mg_100g",
+                                    "iron_mg_100g",
+                                    "potassium_mg_100g",
+                                    "vitamin_c_mg_100g",
+                                    "vitamin_a_iu_100g",
+                                ]
+                                for field in micro_fields:
+                                    if field in fdc_food:
+                                        key = field.replace("_100g", "").replace("_iu", "_IU")
+                                        total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+
+        elif plan.get("plan_type") == "week":
+            for day_data in plan.get("days", {}).values():
+                for meal_data in day_data.get("meals", {}).values():
                     recipe = meal_data.get("recipe", {})
                     servings = float(meal_data.get("servings", 1.0))
                     ingredient_map = recipe.get("ingredient_fdc_map", [])
@@ -94,7 +129,6 @@ async def micronutrient_check_tool(
                             quantity_g = float(ing_entry.get("quantity_g", 0.0))
 
                             if fdc_id:
-                                # Get FdcFood
                                 fdc_results = fdc_collection.query.fetch_objects(
                                     where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)},
                                     limit=1,
@@ -103,7 +137,6 @@ async def micronutrient_check_tool(
                                     fdc_food = fdc_results.objects[0].properties
                                     scale = (quantity_g * servings) / 100.0
 
-                                    # Get micronutrients from FdcFood (simplified - using per-100g fields)
                                     micro_fields = [
                                         "calcium_mg_100g",
                                         "iron_mg_100g",
@@ -116,59 +149,34 @@ async def micronutrient_check_tool(
                                             key = field.replace("_100g", "").replace("_iu", "_IU")
                                             total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
 
-            elif plan.get("plan_type") == "week":
-                for day_data in plan.get("days", {}).values():
-                    for meal_data in day_data.get("meals", {}).values():
-                        recipe = meal_data.get("recipe", {})
-                        servings = float(meal_data.get("servings", 1.0))
-                        ingredient_map = recipe.get("ingredient_fdc_map", [])
+        # Calculate averages for weekly plans
+        if plan.get("plan_type") == "week":
+            avg_micros = {k: v / 7.0 for k, v in total_micros.items()}
+        else:
+            avg_micros = total_micros
 
-                        for ing_entry in ingredient_map:
-                            if isinstance(ing_entry, dict):
-                                fdc_id = ing_entry.get("fdc_id")
-                                quantity_g = float(ing_entry.get("quantity_g", 0.0))
+        micros_output = {
+            "plan_type": plan.get("plan_type"),
+            "total_micros": total_micros,
+            "average_daily_micros": avg_micros,
+        }
 
-                                if fdc_id:
-                                    fdc_results = fdc_collection.query.fetch_objects(
-                                        where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)},
-                                        limit=1,
-                                    )
-                                    if fdc_results.objects:
-                                        fdc_food = fdc_results.objects[0].properties
-                                        scale = (quantity_g * servings) / 100.0
+        yield Result(
+            name="micros",
+            objects=[micros_output],
+            metadata={"plan_type": plan.get("plan_type"), "micro_count": len(total_micros)},
+            payload_type="generic",
+        )
 
-                                        micro_fields = [
-                                            "calcium_mg_100g",
-                                            "iron_mg_100g",
-                                            "potassium_mg_100g",
-                                            "vitamin_c_mg_100g",
-                                            "vitamin_a_iu_100g",
-                                        ]
-                                        for field in micro_fields:
-                                            if field in fdc_food:
-                                                key = field.replace("_100g", "").replace("_iu", "_IU")
-                                                total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
-
-            # Calculate averages for weekly plans
-            if plan.get("plan_type") == "week":
-                avg_micros = {k: v / 7.0 for k, v in total_micros.items()}
-            else:
-                avg_micros = total_micros
-
-            micros_output = {
-                "plan_type": plan.get("plan_type"),
-                "total_micros": total_micros,
-                "average_daily_micros": avg_micros,
-            }
-
-            yield Result(
-                name="micros",
-                objects=[micros_output],
-                metadata={"plan_type": plan.get("plan_type"), "micro_count": len(total_micros)},
-            )
-
-            micro_summary = ", ".join([f"{k}: {v:.1f}" for k, v in list(total_micros.items())[:3]])
-            yield f"Micronutrients calculated: {micro_summary}..."
+        micro_summary = ", ".join([f"{k}: {v:.1f}" for k, v in list(total_micros.items())[:3]])
+        yield Response(f"Micronutrients calculated: {micro_summary}...")
+        # Document-style summary for display
+        yield Result(
+            name="micros_summary",
+            objects=[{"content": f"Micronutrient totals ({plan.get('plan_type')}): {micro_summary}"}],
+            metadata={"plan_type": plan.get("plan_type")},
+            payload_type="document",
+        )
 
     except Exception as e:
         yield Error(f"Micronutrient calculation failed: {str(e)}")

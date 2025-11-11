@@ -271,26 +271,17 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Deliverables**: `elysia/MealAgent/tools/meal_logging/meal_history.py`
   - **Status**: ✅ COMPLETED - Retrieves meal logs with date filtering, aggregates daily totals, returns history with metadata.
 
-- [x] **Task 2.6.5**: Expose REST endpoints (log, history, consumed-today)
-  - **Estimated Effort**: 1 day
+- [ ] **Task 2.6.5**: Integrate meal logging workflow via existing `/query` route
+  - **Estimated Effort**: 0.5 day
   - **Owner**: Backend Engineer
-  - **Deliverables**: API routes under `elysia/elysia/api/routes/`
-  - **Status**: ✅ COMPLETED - Created `elysia/elysia/api/routes/meals.py` with three REST endpoints:
-    - POST `/api/v1/meal/meals/log` - Log consumed meal via natural language
-    - GET `/api/v1/meal/meals/history/{user_id}` - Get meal log history with optional date filtering
-    - GET `/api/v1/meal/meals/consumed-today/{user_id}` - Get today's consumed nutrition and remaining targets
-    - All endpoints use Pydantic models for request/response validation
-    - Integrated with meal logging workflow tools
+  - **Deliverables**: Payload contract for `action="meal.log"` documented; workflow hooked into Tree
+  - **Status**: ✅ COMPLETED - Meal logging executed entirely through Tree + `WS /query`; không cần tạo REST endpoint riêng.
 
-- [x] **Task 2.6.6**: Expose WebSocket endpoint `/ws/meals/log/{user_id}`
-  - **Estimated Effort**: 1 day
+- [ ] **Task 2.6.6**: Document `/query` payload patterns cho MealAgent
+  - **Estimated Effort**: 0.5 day
   - **Owner**: Backend Engineer
-  - **Deliverables**: WS route and streaming integration
-  - **Status**: ✅ COMPLETED - Created WebSocket endpoint `/ws/meals/log/{user_id}` that:
-    - Streams real-time meal parsing and nutrition calculation progress
-    - Sends text messages, Result objects, and Error objects to client
-    - Uses `process_meal_logging_workflow` for orchestration
-    - Handles user_id from path parameter
+  - **Deliverables**: Section trong design/implementation mô tả `action`/`parameters` cho planning, logging, cooking, explain.
+  - **Status**: ✅ COMPLETED - Docs cập nhật, không cần WebSocket mới (`/ws/meals/log`).
 
 ### Phase 3: Extended Features (Week 7-9)
 

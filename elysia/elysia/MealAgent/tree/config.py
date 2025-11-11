@@ -8,14 +8,14 @@ This module registers all MealAgent tools for use in the decision tree.
 from elysia.MealAgent.tools.profile.profile_crud import profile_crud_tool
 from elysia.MealAgent.tools.profile.macro_calc import macro_calc_tool
 
-# Constraint tools
-from elysia.MealAgent.tools.constraints.diet_allergen_guard import diet_allergen_guard_tool
-from elysia.MealAgent.tools.constraints.time_device_guard import time_device_guard_tool
+# Constraint tools (consolidated)
+from elysia.MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
 
 # Search tools
 from elysia.MealAgent.tools.search.query import query_tool
 from elysia.MealAgent.tools.search.query_postprocessing import query_postprocessing_tool
 from elysia.MealAgent.tools.search.score_and_rank import score_and_rank_tool
+from elysia.MealAgent.tools.search.search_and_rank import search_and_rank_tool
 
 # Nutrition tools
 from elysia.MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
@@ -25,12 +25,14 @@ from elysia.MealAgent.tools.plan_day.target_resolver import target_resolver_tool
 from elysia.MealAgent.tools.plan_day.plan_assemble import plan_assemble_day_tool
 from elysia.MealAgent.tools.plan_day.plan_validate import plan_validate_tool
 from elysia.MealAgent.tools.plan_day.build_shopping import build_shopping_tool
+from elysia.MealAgent.tools.plan_day.plan_day_e2e import plan_day_e2e_tool
 
 # Meal Logging tools
 from elysia.MealAgent.tools.meal_logging.meal_parser import meal_parser_tool
 from elysia.MealAgent.tools.meal_logging.nutrition_calc import nutrition_calc_tool
 from elysia.MealAgent.tools.meal_logging.profile_update import profile_update_tool
 from elysia.MealAgent.tools.meal_logging.meal_history import meal_history_tool
+from elysia.MealAgent.tools.meal_logging.log_meal_e2e import log_meal_e2e_tool
 
 # Plan Week tools
 from elysia.MealAgent.tools.plan_week.plan_assemble_weekly import plan_assemble_weekly_tool
@@ -66,12 +68,12 @@ MEAL_AGENT_TOOLS = {
     "profile_crud_tool": profile_crud_tool,
     "macro_calc_tool": macro_calc_tool,
     # Constraint tools
-    "diet_allergen_guard_tool": diet_allergen_guard_tool,
-    "time_device_guard_tool": time_device_guard_tool,
+    "constraints_guard_tool": constraints_guard_tool,
     # Search tools
     "query_tool": query_tool,
     "query_postprocessing_tool": query_postprocessing_tool,
     "score_and_rank_tool": score_and_rank_tool,
+    "search_and_rank_tool": search_and_rank_tool,
     # Nutrition tools
     "calculate_recipe_macros_tool": calculate_recipe_macros_tool,
     # Plan Day tools
@@ -79,11 +81,13 @@ MEAL_AGENT_TOOLS = {
     "plan_assemble_day_tool": plan_assemble_day_tool,
     "plan_validate_tool": plan_validate_tool,
     "build_shopping_tool": build_shopping_tool,
+    "plan_day_e2e_tool": plan_day_e2e_tool,
     # Meal Logging tools
     "meal_parser_tool": meal_parser_tool,
     "nutrition_calc_tool": nutrition_calc_tool,
     "profile_update_tool": profile_update_tool,
     "meal_history_tool": meal_history_tool,
+    "log_meal_e2e_tool": log_meal_e2e_tool,
     # Plan Week tools
     "plan_assemble_weekly_tool": plan_assemble_weekly_tool,
     "variety_guard_tool": variety_guard_tool,

@@ -1,7 +1,7 @@
 from typing import AsyncGenerator, Dict, Any, List
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -107,33 +107,33 @@ async def plan_validate_tool(
     Environment writes:
       - environment["plan_validate_tool"]["report"]
     """
-    yield "Validating plan..."
+    yield Response("Validating plan...")
 
     # Read plan
     plan_results = tree_data.environment.find("plan_assemble_day_tool", "plan")
-    if not plan_results or not plan_results[0].objects:
+    if not plan_results or not plan_results[0]["objects"]:
         yield Error("Plan not found. Run plan_assemble_day_tool first.")
         return
 
-    plan = plan_results[0].objects[0]
+    plan = plan_results[0]["objects"][0]
 
     # Read targets
     targets_results = tree_data.environment.find("target_resolver_tool", "resolved")
-    if not targets_results or not targets_results[0].objects:
+    if not targets_results or not targets_results[0]["objects"]:
         # Fallback to macro_calc_tool targets
         targets_results = tree_data.environment.find("macro_calc_tool", "targets")
-        if not targets_results or not targets_results[0].objects:
+        if not targets_results or not targets_results[0]["objects"]:
             yield Error("Targets not found. Run target_resolver_tool or macro_calc_tool first.")
             return
 
-    targets = targets_results[0].objects[0]
+    targets = targets_results[0]["objects"][0]
 
     # Read profile for constraints (optional)
     profile_results = tree_data.environment.find("profile_crud_tool", "profile")
     diet_types = None
     exclude_allergens = None
-    if profile_results and profile_results[0].objects:
-        profile = profile_results[0].objects[0]
+    if profile_results and profile_results[0]["objects"]:
+        profile = profile_results[0]["objects"][0]
         diet_type = profile.get("diet_type")
         if diet_type:
             diet_types = [diet_type] if isinstance(diet_type, str) else diet_type
@@ -166,10 +166,11 @@ async def plan_validate_tool(
         name="report",
         objects=[report],
         metadata={"valid": report["valid"], "violations_count": report["summary"]["macro_violations"] + report["summary"]["constraint_violations"]},
+        payload_type="generic",
     )
 
     if report["valid"]:
-        yield "Plan validation passed"
+        yield Response("Plan validation passed")
     else:
-        yield f"Plan validation failed: {report['summary']['macro_violations']} macro violations, {report['summary']['constraint_violations']} constraint violations"
+        yield Response(f"Plan validation failed: {report['summary']['macro_violations']} macro violations, {report['summary']['constraint_violations']} constraint violations")
 

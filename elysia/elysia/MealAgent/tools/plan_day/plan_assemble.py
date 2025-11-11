@@ -1,7 +1,8 @@
 from typing import AsyncGenerator, List, Dict, Any
+import logging
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -72,89 +73,119 @@ async def plan_assemble_day_tool(
     Environment writes:
       - environment["plan_assemble_day_tool"]["plan"]
     """
-    yield "Assembling daily meal plan..."
+    logging.info("plan_assemble_day_tool: start")
+    yield Response("Assembling daily meal plan...")
 
-    # Read ranked recipes
-    recipes_results = tree_data.environment.find("score_and_rank_tool", "topk")
-    if not recipes_results or not recipes_results[0].objects:
-        yield Error("No ranked recipes found. Run score_and_rank_tool first.")
-        return
-
-    recipes = recipes_results[0].objects
-
-    if len(recipes) < 3:
-        yield Error("Insufficient recipes for 3-meal plan. Need at least 3 recipes.")
-        return
-    
-    # Check for missing macros
-    missing_macros = [r for r in recipes if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict) or not r.get("macros_per_serving", {}).get("kcal")]
-    if missing_macros:
-        yield f"Warning: {len(missing_macros)} recipes missing macros_per_serving. Consider running calculate_recipe_macros_tool for accurate planning."
-
-    # Select meals by strategy
-    breakfast = _select_meal_by_strategy(recipes, "highest_carb")
-    if not breakfast:
-        yield Error("Could not select breakfast meal")
-        return
-
-    lunch = _select_meal_by_strategy(recipes, "balanced", exclude=[breakfast])
-    if not lunch:
-        # Fallback to second highest carb if balanced selection fails
-        lunch = _select_meal_by_strategy(recipes, "highest_carb", exclude=[breakfast])
-    if not lunch:
-        yield Error("Could not select lunch meal")
-        return
-
-    dinner = _select_meal_by_strategy(recipes, "highest_protein", exclude=[breakfast, lunch])
-    if not dinner:
-        # Fallback to any remaining recipe
-        exclude_ids = {breakfast.get("food_id"), lunch.get("food_id")}
-        remaining = [r for r in recipes if r.get("food_id") not in exclude_ids]
-        if remaining:
-            dinner = remaining[0]
-        else:
-            yield Error("Could not select dinner meal")
+    try:
+        # Read ranked recipes
+        recipes_results = tree_data.environment.find("score_and_rank_tool", "topk")
+        if not recipes_results or not recipes_results[0].objects:
+            error_msg = "No ranked recipes found. Run score_and_rank_tool first."
+            logging.error(f"plan_assemble_day_tool: {error_msg}")
+            yield Error(error_msg)
             return
 
-    # Build plan structure
-    plan = {
-        "breakfast": {
-            "recipe": breakfast,
-            "servings": 1.0,  # Default 1 serving, can be adjusted
-            "meal_type": "breakfast",
-        },
-        "lunch": {
-            "recipe": lunch,
-            "servings": 1.0,
-            "meal_type": "lunch",
-        },
-        "dinner": {
-            "recipe": dinner,
-            "servings": 1.0,
-            "meal_type": "dinner",
-        },
-    }
+        recipes = recipes_results[0].objects
 
-    # Calculate total macros
-    total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-    for meal_data in plan.values():
-        recipe = meal_data["recipe"]
-        servings = meal_data["servings"]
-        macros = _get_meal_macros(recipe)
-        for key in total_macros:
-            total_macros[key] += macros[key] * servings
+        if len(recipes) < 3:
+            error_msg = "Insufficient recipes for 3-meal plan. Need at least 3 recipes."
+            logging.error(f"plan_assemble_day_tool: {error_msg}")
+            yield Error(error_msg)
+            return
+        
+        # Check for missing macros
+        missing_macros = [r for r in recipes if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict) or not r.get("macros_per_serving", {}).get("kcal")]
+        if missing_macros:
+            logging.warning(f"plan_assemble_day_tool: {len(missing_macros)} recipes missing macros_per_serving")
+            yield Response(f"Warning: {len(missing_macros)} recipes missing macros_per_serving. Consider running calculate_recipe_macros_tool for accurate planning.")
 
-    plan_output = {
-        "plan_type": "day",
-        "meals": plan,
-        "total_macros": total_macros,
-        "created_at": None,  # Can be set by caller
-    }
+        # Select meals by strategy
+        breakfast = _select_meal_by_strategy(recipes, "highest_carb")
+        if not breakfast:
+            error_msg = "Could not select breakfast meal"
+            logging.error(f"plan_assemble_day_tool: {error_msg}")
+            yield Error(error_msg)
+            return
 
-    yield Result(
-        name="plan",
-        objects=[plan_output],
-        metadata={"plan_type": "day", "meals_count": 3},
-    )
-    yield f"Daily plan assembled: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P | {total_macros['fat_g']:.0f}g F | {total_macros['carb_g']:.0f}g C"
+        lunch = _select_meal_by_strategy(recipes, "balanced", exclude=[breakfast])
+        if not lunch:
+            # Fallback to second highest carb if balanced selection fails
+            lunch = _select_meal_by_strategy(recipes, "highest_carb", exclude=[breakfast])
+        if not lunch:
+            error_msg = "Could not select lunch meal"
+            logging.error(f"plan_assemble_day_tool: {error_msg}")
+            yield Error(error_msg)
+            return
+
+        dinner = _select_meal_by_strategy(recipes, "highest_protein", exclude=[breakfast, lunch])
+        if not dinner:
+            # Fallback to any remaining recipe
+            exclude_ids = {breakfast.get("food_id"), lunch.get("food_id")}
+            remaining = [r for r in recipes if r.get("food_id") not in exclude_ids]
+            if remaining:
+                dinner = remaining[0]
+            else:
+                error_msg = "Could not select dinner meal"
+                logging.error(f"plan_assemble_day_tool: {error_msg}")
+                yield Error(error_msg)
+                return
+
+        # Build plan structure
+        plan = {
+            "breakfast": {
+                "recipe": breakfast,
+                "servings": 1.0,  # Default 1 serving, can be adjusted
+                "meal_type": "breakfast",
+            },
+            "lunch": {
+                "recipe": lunch,
+                "servings": 1.0,
+                "meal_type": "lunch",
+            },
+            "dinner": {
+                "recipe": dinner,
+                "servings": 1.0,
+                "meal_type": "dinner",
+            },
+        }
+
+        # Calculate total macros
+        total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+        for meal_data in plan.values():
+            recipe = meal_data["recipe"]
+            servings = meal_data["servings"]
+            macros = _get_meal_macros(recipe)
+            for key in total_macros:
+                total_macros[key] += macros[key] * servings
+
+        plan_output = {
+            "plan_type": "day",
+            "meals": plan,
+            "total_macros": total_macros,
+            "created_at": None,  # Can be set by caller
+        }
+
+        logging.info(
+            f"plan_assemble_day_tool: complete (kcal={total_macros['kcal']:.0f}, "
+            f"protein={total_macros['protein_g']:.0f}g)"
+        )
+
+        yield Result(
+            name="plan",
+            objects=[plan_output],
+            metadata={"plan_type": "day", "meals_count": 3},
+            payload_type="generic",
+        )
+        yield Response(f"Daily plan assembled: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P | {total_macros['fat_g']:.0f}g F | {total_macros['carb_g']:.0f}g C")
+
+    except ValueError as e:
+        error_msg = f"Invalid input: {str(e)}"
+        logging.error(f"plan_assemble_day_tool: {error_msg}", exc_info=True)
+        yield Error(error_msg)
+        return
+    except Exception as e:
+        error_msg = f"Plan assembly failed: {str(e)}"
+        logging.error(f"plan_assemble_day_tool: {error_msg}", exc_info=True)
+        yield Error(error_msg)
+        return
 

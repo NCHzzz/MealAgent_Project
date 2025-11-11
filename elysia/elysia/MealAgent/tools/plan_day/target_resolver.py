@@ -1,7 +1,7 @@
 from typing import AsyncGenerator, Dict, Any
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -26,13 +26,13 @@ async def target_resolver_tool(
     Environment writes:
       - environment["target_resolver_tool"]["resolved"]
     """
-    yield "Resolving nutritional targets..."
+    yield Response("Resolving nutritional targets...")
 
     # Read profile targets from environment
     targets_results = tree_data.environment.find("macro_calc_tool", "targets")
     profile_targets = None
-    if targets_results and targets_results[0].objects:
-        profile_targets = targets_results[0].objects[0]
+    if targets_results and targets_results[0]["objects"]:
+        profile_targets = targets_results[0]["objects"][0]
 
     # Priority: query_targets > profile_targets > defaults
     resolved = {}
@@ -69,6 +69,7 @@ async def target_resolver_tool(
         name="resolved",
         objects=[resolved],
         metadata={"source": resolved.get("source")},
+        payload_type="generic",
     )
-    yield f"Targets resolved from {resolved.get('source')}: {resolved['tdee_kcal']:.0f} kcal"
+    yield Response(f"Targets resolved from {resolved.get('source')}: {resolved['tdee_kcal']:.0f} kcal")
 

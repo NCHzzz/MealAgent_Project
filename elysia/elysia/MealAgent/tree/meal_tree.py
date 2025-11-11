@@ -33,9 +33,11 @@ Usage:
     They must be explicitly called from tree nodes or used as reference for tree configuration.
 """
 
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, Optional, List
+import logging
+
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Status, Response
 from elysia.util.client import ClientManager
 from elysia.tree.tree import Tree
 from elysia.config import Settings
@@ -51,7 +53,7 @@ async def process_daily_planning_workflow(
     user_id: str,
     query_text: str = "",
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Status | Error, None]:
     """
     Orchestrate daily meal planning workflow.
 
@@ -69,9 +71,10 @@ async def process_daily_planning_workflow(
     This is a helper function that can be called from a decision tree node
     or used as a reference for tree configuration.
     """
-    yield "Starting daily meal planning workflow..."
+    yield Status("Starting daily meal planning workflow...")
 
     # Step 1: Ensure profile exists (read or create)
+    yield Status("Loading user profile...")
     profile_tool = MEAL_AGENT_TOOLS["profile_crud_tool"]
     async for result in profile_tool(
         tree_data=tree_data,
@@ -86,6 +89,7 @@ async def process_daily_planning_workflow(
         yield result
 
     # Step 2: Calculate macro targets
+    yield Status("Calculating macro targets...")
     macro_tool = MEAL_AGENT_TOOLS["macro_calc_tool"]
     async for result in macro_tool(
         tree_data=tree_data,
@@ -97,9 +101,10 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    # Step 3: Generate constraint filters
-    diet_guard = MEAL_AGENT_TOOLS["diet_allergen_guard_tool"]
-    async for result in diet_guard(
+    # Step 3: Combined constraints
+    yield Status("Generating combined constraints (diet/allergens/time/devices)...")
+    constraints_tool = MEAL_AGENT_TOOLS["constraints_guard_tool"]
+    async for result in constraints_tool(
         tree_data=tree_data,
         client_manager=client_manager,
         **kwargs,
@@ -109,20 +114,10 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    time_guard = MEAL_AGENT_TOOLS["time_device_guard_tool"]
-    async for result in time_guard(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    # Step 4: Search recipes
-    query_tool = MEAL_AGENT_TOOLS["query_tool"]
-    async for result in query_tool(
+    # Step 4-5: Search and rank in one step
+    yield Status(f"Searching and ranking recipes for query: '{query_text}'...")
+    sr_tool = MEAL_AGENT_TOOLS["search_and_rank_tool"]
+    async for result in sr_tool(
         tree_data=tree_data,
         client_manager=client_manager,
         query_text=query_text,
@@ -133,9 +128,10 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    # Step 5: Postprocess and rank
-    postprocess_tool = MEAL_AGENT_TOOLS["query_postprocessing_tool"]
-    async for result in postprocess_tool(
+    # Step 6-8: Assemble plan in one step
+    yield Status("Assembling daily plan and validating against targets...")
+    e2e_plan_tool = MEAL_AGENT_TOOLS["plan_day_e2e_tool"]
+    async for result in e2e_plan_tool(
         tree_data=tree_data,
         client_manager=client_manager,
         **kwargs,
@@ -145,54 +141,8 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    score_tool = MEAL_AGENT_TOOLS["score_and_rank_tool"]
-    async for result in score_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    # Step 6: Resolve targets
-    target_tool = MEAL_AGENT_TOOLS["target_resolver_tool"]
-    async for result in target_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    # Step 7: Assemble daily plan
-    assemble_tool = MEAL_AGENT_TOOLS["plan_assemble_day_tool"]
-    async for result in assemble_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    # Step 8: Validate plan
-    validate_tool = MEAL_AGENT_TOOLS["plan_validate_tool"]
-    async for result in validate_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    # Step 9: Build shopping list
+    # Step 7: Build shopping list
+    yield Status("Building shopping list from plan and pantry...")
     shopping_tool = MEAL_AGENT_TOOLS["build_shopping_tool"]
     async for result in shopping_tool(
         tree_data=tree_data,
@@ -204,7 +154,7 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    yield "Daily planning workflow completed successfully"
+    yield Status("Daily planning workflow completed successfully")
 
 
 async def process_meal_logging_workflow(
@@ -214,7 +164,7 @@ async def process_meal_logging_workflow(
     user_id: str,
     meal_description: str,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Status | Error, None]:
     """
     Orchestrate meal logging workflow.
 
@@ -225,14 +175,16 @@ async def process_meal_logging_workflow(
 
     This is a helper function that can be called from a decision tree node.
     """
-    yield "Starting meal logging workflow..."
+    yield Status("Starting meal logging workflow...")
 
-    # Step 1: Parse meal
-    parser_tool = MEAL_AGENT_TOOLS["meal_parser_tool"]
-    async for result in parser_tool(
+    # One-step logging: parse → calc → update
+    yield Status("Parsing meal description and calculating nutrition, then updating profile...")
+    log_e2e_tool = MEAL_AGENT_TOOLS["log_meal_e2e_tool"]
+    async for result in log_e2e_tool(
         tree_data=tree_data,
         client_manager=client_manager,
         base_lm=base_lm,
+        user_id=user_id,
         meal_description=meal_description,
         **kwargs,
     ):
@@ -241,32 +193,7 @@ async def process_meal_logging_workflow(
             return
         yield result
 
-    # Step 2: Calculate nutrition
-    calc_tool = MEAL_AGENT_TOOLS["nutrition_calc_tool"]
-    async for result in calc_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    # Step 3: Update profile
-    update_tool = MEAL_AGENT_TOOLS["profile_update_tool"]
-    async for result in update_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        user_id=user_id,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
-    yield "Meal logging workflow completed successfully"
+    yield Status("Meal logging workflow completed successfully")
 
 
 async def process_cooking_workflow(
@@ -276,7 +203,7 @@ async def process_cooking_workflow(
     user_id: Optional[str] = None,
     food_id: Optional[str] = None,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Status | Error, None]:
     """
     Orchestrate cooking workflow (produce step-by-step guidance).
 
@@ -289,9 +216,39 @@ async def process_cooking_workflow(
     - The tool will try to pick a recipe from daily/weekly plan or search topk.
     - Provide food_id to target a specific recipe.
     """
-    yield "Starting cooking workflow..."
+    yield Status("Starting cooking workflow...")
+
+    # Resolve recipe_id from environment if not provided
+    if food_id is None:
+        # 1) prefer previously selected cook_mode_tool.recipe_id
+        selected = tree_data.environment.find("cook_mode_tool", "recipe_id")
+        if selected and selected[0]["objects"]:
+            obj = selected[0]["objects"][0]
+            food_id = str(obj.get("food_id") or obj.get("recipe_id") or "").strip() or None
+
+        # 2) fallback to first item from search topk
+        if food_id is None:
+            for tool_name in ("search_and_rank_tool", "score_and_rank_tool"):
+                res = tree_data.environment.find(tool_name, "topk")
+                if res and res[0]["objects"]:
+                    first = res[0]["objects"][0]
+                    fid = str(first.get("food_id") or "").strip()
+                    if fid:
+                        # persist selection for future steps following environment_keys.md (cook_mode_tool.recipe_id)
+                        try:
+                            tree_data.environment.add_objects(
+                                "cook_mode_tool",
+                                "recipe_id",
+                                [{"food_id": fid}],
+                                metadata={"source": tool_name},
+                            )
+                        except Exception:
+                            pass
+                        food_id = fid
+                        break
 
     # Step 1 & 2: Cooking steps
+    yield Status("Preparing step-by-step cooking guidance...")
     cook_tool = MEAL_AGENT_TOOLS["cook_mode_tool"]
     async for result in cook_tool(
         tree_data=tree_data,
@@ -308,6 +265,7 @@ async def process_cooking_workflow(
     try:
         explain_tool = MEAL_AGENT_TOOLS.get("explain_tool")
         if explain_tool:
+            yield Status("Generating explanation (optional)...")
             async for result in explain_tool(
                 tree_data=tree_data,
                 client_manager=client_manager,
@@ -316,14 +274,14 @@ async def process_cooking_workflow(
             ):
                 if isinstance(result, Error):
                     # Explanation is optional; warn and continue
-                    yield f"Warning: explanation failed: {result.message}"
+                    yield Status(f"Warning: explanation failed: {result.message}")
                     break
                 yield result
     except Exception:
         # Explanation optional; ignore hard failures
         pass
 
-    yield "Cooking workflow completed successfully"
+    yield Status("Cooking workflow completed successfully")
 
 
 async def process_explanation_workflow(
@@ -331,14 +289,14 @@ async def process_explanation_workflow(
     client_manager: ClientManager,
     base_lm,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Status | Error, None]:
     """
     Orchestrate explanation workflow (summarize decisions made so far).
 
     Assumes previous tools (profile/targets/constraints/search/plan) have populated
     the environment. Uses explain_tool to compose a user-facing summary.
     """
-    yield "Starting explanation workflow..."
+    yield Status("Starting explanation workflow...")
 
     explain_tool = MEAL_AGENT_TOOLS["explain_tool"]
     async for result in explain_tool(
@@ -352,16 +310,26 @@ async def process_explanation_workflow(
             return
         yield result
 
-    yield "Explanation workflow completed successfully"
+    yield Status("Explanation workflow completed successfully")
 
 
 def build_meal_agent_tree(
     settings: Settings | None = None,
     user_id: str | None = None,
+    user_prompt: str | None = None,
+    conversation_history: List[Dict] | None = None,
+    optimize_tools: bool = True,
 ) -> Tree:
     """
     Create a new Elysia Tree dedicated to MealAgent and attach tools
     to logical branches according to the MealAgent design.
+
+    Args:
+        settings: Elysia settings
+        user_id: User ID
+        user_prompt: Optional user prompt for intent-based tool optimization
+        conversation_history: Optional conversation history for context
+        optimize_tools: If True, only load tools relevant to user intent (default: True)
 
     Branch layout (ids):
       - profile
@@ -383,6 +351,26 @@ def build_meal_agent_tree(
     orchestrate execution order via workflows or tree node logic.
     """
     tree = Tree(branch_initialisation="empty", settings=settings, user_id=user_id)
+    
+    # Optimize tool loading based on user intent
+    tools_to_load = None
+    if optimize_tools and user_prompt:
+        try:
+            from elysia.MealAgent.tree.tool_optimizer import get_optimized_tool_set
+            optimized = get_optimized_tool_set(
+                user_prompt=user_prompt,
+                conversation_history=conversation_history,
+                max_tools=12,  # Reduce from 27 to 12
+            )
+            tools_to_load = set(optimized.keys())
+            logging.info(f"MealAgent: Optimized tool loading - {len(tools_to_load)} tools (from 27 total)")
+        except Exception as e:
+            logging.warning(f"MealAgent: Tool optimization failed, loading all tools: {e}")
+            tools_to_load = None
+
+    # Note: Do NOT hardcode intent keywords here. The decision agent should
+    # infer completion based on environment signals written by tools (see
+    # tool docstrings for reads/writes and completion hints).
 
     # Create branches (stem from root)
     branch_ids = [
@@ -414,36 +402,68 @@ def build_meal_agent_tree(
             # Branch may already exist
             pass
 
-    # Helper to add tool by name to a branch if exists
-    def add_tool(branch_id: str, name: str):
+    # Track tool names that have been added so we can reference them in chains
+    added_tool_names: dict[str, str] = {}
+
+    def add_tool(branch_id: str, name: str, chain: list[str] | None = None):
+        # Skip if tool optimization is enabled and tool not in optimized set
+        if tools_to_load is not None and name not in tools_to_load:
+            return
         fn = MEAL_AGENT_TOOLS.get(name)
         if fn is not None:
-            tree.add_tool(fn, branch_id=branch_id)
+            # Resolve chain to actual tool names already added
+            from_tool_ids: list[str] = []
+            if chain:
+                for chained_name in chain:
+                    actual = added_tool_names.get(chained_name)
+                    if actual:
+                        from_tool_ids.append(actual)
+                    else:
+                        logging.debug(
+                            f"MealAgent tree: chain reference '{chained_name}' not found for '{name}', "
+                            "adding tool without chain."
+                        )
+                        from_tool_ids = []
+                        break
 
-    # Register tools to branches
+            # Determine tool names before adding so we can detect the new entry
+            before_tool_names = set(tree.tools.keys())
+
+            tree.add_tool(fn, branch_id=branch_id, from_tool_ids=from_tool_ids)
+
+            after_tool_names = set(tree.tools.keys())
+            new_names = list(after_tool_names - before_tool_names)
+
+            if new_names:
+                added_tool_names[name] = new_names[0]
+            else:
+                # Fallback to metadata if diff failed
+                added_tool_names[name] = getattr(fn, "_tool_name", name)
+
+    # Register tools to branches with successive chains where appropriate
+
     # profile
     add_tool("profile", "profile_crud_tool")
-    add_tool("profile", "macro_calc_tool")
+    add_tool("profile", "macro_calc_tool", chain=["profile_crud_tool"])
 
-    # constraints
-    add_tool("constraints", "diet_allergen_guard_tool")
-    add_tool("constraints", "time_device_guard_tool")
+    # constraints (combined)
+    add_tool("constraints", "constraints_guard_tool")
 
     # search + nutrition
-    add_tool("search", "query_tool")
-    add_tool("search", "query_postprocessing_tool")
-    add_tool("search", "score_and_rank_tool")
+    add_tool("search", "search_and_rank_tool")
     add_tool("nutrition", "calculate_recipe_macros_tool")
 
     # plan_day
-    add_tool("plan_day", "target_resolver_tool")
-    add_tool("plan_day", "plan_assemble_day_tool")
-    add_tool("plan_day", "plan_validate_tool")
+    add_tool("plan_day", "plan_day_e2e_tool")
     add_tool("shopping", "build_shopping_tool")
 
     # plan_week
     add_tool("plan_week", "plan_assemble_weekly_tool")
-    add_tool("plan_week", "variety_guard_tool")
+    add_tool(
+        "plan_week",
+        "variety_guard_tool",
+        chain=["plan_assemble_weekly_tool"],
+    )
 
     # pantry + shopping
     add_tool("pantry", "pantry_crud_tool")
@@ -451,22 +471,35 @@ def build_meal_agent_tree(
 
     # gap fill
     add_tool("gap_fill", "gap_calc_tool")
-    add_tool("gap_fill", "suggest_snack_tool")
-    add_tool("gap_fill", "apply_snack_tool")
+    add_tool("gap_fill", "suggest_snack_tool", chain=["gap_calc_tool"])
+    add_tool(
+        "gap_fill",
+        "apply_snack_tool",
+        chain=["gap_calc_tool", "suggest_snack_tool"],
+    )
 
     # substitution
     add_tool("substitution", "suggest_substitutes_tool")
-    add_tool("substitution", "apply_substitute_tool")
+    add_tool(
+        "substitution",
+        "apply_substitute_tool",
+        chain=["suggest_substitutes_tool"],
+    )
 
     # micros
     add_tool("micros", "micronutrient_check_tool")
-    add_tool("micros", "suggest_micros_foods_tool")
+    add_tool(
+        "micros",
+        "suggest_micros_foods_tool",
+        chain=["micronutrient_check_tool"],
+    )
 
     # logging
-    add_tool("logging", "meal_parser_tool")
-    add_tool("logging", "nutrition_calc_tool")
-    add_tool("logging", "profile_update_tool")
-    add_tool("logging", "meal_history_tool")
+    add_tool("logging", "log_meal_e2e_tool")
+    add_tool(
+        "logging",
+        "meal_history_tool",
+    )
 
     # cooking & explain
     add_tool("cooking", "cook_mode_tool")

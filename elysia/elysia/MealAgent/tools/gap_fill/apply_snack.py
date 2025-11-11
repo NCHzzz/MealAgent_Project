@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Dict, Any
 import copy
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -68,7 +68,7 @@ async def apply_snack_tool(
     Environment writes:
       - environment["apply_snack_tool"]["updated_plan"]
     """
-    yield "Adding snack to plan..."
+    yield Response("Adding snack to plan...")
 
     # Read plan (create a copy to avoid mutating the original)
     weekly_results = tree_data.environment.find("plan_assemble_weekly_tool", "plan")
@@ -90,14 +90,14 @@ async def apply_snack_tool(
     snack = snack_recipe
     if not snack and snack_food_id:
         try:
-            with client_manager.connect_to_client() as client:
-                recipe_collection = client.collections.get("Recipe")
-                results = recipe_collection.query.fetch_objects(
-                    where={"path": ["food_id"], "operator": "Equal", "valueString": snack_food_id},
-                    limit=1,
-                )
-                if results.objects:
-                    snack = results.objects[0].properties
+            client = client_manager.get_client()
+            recipe_collection = client.collections.get("Recipe")
+            results = recipe_collection.query.fetch_objects(
+                where={"path": ["food_id"], "operator": "Equal", "valueString": snack_food_id},
+                limit=1,
+            )
+            if results.objects:
+                snack = results.objects[0].properties
         except Exception as e:
             yield Error(f"Failed to fetch snack recipe: {str(e)}")
             return
@@ -171,6 +171,7 @@ async def apply_snack_tool(
         name="updated_plan",
         objects=[plan],
         metadata={"plan_type": plan.get("plan_type"), "snack_added": True},
+        payload_type="generic",
     )
-    yield f"Snack added. Updated totals: {updated_macros['kcal']:.0f} kcal | {updated_macros['protein_g']:.0f}g P"
+    yield Response(f"Snack added. Updated totals: {updated_macros['kcal']:.0f} kcal | {updated_macros['protein_g']:.0f}g P")
 

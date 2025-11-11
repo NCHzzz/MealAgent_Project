@@ -1,17 +1,30 @@
 """
 CookMode tool: parse a recipe into cooking steps and stream them.
 
-Reads a recipe from environment (by food_id or from plan/search),
-generates a list of structured steps, and streams guidance messages.
+Environment interface (per docs/ai/design/environment_keys.md):
+- Reads:
+  - plan_assemble_day_tool.plan / plan_assemble_weekly_tool.plan (nested recipes)
+  - search_and_rank_tool.topk (or legacy score_and_rank_tool.topk)
+  - cook_mode_tool.recipe_id (preferred selection if present)
+- Writes:
+  - cook_mode_tool.steps: [{ food_id, dish_name, steps: [...] }]
+  - cook_mode_tool.completed: [{ food_id, timestamp }]
+
+Decision hints:
+- If cook_mode_tool.steps is present, consider cooking guidance provided.
+- If cook_mode_tool.completed exists, treat request as fulfilled unless the user asks for follow-ups.
 """
 from typing import AsyncGenerator, Dict, Any, List
 import re
 import logging
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
+import dspy
+from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
+from types import GeneratorType
 
 
 def _extract_steps_from_recipe(recipe: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -21,6 +34,13 @@ def _extract_steps_from_recipe(recipe: Dict[str, Any]) -> List[Dict[str, Any]]:
     steps: List[Dict[str, Any]] = []
 
     cooking_steps = recipe.get("cooking_method_array") or recipe.get("directions") or []
+    # Materialise non-list iterables (e.g., generators) into a list
+    if cooking_steps and not isinstance(cooking_steps, (list, str)):
+        try:
+            if hasattr(cooking_steps, "__iter__"):
+                cooking_steps = [s for s in cooking_steps]
+        except Exception:
+            cooking_steps = []
     if isinstance(cooking_steps, str):
         # Split by sentences if string provided
         cooking_steps = re.split(r"(?<=[.!?])\s+", cooking_steps)
@@ -65,42 +85,86 @@ def _estimate_duration_seconds(text: str) -> int:
     return 60
 
 
+def _normalise_recipe_object(obj: Any) -> Dict[str, Any] | None:
+    """Normalise various possible recipe object shapes into a dict of fields.
+    Accepts:
+      - dict (returned as-is)
+      - Weaviate object with .properties
+      - generator/iterable yielding dicts (returns the first dict)
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj
+    # Weaviate object shape
+    if hasattr(obj, "properties") and isinstance(getattr(obj, "properties"), dict):
+        return getattr(obj, "properties")
+    # Generator / iterable of dicts
+    if isinstance(obj, GeneratorType) or (hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, dict))):
+        try:
+            for item in obj:
+                if isinstance(item, dict):
+                    return item
+                if hasattr(item, "properties") and isinstance(getattr(item, "properties"), dict):
+                    return getattr(item, "properties")
+        except Exception:
+            pass
+    return None
+
+
 def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> Dict[str, Any] | None:
     """Try to locate a recipe object from various environment slots."""
+    # 0) If a recipe_id was previously selected and stored, prioritise it
+    try:
+        selected = tree_data.environment.find("cook_mode_tool", "recipe_id")
+        if selected and selected[0]["objects"]:
+            sel_obj = selected[0]["objects"][0]
+            selected_id = sel_obj.get("food_id") or sel_obj.get("recipe_id")
+            if selected_id and (food_id is None or str(food_id) == str(selected_id)):
+                food_id = str(selected_id)
+    except Exception:
+        pass
     # 1) From weekly or daily plan
     for tool_name, name in [("plan_assemble_weekly_tool", "plan"), ("plan_assemble_day_tool", "plan")]:
         res = tree_data.environment.find(tool_name, name)
-        if res and res[0].objects:
-            plan = res[0].objects[0]
+        if res and res[0]["objects"]:
+            plan = res[0]["objects"][0]
             if plan.get("plan_type") == "day":
                 for meal_data in plan.get("meals", {}).values():
                     r = meal_data.get("recipe")
-                    if r and (food_id is None or r.get("food_id") == food_id):
-                        return r
+                    if r:
+                        r_norm = _normalise_recipe_object(r)
+                        if r_norm and (food_id is None or str(r_norm.get("food_id")) == str(food_id)):
+                            return r_norm
             elif plan.get("plan_type") == "week":
                 for day in plan.get("days", {}).values():
                     for meal_data in day.get("meals", {}).values():
                         r = meal_data.get("recipe")
-                        if r and (food_id is None or r.get("food_id") == food_id):
-                            return r
+                        if r:
+                            r_norm = _normalise_recipe_object(r)
+                            if r_norm and (food_id is None or str(r_norm.get("food_id")) == str(food_id)):
+                                return r_norm
 
-    # 2) From search/topk
-    res = tree_data.environment.find("score_and_rank_tool", "topk")
-    if res and res[0].objects:
-        for r in res[0].objects:
-            if not isinstance(r, dict):
-                continue
-            if food_id is None or r.get("food_id") == food_id:
-                return r
+    # 2) From search/topk (support both legacy and e2e writer tool names)
+    for tool_name in ("search_and_rank_tool", "score_and_rank_tool"):
+        res = tree_data.environment.find(tool_name, "topk")
+        if res and res[0]["objects"]:
+            for r in res[0]["objects"]:
+                if not isinstance(r, dict):
+                    continue
+                if food_id is None or str(r.get("food_id")) == str(food_id):
+                    return _normalise_recipe_object(r) or r
 
     return None
 
 
-@tool
+@tool(end=True)
 async def cook_mode_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
     food_id: str | None = None,
+    base_lm=None,
+    polish: bool = False,
     **kwargs,
 ) -> AsyncGenerator[Result | str | Error, None]:
     """
@@ -116,7 +180,7 @@ async def cook_mode_tool(
       - cook_mode_tool.steps
     """
     logging.info("cook_mode_tool: start (food_id=%s)", food_id)
-    yield "Preparing cooking steps..."
+    yield Response("Preparing cooking steps...")
 
     recipe = _find_recipe_from_environment(tree_data, food_id)
     if not recipe:
@@ -125,6 +189,12 @@ async def cook_mode_tool(
         yield Error(msg)
         return
 
+    # Normalise possible object types before extracting steps
+    recipe = _normalise_recipe_object(recipe) or recipe
+    if not isinstance(recipe, dict):
+        logging.error("cook_mode_tool: recipe object is not a dict; type=%s", type(recipe))
+        yield Error("Recipe format not recognised")
+        return
     steps = _extract_steps_from_recipe(recipe)
     if not steps:
         logging.error("cook_mode_tool: no steps extracted (food_id=%s)", recipe.get("food_id"))
@@ -136,7 +206,80 @@ async def cook_mode_tool(
         name="steps",
         objects=[{"food_id": recipe.get("food_id"), "dish_name": recipe.get("dish_name"), "steps": steps}],
         metadata={"steps_count": len(steps), "tool": "cook_mode_tool"},
+        payload_type="generic",
     )
+    # Provide a concise document-style summary to help the decision agent conclude
+    try:
+        dish = str(recipe.get("dish_name") or "the dish")
+        steps_count = len(steps)
+        yield Result(
+            name="final_summary",
+            objects=[{
+                "title": f"Cooking instructions for {dish}",
+                "text": f"Provided {steps_count} step-by-step instructions for {dish}. You can start cooking now.",
+            }],
+            metadata={"dish_name": dish, "steps_count": steps_count},
+            payload_type="document",
+        )
+        # Hint the decision agent to end the session after successful cooking
+        yield Result(
+            name="next_action_hint",
+            objects=[{"suggested_action": "end", "reason": "primary goal completed"}],
+            metadata={"suggested_action": "end"},
+            payload_type="generic",
+        )
+    except Exception:
+        pass
+    # Mark cooking session complete for decision agent awareness
+    try:
+        from datetime import datetime
+        tree_data.environment.add_objects(
+            "cook_mode_tool",
+            "completed",
+            [{"food_id": str(recipe.get("food_id") or ""), "timestamp": datetime.utcnow().isoformat()}],
+            metadata={"status": "done"},
+        )
+    except Exception:
+        pass
+
+    # Optional polish with ElysiaChainOfThought for a brief intro/tips
+    if base_lm and polish:
+        try:
+            class CookIntroPrompt(dspy.Signature):
+                """
+                Create a short, friendly cooking intro and 3 quick tips based on the dish name and number of steps.
+                Keep it concise and practical, do not repeat step content.
+                """
+                dish_name = dspy.InputField(description="Dish name.")
+                num_steps = dspy.InputField(description="Number of steps.")
+                message_update = dspy.OutputField(description="One-sentence update about polishing the guidance.")
+                intro = dspy.OutputField(description="A 1-2 sentence intro with a positive tone.")
+                tips = dspy.OutputField(description="A short bulleted list (max 3 bullets).")
+
+            cot = ElysiaChainOfThought(
+                CookIntroPrompt,
+                tree_data=tree_data,
+                reasoning=False,
+                impossible=False,
+                message_update=True,
+                environment=False,
+                tasks_completed=False,
+            )
+            pred = await cot.aforward(
+                lm=base_lm,
+                dish_name=str(recipe.get("dish_name") or "your dish"),
+                num_steps=len(steps),
+            )
+            if getattr(pred, "message_update", None):
+                yield Response(str(pred.message_update))
+            intro_text = str(getattr(pred, "intro", "")).strip()
+            tips_text = str(getattr(pred, "tips", "")).strip()
+            if intro_text:
+                yield Response(intro_text)
+            if tips_text:
+                yield Response(tips_text)
+        except Exception as e:
+            logging.debug(f"cook_mode_tool: CoT polish skipped due to error: {str(e)}")
 
     # Stream each step as text
     for step in steps:
@@ -144,7 +287,7 @@ async def cook_mode_tool(
         txt = step.get("instruction")
         dur = step.get("estimated_seconds")
         logging.debug("cook_mode_tool: step %s (%ss): %s", idx, dur, txt)
-        yield f"Step {idx}: {txt} (est. {dur}s)"
+        yield Response(f"Step {idx}: {txt} (est. {dur}s)")
     
     logging.info("cook_mode_tool: complete (steps=%s)", len(steps))
-    yield "Cooking guidance complete."
+    yield Response("Cooking guidance complete.")

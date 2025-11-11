@@ -143,26 +143,26 @@ async def variety_guard_tool(
     repeated_recipes = []
     if recipe_counts:
         try:
-            with client_manager.connect_to_client() as client:
-                recipe_collection = client.collections.get("Recipe")
-                for food_id, count in recipe_counts.items():
-                    if count > 1:
-                        recipe_name = ""
-                        try:
-                            # Fetch recipe name
-                            recipe_results = recipe_collection.query.fetch_objects(
-                                where={"path": ["food_id"], "operator": "Equal", "valueString": food_id},
-                                limit=1,
-                            )
-                            if recipe_results.objects:
-                                recipe_name = recipe_results.objects[0].properties.get("dish_name", "")
-                        except Exception:
-                            pass  # Keep empty name if fetch fails
-                        repeated_recipes.append({
-                            "food_id": food_id,
-                            "count": count,
-                            "recipe_name": recipe_name,
-                        })
+            client = client_manager.get_client()
+            recipe_collection = client.collections.get("Recipe")
+            for food_id, count in recipe_counts.items():
+                if count > 1:
+                    recipe_name = ""
+                    try:
+                        # Fetch recipe name
+                        recipe_results = recipe_collection.query.fetch_objects(
+                            where={"path": ["food_id"], "operator": "Equal", "valueString": food_id},
+                            limit=1,
+                        )
+                        if recipe_results.objects:
+                            recipe_name = recipe_results.objects[0].properties.get("dish_name", "")
+                    except Exception:
+                        pass  # Keep empty name if fetch fails
+                    repeated_recipes.append({
+                        "food_id": food_id,
+                        "count": count,
+                        "recipe_name": recipe_name,
+                    })
         except Exception:
             # Fallback: create without names if client access fails
             repeated_recipes = [
@@ -191,6 +191,7 @@ async def variety_guard_tool(
         name="report",
         objects=[report],
         metadata={"variety_score": variety_score, "repetitions": len(repeated_recipes)},
+        payload_type="generic",
     )
     
     if warnings:

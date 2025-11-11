@@ -16,14 +16,12 @@ from elysia.api.routes import (
     feedback,
     init,
     processor,
-    cooking,
     query,
     user_config,
     tree_config,
     utils,
     tools,
     db,
-    meals,
 )
 from elysia.api.services.user import UserManager
 from elysia.api.utils.resources import print_resources
@@ -92,8 +90,6 @@ app.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 app.include_router(utils.router, prefix="/util", tags=["utilities"])
 app.include_router(tools.router, prefix="/tools", tags=["tools"])
 app.include_router(db.router, prefix="/db", tags=["db"])
-app.include_router(meals.router, tags=["meals"])  # No prefix, routes include full path
-app.include_router(cooking.router, tags=["meals"])  # No prefix, routes include full path
 
 
 # Health check endpoint (kept in main app.py due to its simplicity)

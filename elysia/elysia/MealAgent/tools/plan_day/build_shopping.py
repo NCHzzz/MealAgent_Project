@@ -1,7 +1,7 @@
 from typing import AsyncGenerator, Dict, Any, List
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -71,7 +71,7 @@ async def build_shopping_tool(
     Environment writes:
       - environment["build_shopping_tool"]["items"]
     """
-    yield "Building shopping list from plan..."
+    yield Response("Building shopping list from plan...")
 
     # Read plan
     plan_results = tree_data.environment.find("plan_assemble_day_tool", "plan")
@@ -98,5 +98,12 @@ async def build_shopping_tool(
         objects=[shopping_list],
         metadata={"plan_type": plan.get("plan_type", "day"), "items_count": len(items)},
     )
-    yield f"Shopping list built: {len(items)} items"
+    # Table view of rows (items) for frontend display
+    yield Result(
+        name="items_table",
+        objects=items,
+        metadata={"plan_type": plan.get("plan_type", "day"), "items_count": len(items)},
+        payload_type="table",
+    )
+    yield Response(f"Shopping list built: {len(items)} items")
 

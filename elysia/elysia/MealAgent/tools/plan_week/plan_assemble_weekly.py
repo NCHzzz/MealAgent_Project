@@ -5,7 +5,7 @@ from typing import AsyncGenerator, List, Dict, Any
 from datetime import datetime, timedelta
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -73,7 +73,7 @@ async def plan_assemble_weekly_tool(
     Environment writes:
       - environment["plan_assemble_weekly_tool"]["plan"]
     """
-    yield "Assembling weekly meal plan (21 meals)..."
+    yield Response("Assembling weekly meal plan (21 meals)...")
 
     # Read ranked recipes
     recipes_results = tree_data.environment.find("score_and_rank_tool", "topk")
@@ -84,7 +84,7 @@ async def plan_assemble_weekly_tool(
     recipes = recipes_results[0].objects
 
     if len(recipes) < 21:
-        yield f"Warning: Only {len(recipes)} recipes available, may need to reuse recipes for 21 meals."
+        yield Response(f"Warning: Only {len(recipes)} recipes available, may need to reuse recipes for 21 meals.")
 
     # Parse start_date or use today
     if start_date:
@@ -212,6 +212,7 @@ async def plan_assemble_weekly_tool(
         name="plan",
         objects=[plan_output],
         metadata={"plan_type": "week", "meals_count": 21, "days_count": 7},
+        payload_type="generic",
     )
-    yield f"Weekly plan assembled: {total_macros['kcal']:.0f} kcal total | {total_macros['kcal']/7:.0f} kcal/day avg"
+    yield Response(f"Weekly plan assembled: {total_macros['kcal']:.0f} kcal total | {total_macros['kcal']/7:.0f} kcal/day avg")
 

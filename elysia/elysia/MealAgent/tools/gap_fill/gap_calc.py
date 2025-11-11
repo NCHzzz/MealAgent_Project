@@ -4,7 +4,7 @@ Calculate macro deficits in meal plans.
 from typing import AsyncGenerator, Dict, Any
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -62,7 +62,7 @@ async def gap_calc_tool(
     Environment writes:
       - environment["gap_calc_tool"]["deficits"]
     """
-    yield "Calculating macro deficits..."
+    yield Response("Calculating macro deficits...")
 
     # Read plan
     weekly_results = tree_data.environment.find("plan_assemble_weekly_tool", "plan")
@@ -137,11 +137,12 @@ async def gap_calc_tool(
             "has_deficits": len(deficit_macros) > 0,
             "deficit_count": len(deficit_macros),
         },
+        payload_type="generic",
     )
 
     if deficit_macros:
         deficit_str = ", ".join([f"{k}: {v:.1f}" for k, v in deficit_macros.items()])
-        yield f"Deficits found: {deficit_str}"
+        yield Response(f"Deficits found: {deficit_str}")
     else:
-        yield "No deficits - plan meets or exceeds targets"
+        yield Response("No deficits - plan meets or exceeds targets")
 
