@@ -147,6 +147,13 @@ async def suggest_substitutes_tool(
             "tolerance": tolerance,
         }
 
+        # Stream response first for immediate feedback
+        if suggestions:
+            yield Response(f"Found {len(suggestions)} substitute suggestions")
+        else:
+            yield Response("No suitable substitutes found within tolerance")
+        
+        # Then yield Result objects for data consistency
         yield Result(
             name="substitutes",
             objects=[substitutes_output],
@@ -166,11 +173,6 @@ async def suggest_substitutes_tool(
             },
             payload_type="table",
         )
-
-        if suggestions:
-            yield Response(f"Found {len(suggestions)} substitute suggestions")
-        else:
-            yield Response("No suitable substitutes found within tolerance")
 
     except Exception as e:
         yield Error(f"Substitute suggestion failed: {str(e)}")

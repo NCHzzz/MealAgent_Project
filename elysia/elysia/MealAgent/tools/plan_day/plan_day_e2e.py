@@ -36,6 +36,14 @@ async def plan_day_e2e_tool(
     """
     End-to-end: search_and_rank → assemble 3-meal plan in one tool.
     Expects ranked items already available or fails fast.
+
+    Environment reads:
+      - search_and_rank_tool.topk (or legacy score_and_rank_tool.topk)
+    Environment writes:
+      - plan_day_e2e_tool.plan: [{ plan_type: "day", meals: {...}, total_macros: {...} }]
+
+    Decision hints:
+      - If plan_day_e2e_tool.plan is present, a daily meal plan has been assembled successfully.
     """
     logging.info("plan_day_e2e_tool: start")
     yield Response("Building daily plan in one step...")
@@ -94,13 +102,16 @@ async def plan_day_e2e_tool(
             "created_at": None,
         }
 
+        # Stream response first for immediate feedback
+        yield Response(f"Daily plan (one-step) assembled: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P")
+        
+        # Then yield Result for data consistency
         yield Result(
             name="plan",
             objects=[plan_output],
             metadata={"plan_type": "day", "meals_count": 3},
             payload_type="generic",
         )
-        yield Response(f"Daily plan (one-step) assembled: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P")
 
     except Exception as e:
         yield Error(f"plan_day_e2e_tool failed: {str(e)}")

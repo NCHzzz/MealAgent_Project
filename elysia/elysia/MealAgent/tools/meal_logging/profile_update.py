@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import json
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -26,7 +26,7 @@ async def profile_update_tool(
     Environment writes:
       - environment["profile_update_tool"]["updated_profile"]
     """
-    yield "Updating profile with consumed nutrition..."
+    yield Response("Updating profile with consumed nutrition...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -151,13 +151,16 @@ async def profile_update_tool(
             "log_entry": log_entry,
         }
 
+        # Stream response first for immediate feedback
+        yield Response(f"Meal logged successfully. Remaining: {remaining_targets['kcal']:.0f} kcal | {remaining_targets['protein_g']:.0f}g P")
+        
+        # Then yield Result for data consistency
         yield Result(
             name="updated_profile",
             objects=[updated_data],
             metadata={"user_id": user_id, "logged_at": log_entry["logged_at"]},
             payload_type="generic",
         )
-        yield f"Meal logged successfully. Remaining: {remaining_targets['kcal']:.0f} kcal | {remaining_targets['protein_g']:.0f}g P"
 
     except Exception as e:
         yield Error(f"Profile update failed for user {user_id}: {str(e)}")

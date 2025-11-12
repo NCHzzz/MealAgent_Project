@@ -208,11 +208,14 @@ async def plan_assemble_weekly_tool(
         "created_at": datetime.now().isoformat(),
     }
 
+    # Stream response first for immediate feedback
+    yield Response(f"Weekly plan assembled: {total_macros['kcal']:.0f} kcal total | {total_macros['kcal']/7:.0f} kcal/day avg")
+    
+    # Then yield Result for data consistency
     yield Result(
         name="plan",
         objects=[plan_output],
         metadata={"plan_type": "week", "meals_count": 21, "days_count": 7},
         payload_type="generic",
     )
-    yield Response(f"Weekly plan assembled: {total_macros['kcal']:.0f} kcal total | {total_macros['kcal']/7:.0f} kcal/day avg")
 

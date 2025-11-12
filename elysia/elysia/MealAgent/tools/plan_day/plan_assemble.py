@@ -170,13 +170,16 @@ async def plan_assemble_day_tool(
             f"protein={total_macros['protein_g']:.0f}g)"
         )
 
+        # Stream response first for immediate feedback
+        yield Response(f"Daily plan assembled: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P | {total_macros['fat_g']:.0f}g F | {total_macros['carb_g']:.0f}g C")
+        
+        # Then yield Result for data consistency
         yield Result(
             name="plan",
             objects=[plan_output],
             metadata={"plan_type": "day", "meals_count": 3},
             payload_type="generic",
         )
-        yield Response(f"Daily plan assembled: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P | {total_macros['fat_g']:.0f}g F | {total_macros['carb_g']:.0f}g C")
 
     except ValueError as e:
         error_msg = f"Invalid input: {str(e)}"

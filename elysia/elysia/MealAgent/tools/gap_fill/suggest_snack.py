@@ -102,6 +102,13 @@ async def suggest_snack_tool(
             "count": len(suggestions),
         }
 
+        # Stream response first for immediate feedback
+        if suggestions:
+            yield Response(f"Found {len(suggestions)} snack suggestions to fill deficits")
+        else:
+            yield Response("No suitable snacks found to fill deficits")
+        
+        # Then yield Result for data consistency
         yield Result(
             name="suggestions",
             objects=[suggestions_output],
@@ -111,11 +118,6 @@ async def suggest_snack_tool(
             },
             payload_type="generic",
         )
-
-        if suggestions:
-            yield Response(f"Found {len(suggestions)} snack suggestions to fill deficits")
-        else:
-            yield Response("No suitable snacks found to fill deficits")
 
     except Exception as e:
         yield Error(f"Snack suggestion failed: {str(e)}")

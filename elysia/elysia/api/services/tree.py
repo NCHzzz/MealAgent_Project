@@ -14,6 +14,7 @@ from elysia.util.client import ClientManager
 from elysia.tree.util import delete_tree_from_weaviate
 from elysia.api.utils.config import Config, BranchInitType
 from elysia.config import Settings
+from elysia.api.core.log import logger
 
 
 class TreeManager:
@@ -187,6 +188,17 @@ class TreeManager:
         tree = await Tree.import_from_weaviate(
             "ELYSIA_TREES__", conversation_id, client_manager
         )
+        
+        # Register MealAgent tools after loading tree from Weaviate
+        # This ensures tools are available even when tree is loaded from saved state
+        try:
+            from elysia.MealAgent.tree.config import try_register_meal_agent_tools
+            num_registered = try_register_meal_agent_tools(tree)
+            if num_registered > 0:
+                logger.debug(f"Registered {num_registered} MealAgent tools after loading tree {conversation_id}")
+        except Exception as e:
+            logger.warning(f"Failed to register MealAgent tools after loading tree {conversation_id}: {e}")
+        
         if conversation_id not in self.trees:
             self.trees[conversation_id] = {
                 "tree": None,

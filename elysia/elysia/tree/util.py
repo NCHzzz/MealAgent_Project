@@ -479,12 +479,25 @@ class DecisionNode:
                     f"Model picked an action `{output.function_name}` that is not in the available tools: {available_tools}"
                 )
 
+            # Determine end_actions: rely on LLM decision and tool's end flag
+            # The LLM has access to environment via ElysiaChainOfThought (environment=True)
+            # and can see completion signals like final_summary, next_action_hint, completed flags
+            # We trust the LLM's decision based on what it sees in the environment
+            tool_has_end_flag = bool(self.options[output.function_name]["end"])
+            llm_says_end = bool(output.end_actions)
+            
+            # Set end_actions=True if:
+            # 1. LLM explicitly says to end (it has seen completion signals in environment), OR
+            # 2. Tool has end=True flag AND LLM says to end
+            # We do NOT hard code specific tool names or result names - the LLM decides based on environment
+            final_end_actions = llm_says_end or (tool_has_end_flag and llm_says_end)
+            
             decision = Decision(
                 output.function_name,
                 output.function_inputs,
                 output.reasoning if tree_data.settings.BASE_USE_REASONING else "",
                 output.impossible,
-                output.end_actions and bool(self.options[output.function_name]["end"]),
+                final_end_actions,
             )
 
             results = [

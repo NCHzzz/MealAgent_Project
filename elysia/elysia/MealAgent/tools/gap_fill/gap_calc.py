@@ -129,6 +129,14 @@ async def gap_calc_tool(
         "has_deficits": len(deficit_macros) > 0,
     }
 
+    # Stream response first for immediate feedback
+    if deficit_macros:
+        deficit_str = ", ".join([f"{k}: {v:.1f}" for k, v in deficit_macros.items()])
+        yield Response(f"Deficits found: {deficit_str}")
+    else:
+        yield Response("No deficits - plan meets or exceeds targets")
+    
+    # Then yield Result for data consistency
     yield Result(
         name="deficits",
         objects=[deficits_output],
@@ -139,10 +147,4 @@ async def gap_calc_tool(
         },
         payload_type="generic",
     )
-
-    if deficit_macros:
-        deficit_str = ", ".join([f"{k}: {v:.1f}" for k, v in deficit_macros.items()])
-        yield Response(f"Deficits found: {deficit_str}")
-    else:
-        yield Response("No deficits - plan meets or exceeds targets")
 

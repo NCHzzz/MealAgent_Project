@@ -141,6 +141,13 @@ async def apply_substitute_tool(
             elif recalculate_macros and not base_lm:
                 yield Response("Warning: base_lm not provided. Macros not recalculated. Run calculate_recipe_macros_tool manually.")
 
+            # Stream response first for immediate feedback
+            if macros_recalculated:
+                yield Response(f"Substitute applied to {len(updated_recipes)} recipe(s). Macros recalculated.")
+            else:
+                yield Response(f"Substitute applied to {len(updated_recipes)} recipe(s). Run calculate_recipe_macros_tool to update macros.")
+            
+            # Then yield Result for data consistency
             yield Result(
                 name="updated_plan",
                 objects=[plan],
@@ -153,11 +160,6 @@ async def apply_substitute_tool(
                 },
                 payload_type="generic",
             )
-            
-            if macros_recalculated:
-                yield Response(f"Substitute applied to {len(updated_recipes)} recipe(s). Macros recalculated.")
-            else:
-                yield Response(f"Substitute applied to {len(updated_recipes)} recipe(s). Run calculate_recipe_macros_tool to update macros.")
 
     except Exception as e:
         yield Error(f"Substitute application failed: {str(e)}")

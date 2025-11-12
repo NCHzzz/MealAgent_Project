@@ -65,11 +65,14 @@ async def target_resolver_tool(
             "source": "default",
         }
 
+    # Stream response first for immediate feedback
+    yield Response(f"Targets resolved from {resolved.get('source')}: {resolved['tdee_kcal']:.0f} kcal")
+    
+    # Then yield Result for data consistency
     yield Result(
         name="resolved",
         objects=[resolved],
         metadata={"source": resolved.get("source")},
         payload_type="generic",
     )
-    yield Response(f"Targets resolved from {resolved.get('source')}: {resolved['tdee_kcal']:.0f} kcal")
 

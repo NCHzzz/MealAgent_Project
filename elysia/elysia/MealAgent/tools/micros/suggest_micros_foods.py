@@ -114,6 +114,11 @@ async def suggest_micros_foods_tool(
             "count": len(unique_suggestions[:top_k]),
         }
 
+        # Stream response first for immediate feedback
+        if unique_suggestions:
+            yield Response(f"Found {len(unique_suggestions[:top_k])} food suggestions for deficient nutrients")
+        
+        # Then yield Result for data consistency
         yield Result(
             name="suggestions",
             objects=[suggestions_output],
@@ -123,59 +128,57 @@ async def suggest_micros_foods_tool(
             },
             payload_type="generic",
         )
+        
+        # Optional CoT summary document when base_lm is available
+        if base_lm:
+            try:
+                class MicrosSummaryPrompt(dspy.Signature):
+                    """
+                    Create a brief user-facing summary of micronutrient suggestions.
+                    Include which nutrients are deficient and the top 3 example foods with their key nutrient values.
+                    Keep it concise and practical.
+                    """
+                    deficient = dspy.InputField(description="List of deficient nutrient keys (e.g., calcium_mg).")
+                    suggestions = dspy.InputField(description="List of suggestion dicts with description and nutrient_value.")
+                    message_update = dspy.OutputField(description="One sentence update about generating the summary.")
+                    summary = dspy.OutputField(description="Concise markdown summary text.")
 
-        if unique_suggestions:
-            yield Response(f"Found {len(unique_suggestions[:top_k])} food suggestions for deficient nutrients")
-            # Optional CoT summary document when base_lm is available
-            if base_lm:
-                try:
-                    class MicrosSummaryPrompt(dspy.Signature):
-                        """
-                        Create a brief user-facing summary of micronutrient suggestions.
-                        Include which nutrients are deficient and the top 3 example foods with their key nutrient values.
-                        Keep it concise and practical.
-                        """
-                        deficient = dspy.InputField(description="List of deficient nutrient keys (e.g., calcium_mg).")
-                        suggestions = dspy.InputField(description="List of suggestion dicts with description and nutrient_value.")
-                        message_update = dspy.OutputField(description="One sentence update about generating the summary.")
-                        summary = dspy.OutputField(description="Concise markdown summary text.")
-
-                    cot = ElysiaChainOfThought(
-                        MicrosSummaryPrompt,
-                        tree_data=tree_data,
-                        reasoning=False,
-                        impossible=False,
-                        message_update=True,
-                        environment=False,
-                        tasks_completed=False,
+                cot = ElysiaChainOfThought(
+                    MicrosSummaryPrompt,
+                    tree_data=tree_data,
+                    reasoning=False,
+                    impossible=False,
+                    message_update=True,
+                    environment=False,
+                    tasks_completed=False,
+                )
+                # Pick top 3 to keep prompt small
+                top_examples = unique_suggestions[: min(3, len(unique_suggestions))]
+                pred = await cot.aforward(
+                    lm=base_lm,
+                    deficient=deficient_nutrients,
+                    suggestions=top_examples,
+                )
+                if getattr(pred, "message_update", None):
+                    yield Response(str(pred.message_update))
+                summary_text = str(getattr(pred, "summary", "")).strip()
+                if summary_text:
+                    yield Result(
+                        name="micros_summary",
+                        objects=[{"content": summary_text}],
+                        metadata={"deficient": deficient_nutrients, "count": len(unique_suggestions[:top_k])},
+                        payload_type="document",
+                        mapping={
+                            "content": "content",
+                            "title": "",
+                            "author": "",
+                            "date": "",
+                            "category": "",
+                        },
                     )
-                    # Pick top 3 to keep prompt small
-                    top_examples = unique_suggestions[: min(3, len(unique_suggestions))]
-                    pred = await cot.aforward(
-                        lm=base_lm,
-                        deficient=deficient_nutrients,
-                        suggestions=top_examples,
-                    )
-                    if getattr(pred, "message_update", None):
-                        yield Response(str(pred.message_update))
-                    summary_text = str(getattr(pred, "summary", "")).strip()
-                    if summary_text:
-                        yield Result(
-                            name="micros_summary",
-                            objects=[{"content": summary_text}],
-                            metadata={"deficient": deficient_nutrients, "count": len(unique_suggestions[:top_k])},
-                            payload_type="document",
-                            mapping={
-                                "content": "content",
-                                "title": "",
-                                "author": "",
-                                "date": "",
-                                "category": "",
-                            },
-                        )
-                except Exception:
-                    # Non-fatal if CoT summary fails
-                    pass
+            except Exception:
+                # Non-fatal if CoT summary fails
+                pass
         else:
             yield Response("No suitable foods found")
 

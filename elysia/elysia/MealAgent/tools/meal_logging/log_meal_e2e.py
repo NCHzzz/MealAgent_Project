@@ -19,6 +19,14 @@ async def log_meal_e2e_tool(
 ) -> AsyncGenerator[Result | str | Error, None]:
     """
     End-to-end: parse → nutrition_calc → update profile → emit final result.
+
+    Environment reads:
+      - profile_crud_tool.profile (for current profile state)
+    Environment writes:
+      - log_meal_e2e_tool.updated_profile: [{ remaining_targets, consumed_today, consumed_this_meal, log_entry, warnings }]
+
+    Decision hints:
+      - If log_meal_e2e_tool.updated_profile is present, the meal has been logged successfully.
     """
     yield Response("Logging meal in one step...")
 
@@ -211,13 +219,16 @@ Return JSON with:
             "warnings": warnings,
         }
 
+        # Stream response first for immediate feedback
+        yield Response(f"Meal logged. Remaining: {remaining_targets['kcal']:.0f} kcal | {remaining_targets['protein_g']:.0f}g P")
+        
+        # Then yield Result for data consistency
         yield Result(
             name="updated_profile",
             objects=[updated],
             metadata={"user_id": user_id, "logged_at": log_entry["logged_at"]},
             payload_type="generic",
         )
-        yield Response(f"Meal logged. Remaining: {remaining_targets['kcal']:.0f} kcal | {remaining_targets['protein_g']:.0f}g P")
 
     except Exception as e:
         yield Error(f"log_meal_e2e_tool failed: {str(e)}")

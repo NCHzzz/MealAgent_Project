@@ -167,11 +167,14 @@ async def apply_snack_tool(
             "carb_g": updated_macros["carb_g"] / 7.0,
         }
 
+    # Stream response first for immediate feedback
+    yield Response(f"Snack added. Updated totals: {updated_macros['kcal']:.0f} kcal | {updated_macros['protein_g']:.0f}g P")
+    
+    # Then yield Result for data consistency
     yield Result(
         name="updated_plan",
         objects=[plan],
         metadata={"plan_type": plan.get("plan_type"), "snack_added": True},
         payload_type="generic",
     )
-    yield Response(f"Snack added. Updated totals: {updated_macros['kcal']:.0f} kcal | {updated_macros['protein_g']:.0f}g P")
 

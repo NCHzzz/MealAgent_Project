@@ -175,62 +175,9 @@ description: Clarify the problem space, gather requirements, and define success 
 - User Input → Tree → LLM Tool (async generator) → Yield Text (streaming progress)
 - LLM Tool → Yield Result (to Environment) → Code Validation Tool → Final Validated Result
 
----
-
-**Category 1: Code-Only (Deterministic) Components**
-*These tools contain NO LLM calls; pure algorithmic computation*
-
-| Tool Branch | Tool Name | Purpose | Environment Key |
-|-------------|-----------|---------|-----------------|
-| `profile` | `MacroCalcTool` | Harris-Benedict TDEE calculation | `environment["macro_calc_tool"]["targets"]` |
-| `constraints` | `DietAllergenGuard` | Generate hard filters from profile | `environment["diet_allergen_guard_tool"]["filters"]` |
-| `plan_day` | `PlanValidate` | Validate constraints (diet/allergen/macro) | `environment["plan_validate_tool"]["report"]` |
-| `shopping` | `PantryDiff` | Subtract pantry from shopping list | `environment["pantry_diff_tool"]["diff"]` |
-| `gap_fill` | `GapCalc` | Calculate deficit (target - consumed) | `environment["gap_calc_tool"]["deficits"]` |
-| `micros` | `MicronutrientCheck` | Aggregate micros using FdcPortion | `environment["micronutrient_check_tool"]["totals"]` |
-
-**Rationale**: Nutritional calculations, constraint enforcement, and inventory math require 100% accuracy and auditability. No LLM hallucination risk allowed.
-
----
-
-**Category 2: LLM-Enhanced Tools (with Code Safety Net)**
-*Each LLM tool follows this pattern:*
-1. **Yield Text**: Stream LLM reasoning to UI (transparency)
-2. **LLM Call**: Get structured output (JSON schema enforced)
-3. **Code Validation**: Verify LLM output meets hard constraints
-4. **Yield Result**: Store validated data in Environment
-5. **Error Handling**: If LLM fails or validation fails, yield Error and fallback to code-based approach
-
-| Tool Branch | Tool Name | LLM Role | Code Validation | Fallback Strategy |
-|-------------|-----------|----------|-----------------|-------------------|
-| `meal_logging` | `MealParser` | Parse "I ate chicken salad" → `{dish: "Chicken Salad", ingredients: [...], portion: 1}` | Check if parsed ingredients exist in FDC; re-prompt if missing | Ask user to select from dropdown if parsing fails 3x |
-| `search` | `QueryEnhancer` | Expand "healthy dinner" → "low-calorie high-protein dinner recipes vegetarian gluten-free" | Validate generated keywords against known tags | Use original query if expansion produces no results |
-| `search` | `ScoreAndRank` | Semantic scoring of recipe fit to user preferences | Code validates top-k recipes still pass diet/allergen filters | Fall back to pure code-based scoring (macro distance + BM25) |
-| `substitution` | `SuggestSubstitutes` | "Sour cream" → ["Greek yogurt", "Cottage cheese", "Cashew cream"] | Code validates macros within ±20%; allergen-free | Return empty if no valid substitutes; prompt user to adjust recipe |
-| `cook_mode` | `InstructionParser` | Split unstructured recipe text into structured steps with time estimates | Code validates time estimates sum to recipe total_time | Use regex-based fallback parser (less accurate but deterministic) |
-| `explain` | `ExplainGenerator` | Generate natural language explanation from Environment data | Code validates all referenced data exists in Environment | Template-based explanation if LLM fails |
-| `variety` | `CuisineClassifier` | Classify recipe cuisine/flavor profile for diversity scoring | Code validates classification against known cuisines | Use recipe tags as fallback |
-
-**Note**: Environment keys follow Elysia's standard: `environment[tool_name][name]` where `tool_name` is the function name (e.g., `meal_parser_tool`) and `name` is the Result's name parameter.
+--
 
 
-**Category 3: Hybrid Orchestration (LLM + Code in Sequence)**
-*Tree orchestrates multiple tools in sequence; LLM output feeds into code validation*
-
-| Workflow | Steps | Data Flow |
-|----------|-------|-----------|
-| **Meal Logging** | 1. `MealParser` (LLM)<br>2. `NutritionCalc` (Code)<br>3. `ProfileUpdate` (Code) | User input → LLM parses → Code calculates nutrition → Code saves to profile |
-| **Recipe Recommendation** | 1. `QueryEnhancer` (LLM)<br>2. `HybridSearch` (Code)<br>3. `ScoreAndRank` (LLM)<br>4. `ConstraintFilter` (Code) | User query → LLM expands → Code retrieves → LLM ranks → Code filters |
-| **Ingredient Substitution** | 1. `SuggestSubstitutes` (LLM)<br>2. `ValidateSubstitutes` (Code)<br>3. `ApplySubstitute` (Code) | User requests swap → LLM suggests → Code validates macros/allergens → Code updates recipe |
-
-
-**Key Advantages of This Architecture**:
-1. **Transparency**: Every LLM call yields Text (reasoning visible to user)
-2. **Traceability**: All LLM outputs stored in Environment with validation status
-3. **Safety**: Code validation catches LLM hallucinations before data is saved
-4. **Fallback**: Every LLM tool has deterministic fallback if LLM fails
-5. **Debuggability**: Environment history shows exact LLM input/output for each step
-6. **Testability**: Can mock LLM responses in tests; code validation logic is unit-testable
 
 ---
 
@@ -244,8 +191,7 @@ description: Clarify the problem space, gather requirements, and define success 
 ### Business Constraints
 - **Data Source**: 
   - **FDC Nutritional Data**: USDA FoodData Central (public domain, no licensing fees)
-  - **Demo Recipe Corpus**: 4,000 sample recipes pre-loaded at `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
-  - **Production Scaling**: Plan to expand to 10k+ recipes (source TBD - community contribution, licensing, or web scraping with legal review)
+  - **Demo Recipe Corpus**: 4,000 sample recipes pre-loaded at `D:\Elysia_Dev\MealAgent\MealAgentDev\data`
 - **User Privacy**: No sharing of user profiles or meal plans without explicit consent
 
 ### Regulatory Constraints
@@ -256,10 +202,6 @@ description: Clarify the problem space, gather requirements, and define success 
   - "Consult healthcare provider before making significant dietary changes"
 - **FDA Disclaimer**: Nutritional information presented "as-is" with standard FDA disclaimer
 
-
-### Time/Budget Constraints
-- MVP delivery: 6 weeks 
-- Team: 1 backend engineer, 1 frontend engineer 
 
 ### Assumptions
 1. **Recipe Corpus Availability**: Demo starts with 4k recipes (already stored); production will scale to 10k+
@@ -274,12 +216,6 @@ description: Clarify the problem space, gather requirements, and define success 
 
 ## Questions & Open Items
 
-### Unresolved Questions
-1. **Recipe Expansion Strategy**: After demo (4k recipes), how to reach 10k+? (Community contribution platform? Licensed dataset? Web scraping with legal review?)
-2. **Portion Mapping Edge Cases**: How to handle non-standard portions (e.g., "1 large onion" vs FDC's gram-based portions)? Auto-approximate or require manual mapping?
-3. **Multi-language Support**: English-only for MVP, or internationalization from start? (Impacts LLM prompts, recipe corpus, UI)
-4. **Offline Mode**: Should frontend cache plans/recipes for offline access, or always-online only?
-5. **Meal Logging Accuracy**: How to validate LLM-parsed meals against user intent? (Show parsed nutrition for confirmation before saving?)
 
 ### Additional Requirements Clarifications
 - **Data provenance & validation**: ETL must map source FDC data into collections as follows:
@@ -328,7 +264,7 @@ description: Clarify the problem space, gather requirements, and define success 
 - [Nutrition Data Standards](https://www.mdpi.com/2072-6643/17/9/1492) - Best practices for nutritional databases
 
 ### B. Data Sources
-- **Demo Dataset Location**: `D:\Elysia_cursor\elysia\elysia\MealAgent\data`
+- **Demo Dataset Location**: `D:\Elysia_Dev\MealAgent\MealAgentDev\data`
 - **Demo Dataset Size**: 4,000 recipes with structured ingredients and nutritional information
 - **FDC Data**: USDA FoodData Central (to be imported during setup phase)
 - **FdcPortion Mappings**: Portion conversion table from USDA (part of FDC download)

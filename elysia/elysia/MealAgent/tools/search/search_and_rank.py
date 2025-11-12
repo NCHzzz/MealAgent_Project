@@ -248,8 +248,17 @@ async def search_and_rank_tool(
             payload_type="table",
         )
         # Suggest a sensible next action for the decision agent
+        # Only suggest cook_mode if cooking hasn't been completed yet
         try:
-            suggested = "cook_mode" if collection_name.lower() == "recipe" else "inspect_results"
+            # Check if cooking is already completed
+            completed_check = tree_data.environment.find("cook_mode_tool", "completed")
+            cooking_completed = completed_check and completed_check[0].get("objects")
+            
+            if collection_name.lower() == "recipe" and not cooking_completed:
+                suggested = "cook_mode"
+            else:
+                suggested = "inspect_results"
+            
             yield Result(
                 name="next_action_hint",
                 objects=[{"suggested_action": suggested, "reason": "ranked results available"}],

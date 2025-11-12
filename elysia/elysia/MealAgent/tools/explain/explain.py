@@ -161,11 +161,23 @@ async def explain_tool(
     """
     Generate a natural-language explanation from the Environment.
 
+    **IMPORTANT: This tool can END the conversation** after successfully providing an explanation.
+    When this tool completes successfully, the user's request for an explanation has been FULLY FULFILLED.
+    After this tool completes, you should set `end_actions=True` to stop further processing.
+
     If an LLM client (base_lm) is provided, polish the explanation; otherwise return
     a deterministic, template-based explanation.
 
-    Environment reads: various results (profile, targets, constraints, ranking, plans)
-    Environment writes: explain_tool.explanation
+    Environment reads: 
+      - Various results from other tools (profile, targets, constraints, ranking, plans, search results)
+      - Reads from multiple tools to compose a comprehensive explanation
+    Environment writes: 
+      - explain_tool.explanation: [{ text: "..." }] - **INDICATES EXPLANATION DELIVERED, SET end_actions=True**
+
+    Decision hints for LLM:
+      - **CRITICAL**: If explain_tool.explanation is present, the explanation request is FULLY DELIVERED. Set `end_actions=True` to stop.
+      - This tool has `end=True` flag, meaning it can terminate the conversation when it completes successfully.
+      - The explanation summarizes all actions taken, indicating the workflow is complete.
     """
     logging.info("explain_tool: start")
     yield Response("Composing explanation...")

@@ -373,6 +373,12 @@ def build_meal_agent_tree(
     # tool docstrings for reads/writes and completion hints).
 
     # Create branches (stem from root)
+    # Ensure root branch exists (empty_init creates "base" branch)
+    root_id = tree.root if tree.root else "base"
+    if root_id not in tree.decision_nodes:
+        # This should not happen if empty_init ran correctly, but ensure it
+        logging.warning(f"MealAgent: root branch '{root_id}' not found, tree may be malformed")
+    
     branch_ids = [
         "profile",
         "constraints",
@@ -389,17 +395,23 @@ def build_meal_agent_tree(
         "cooking",
         "explain",
     ]
-    root_id = getattr(tree, "root", "base")
     for bid in branch_ids:
         try:
+            # Check if branch already exists
+            if bid in tree.decision_nodes:
+                logging.debug(f"MealAgent: branch '{bid}' already exists, skipping")
+                continue
             tree.add_branch(
-                bid,
-                instruction=f"MealAgent {bid} branch",
-                description=f"MealAgent {bid} tools",
+                branch_id=bid,
+                instruction=f"MealAgent {bid} branch: Choose appropriate {bid} tool based on user request.",
+                description=f"MealAgent {bid} tools for handling {bid}-related tasks.",
                 from_branch_id=root_id,
+                status=f"Processing {bid} request...",
             )
-        except Exception:
-            # Branch may already exist
+            logging.debug(f"MealAgent: successfully added branch '{bid}'")
+        except Exception as e:
+            logging.warning(f"MealAgent: failed to add branch '{bid}': {e}")
+            # Continue with other branches
             pass
 
     # Track tool names that have been added so we can reference them in chains
@@ -429,16 +441,28 @@ def build_meal_agent_tree(
             # Determine tool names before adding so we can detect the new entry
             before_tool_names = set(tree.tools.keys())
 
-            tree.add_tool(fn, branch_id=branch_id, from_tool_ids=from_tool_ids)
+            try:
+                # Verify branch exists before adding tool
+                if branch_id not in tree.decision_nodes:
+                    logging.error(f"MealAgent: branch '{branch_id}' does not exist, cannot add tool '{name}'")
+                    return
+                
+                tree.add_tool(fn, branch_id=branch_id, from_tool_ids=from_tool_ids)
+                logging.debug(f"MealAgent: successfully added tool '{name}' to branch '{branch_id}'")
 
-            after_tool_names = set(tree.tools.keys())
-            new_names = list(after_tool_names - before_tool_names)
+                after_tool_names = set(tree.tools.keys())
+                new_names = list(after_tool_names - before_tool_names)
 
-            if new_names:
-                added_tool_names[name] = new_names[0]
-            else:
-                # Fallback to metadata if diff failed
-                added_tool_names[name] = getattr(fn, "_tool_name", name)
+                if new_names:
+                    added_tool_names[name] = new_names[0]
+                else:
+                    # Fallback: use tool's name attribute if available
+                    tool_name = getattr(fn, "name", None) or getattr(fn, "_tool_name", name)
+                    added_tool_names[name] = tool_name
+                    logging.debug(f"MealAgent: tool '{name}' registered as '{tool_name}'")
+            except Exception as e:
+                logging.error(f"MealAgent: failed to add tool '{name}' to branch '{branch_id}': {e}")
+                raise
 
     # Register tools to branches with successive chains where appropriate
 

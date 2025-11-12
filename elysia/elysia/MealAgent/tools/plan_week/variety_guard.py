@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Dict, Any, List, Set
 from collections import Counter
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -113,8 +113,12 @@ async def variety_guard_tool(
       - environment["plan_assemble_day_tool"]["plan"]
     Environment writes:
       - environment["variety_guard_tool"]["report"]
+
+    Decision hints:
+      - If variety_guard_tool.report.variety_score is high (>70), the plan has good variety.
+      - If variety_guard_tool.report.repeated_recipes is not empty, consider suggesting alternatives.
     """
-    yield "Analyzing plan variety..."
+    yield Response("Analyzing plan variety...")
 
     # Try weekly plan first, then daily plan
     weekly_results = tree_data.environment.find("plan_assemble_weekly_tool", "plan")
@@ -195,7 +199,7 @@ async def variety_guard_tool(
     )
     
     if warnings:
-        yield f"Variety score: {variety_score:.1f}/100. Warnings: {', '.join(warnings)}"
+        yield Response(f"Variety score: {variety_score:.1f}/100. Warnings: {', '.join(warnings)}")
     else:
-        yield f"Variety score: {variety_score:.1f}/100. Good variety!"
+        yield Response(f"Variety score: {variety_score:.1f}/100. Good variety!")
 

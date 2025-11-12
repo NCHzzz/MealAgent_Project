@@ -70,6 +70,9 @@ async def build_shopping_tool(
       - environment["plan_assemble_day_tool"]["plan"]
     Environment writes:
       - environment["build_shopping_tool"]["items"]
+
+    Decision hints:
+      - If build_shopping_tool.items is present, a shopping list has been generated successfully.
     """
     yield Response("Building shopping list from plan...")
 
@@ -93,6 +96,10 @@ async def build_shopping_tool(
         "created_at": None,  # Can be set by caller
     }
 
+    # Stream response first for immediate feedback
+    yield Response(f"Shopping list built: {len(items)} items")
+    
+    # Then yield Result objects for data consistency
     yield Result(
         name="items",
         objects=[shopping_list],
@@ -105,5 +112,4 @@ async def build_shopping_tool(
         metadata={"plan_type": plan.get("plan_type", "day"), "items_count": len(items)},
         payload_type="table",
     )
-    yield Response(f"Shopping list built: {len(items)} items")
 

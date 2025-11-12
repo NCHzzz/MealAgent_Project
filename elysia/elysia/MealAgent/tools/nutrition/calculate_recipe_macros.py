@@ -2,7 +2,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 import json
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 import dspy
@@ -117,11 +117,17 @@ async def calculate_recipe_macros_tool(
     3. Compute macros, update Recipe, return value
     4. Persist ingredient_fdc_map for faster subsequent runs
 
+    Environment reads:
+      - Recipe from Weaviate (by recipe_id) or passed as recipe parameter
     Environment writes:
       - Updates Recipe in Weaviate with macros_per_serving and ingredient_fdc_map
-      - Returns calculated macros
+      - Returns calculated macros in Result
+
+    Decision hints:
+      - If calculate_recipe_macros_tool.macros is present, recipe macros have been calculated successfully.
+      - Recipes with macros_per_serving can be used for accurate meal planning and macro tracking.
     """
-    yield "Calculating recipe macros..."
+    yield Response("Calculating recipe macros...")
 
     try:
         client = client_manager.get_client()
@@ -159,7 +165,7 @@ async def calculate_recipe_macros_tool(
                 metadata={"source": "cached", "recipe_id": recipe_obj.get("food_id")},
                 payload_type="generic",
             )
-            yield "Macros retrieved from cache"
+            yield Response("Macros retrieved from cache")
             return
 
         # Need to calculate: translate ingredients
@@ -223,7 +229,7 @@ async def calculate_recipe_macros_tool(
             },
             payload_type="generic",
         )
-        yield f"Calculated macros: {macros_per_serving['kcal']:.0f} kcal per serving"
+        yield Response(f"Calculated macros: {macros_per_serving['kcal']:.0f} kcal per serving")
 
     except Exception as e:
         yield Error(f"Macro calculation failed: {str(e)}")

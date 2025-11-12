@@ -106,6 +106,10 @@ async def plan_validate_tool(
       - environment["profile_crud_tool"]["profile"] (optional - for constraints)
     Environment writes:
       - environment["plan_validate_tool"]["report"]
+
+    Decision hints:
+      - If plan_validate_tool.report.valid is True, the plan meets all constraints and targets.
+      - If plan_validate_tool.report.valid is False, consider adjusting the plan or constraints.
     """
     yield Response("Validating plan...")
 
@@ -162,15 +166,17 @@ async def plan_validate_tool(
         },
     }
 
+    # Stream response first for immediate feedback
+    if report["valid"]:
+        yield Response("Plan validation passed")
+    else:
+        yield Response(f"Plan validation failed: {report['summary']['macro_violations']} macro violations, {report['summary']['constraint_violations']} constraint violations")
+    
+    # Then yield Result for data consistency
     yield Result(
         name="report",
         objects=[report],
         metadata={"valid": report["valid"], "violations_count": report["summary"]["macro_violations"] + report["summary"]["constraint_violations"]},
         payload_type="generic",
     )
-
-    if report["valid"]:
-        yield Response("Plan validation passed")
-    else:
-        yield Response(f"Plan validation failed: {report['summary']['macro_violations']} macro violations, {report['summary']['constraint_violations']} constraint violations")
 
