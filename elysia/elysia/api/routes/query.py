@@ -122,38 +122,21 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
 
                     # only send if it's the first prompt
                     if tree.tree_index == 0:
-                        try:
-                            await websocket.send_json(
-                                await format_title_response(
-                                    tree=tree,
-                                    user_id=data["user_id"],
-                                    conversation_id=data["conversation_id"],
-                                    query_id=data["query_id"],
-                                )
+                        await websocket.send_json(
+                            await format_title_response(
+                                tree=tree,
+                                user_id=data["user_id"],
+                                conversation_id=data["conversation_id"],
+                                query_id=data["query_id"],
                             )
-                        except (WebSocketDisconnect, RuntimeError) as e:
-                            logger.warning(f"Failed to send title response: {e}")
-                            # Continue to try sending completed message
+                        )
 
-                    # send the completed payload - CRITICAL: must be sent before connection closes
-                    try:
-                        await websocket.send_json(yielded_result)
-                        logger.debug("Successfully sent completed message to frontend")
-                    except (WebSocketDisconnect, RuntimeError) as e:
-                        logger.warning(f"Failed to send completed message: {e}")
-                        # If we can't send completed, the frontend won't know the tree is done
-                        # This is a critical error but we can't do much about it if the connection is closed
+                    # send the completed payload
+                    await websocket.send_json(yielded_result)
 
             except WebSocketDisconnect:
                 logger.info("Client disconnected during processing")
                 break
-            except RuntimeError as e:
-                # Handle case where WebSocket is already closed
-                if "websocket" in str(e).lower() or "closed" in str(e).lower():
-                    logger.warning(f"WebSocket connection issue: {e}")
-                    break
-                else:
-                    raise
             # Add a small delay between messages to prevent overwhelming
             await asyncio.sleep(0.005)
             # logger.debug(f"Sent message to client: {yielded_result}")
@@ -161,23 +144,20 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
     except Exception as e:
         logger.exception(f"Error in /query API")
 
-        try:
-            if "conversation_id" in data:
-                error = error_payload(
-                    text=f"{str(e)}",
-                    conversation_id=data["conversation_id"],
-                    query_id=data["query_id"],
-                )
-                await websocket.send_json(error)
-            else:
-                error = error_payload(
-                    text=f"{str(e)}",
-                    conversation_id="",
-                    query_id="",
-                )
-                await websocket.send_json(error)
-        except (WebSocketDisconnect, RuntimeError) as ws_error:
-            logger.warning(f"Failed to send error message to client: {ws_error}")
+        if "conversation_id" in data:
+            error = error_payload(
+                text=f"{str(e)}",
+                conversation_id=data["conversation_id"],
+                query_id=data["query_id"],
+            )
+            await websocket.send_json(error)
+        else:
+            error = error_payload(
+                text=f"{str(e)}",
+                conversation_id="",
+                query_id="",
+            )
+            await websocket.send_json(error)
 
 
 # Process endpoint

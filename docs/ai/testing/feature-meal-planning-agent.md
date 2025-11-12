@@ -68,79 +68,100 @@ description: Define testing approach, test cases, and quality assurance for Meal
 
 ### Component: Constraint Tools
 
-#### DietAllergenGuard (`tools/constraints/diet_allergen_guard.py`)
+#### constraints_guard_tool (`tools/constraints/constraints_guard.py`) - Consolidated
 - [ ] **Test: Generate filters for vegetarian + dairy allergy**
   - Input: profile with diet_type=vegetarian, allergens=[dairy]
-  - Expected: Result with filters `{"diet_type": "vegetarian", "allergens_exclude": ["dairy"]}`
-  - Coverage: Multiple constraints
+  - Expected: Result with filters `{"where": {"operator": "And", "operands": [{"path": ["diet_type"], "operator": "Equal", "valueString": "vegetarian"}, {"path": ["allergens"], "operator": "NotEqual", "valueString": "dairy"}]}}`
+  - Coverage: Multiple constraints (diet + allergen)
 
 - [ ] **Test: Generate filters with no allergens**
   - Input: profile with diet_type=vegan, allergens=[]
-  - Expected: Result with filters `{"diet_type": "vegan", "allergens_exclude": []}`
+  - Expected: Result with filters `{"where": {"path": ["diet_type"], "operator": "Equal", "valueString": "vegan"}}`
   - Coverage: Empty allergen list
 
 - [ ] **Test: Union of multiple allergens**
   - Input: allergens=[nuts, shellfish, gluten]
-  - Expected: All three in allergens_exclude
+  - Expected: All three in allergens_exclude (using NotEqual or NotContainsAny)
   - Coverage: Multiple allergen filtering
 
-#### TimeDeviceGuard (`tools/constraints/time_device_guard.py`)
 - [ ] **Test: Apply max cooking time constraint**
   - Input: profile with max_cooking_time_min=30
-  - Expected: Result with filters `{"max_time_min": 30}`
+  - Expected: Result with filters including `{"path": ["cooking_time"], "operator": "LessThanEqual", "valueInt": 30}`
   - Coverage: Time constraint
 
 - [ ] **Test: No time/device constraints declared**
   - Input: profile without max_cooking_time_min or available_equipment
-  - Expected: Result with empty filters or skip entirely
+  - Expected: Result with filters only for diet/allergen (no time/device filters)
   - Coverage: Optional constraint handling
 
 ### Component: Search Tools
 
-#### query (`tools/search/query.py`)
-- Note: The demo `Recipe` schema aligns with CSV fields and may not include logical filters like `diet_type` or `allergens` as first-class properties. Such constraints are typically enforced via post-processing or dataset enrichment. Tests below assume either you enrich the `Recipe` schema with these properties, or you implement equivalent constraint filtering in a post-processing tool.
-- [ ] **Test: Hybrid search with diet filter**
+#### search_and_rank_tool (`tools/search/search_and_rank.py`) - Uses Elysia query internally
+- Note: This tool uses Elysia `query` tool internally for hybrid search, then applies ranking logic. The demo `Recipe` schema includes `diet_type`, `allergens`, and `cooking_time` as filterable properties.
+- [ ] **Test: Search and rank with diet filter**
   - Setup: Mock Weaviate with 100 recipes (50 vegetarian, 50 not)
-  - Input: query_text="pasta", filters={"diet_type": "vegetarian"}
-  - Expected: Results contain only vegetarian recipes
-  - Coverage: Hard filter enforcement
+  - Input: query_text="pasta", constraints from `constraints_guard_tool.filters`
+  - Expected: Results contain only vegetarian recipes, ranked by macro fit and semantic relevance
+  - Coverage: Hard filter enforcement + ranking
 
 - [ ] **Test: Allergen exclusion filter**
   - Setup: Mock recipes with allergens=[nuts], [dairy], []
-  - Input: filters={"allergens_exclude": ["nuts", "dairy"]}
-  - Expected: Only recipes with allergens=[] returned
-  - Coverage: Allergen filtering
+  - Input: constraints from `constraints_guard_tool.filters` with allergens_exclude
+  - Expected: Only recipes with allergens=[] returned, ranked appropriately
+  - Coverage: Allergen filtering + ranking
 
 - [ ] **Test: Time constraint filter**
   - Setup: Recipes with cooking_time=[15, 30, 45, 60]
-  - Input: filters={"max_time_min": 30}
-  - Expected: Only recipes with cooking_time <= 30 returned
-  - Coverage: Time filtering
+  - Input: constraints from `constraints_guard_tool.filters` with max_cooking_time_min=30
+  - Expected: Only recipes with cooking_time <= 30 returned, ranked appropriately
+  - Coverage: Time filtering + ranking
+
+- [ ] **Test: Ranking by macro fit**
+  - Setup: Recipes with varying macros_per_serving
+  - Input: targets from `macro_calc_tool.targets`
+  - Expected: Recipes ranked by how well they fit target macros per meal
+  - Coverage: Multi-criteria ranking
 
 - [ ] **Test: Empty search results**
   - Setup: Filters so restrictive no recipes match
   - Expected: Empty results list (not error)
   - Coverage: No-match scenario
 
-#### ScoreAndRank (`tools/search/score_and_rank.py`)
-- [ ] **Test: Rank recipes by macro fit**
-  - Setup: 3 recipes with kcal=[300, 600, 900]; target_per_meal=600
-  - Expected: Recipe with 600 kcal ranked first
-  - Coverage: Macro scoring
+**Note**: Ranking logic is now part of `search_and_rank_tool` (see Search Tools section above). Tests for ranking are included in the `search_and_rank_tool` test cases.
 
-- [ ] **Test: Diversity bonus (not yet implemented in basic version)**
-  - Placeholder for future enhancement
-  - Coverage: Diversity scoring
+### Component: Meal Logging Tools
 
-- [ ] **Test: Top-k selection**
-  - Setup: 100 recipes
-  - Input: top_k=20
-  - Expected: Exactly 20 recipes in output
-  - Coverage: Limit enforcement
+#### log_meal_e2e_tool (`tools/meal_logging/log_meal_e2e.py`) - End-to-end meal logging
+- [ ] **Test: Parse meal description (LLM-assisted)**
+  - Input: meal_description="I ate chicken salad with olive oil"
+  - Expected: Parsed meal with dish name and ingredients (internal step)
+  - Coverage: LLM parsing
+
+- [ ] **Test: Calculate nutrition from FDC**
+  - Input: Parsed meal with ingredients and quantities
+  - Expected: Calculated macros and micros (internal step)
+  - Coverage: Nutrition calculation
+
+- [ ] **Test: Update profile and save MealLogEntry**
+  - Input: Calculated nutrition
+  - Expected: MealLogEntry saved, UserProfile updated with remaining targets
+  - Coverage: Profile update
+
+- [ ] **Test: Invalid meal description**
+  - Input: meal_description=""
+  - Expected: Error yielded
+  - Coverage: Input validation
+
+- [ ] **Test: Ingredient not found in FDC**
+  - Input: meal_description="I ate unknown food"
+  - Expected: Error or warning with suggestion
+  - Coverage: Missing data handling
+
+**Note**: Meal parsing, nutrition calculation, and profile update are now handled by a single `log_meal_e2e_tool` to reduce tool calls.
 
 ### Component: Plan Day Tools
 
-#### PlanAssembleDay (`tools/plan_day/plan_assemble.py`)
+#### plan_day_e2e_tool (`tools/plan_day/plan_day_e2e.py`) - End-to-end daily planning
 - [ ] **Test: Assemble 3-meal plan from 20 candidates**
   - Input: 20 ranked recipes
   - Expected: Plan with breakfast, lunch, dinner (all different recipes)
@@ -156,21 +177,47 @@ description: Define testing approach, test cases, and quality assurance for Meal
   - Expected: Error yielded
   - Coverage: Insufficient data
 
-#### PlanValidate (`tools/plan_day/plan_validate.py`)
-- [ ] **Test: Validate plan within ±10% kcal target**
-  - Input: target=2000 kcal, plan=1900 kcal
-  - Expected: Validation passes
+- [ ] **Test: Plan validation (handled internally by plan_day_e2e_tool)**
+  - Input: Plan with macros within ±10% of target
+  - Expected: Validation passes (internal step)
   - Coverage: Macro tolerance
 
-- [ ] **Test: Detect allergen violation**
+- [ ] **Test: Detect allergen violation (handled internally)**
   - Input: plan contains recipe with nuts, user has nut allergy
-  - Expected: Validation fails with allergen warning
+  - Expected: Validation fails with allergen warning (internal step)
   - Coverage: Constraint violation detection
 
-- [ ] **Test: Detect diet type violation**
+- [ ] **Test: Detect diet type violation (handled internally)**
   - Input: user is vegetarian, plan contains chicken recipe
-  - Expected: Validation fails
+  - Expected: Validation fails (internal step)
   - Coverage: Diet constraint
+
+**Note**: Plan validation is now handled internally by `plan_day_e2e_tool`. The tool validates constraints and macros as part of its workflow before yielding the final plan.
+
+### Component: Plan Week Tools
+
+#### plan_week_e2e_tool (`tools/plan_week/plan_week_e2e.py`) - End-to-end weekly planning with variety
+- [ ] **Test: Assemble 21-meal plan (7 days × 3 meals)**
+  - Input: 50+ ranked recipes
+  - Expected: Plan with 21 meals, all different recipes where possible
+  - Coverage: Weekly meal selection
+
+- [ ] **Test: Variety enforcement**
+  - Input: Weekly plan
+  - Expected: Variety score >70, <3 repetitions of primary protein/cuisine per week
+  - Coverage: Variety detection and scoring (handled internally)
+
+- [ ] **Test: Calculate total and average daily macros**
+  - Input: 21 meals with varying macros
+  - Expected: Total macros for week and average per day calculated
+  - Coverage: Macro aggregation
+
+- [ ] **Test: Insufficient recipes for weekly plan**
+  - Input: Only 10 recipes available
+  - Expected: Error or plan with recipe reuse (with variety penalty)
+  - Coverage: Data insufficiency
+
+**Note**: Weekly planning and variety enforcement are now handled by a single `plan_week_e2e_tool` to reduce tool calls.
 
 ### Component: Pantry & Shopping Tools
 
@@ -197,50 +244,88 @@ description: Define testing approach, test cases, and quality assurance for Meal
 
 ### Component: Gap Fill Tools
 
-#### GapCalc (`tools/gap_fill/gap_calc.py`)
+#### gap_fill_tool (`tools/gap_fill/gap_fill.py`) - Merged: calc + suggest + apply
 - [ ] **Test: Calculate protein deficit**
   - Input: target=150g protein, plan=120g protein
-  - Expected: deficit=30g protein
+  - Expected: deficit=30g protein (internal step)
   - Coverage: Single nutrient deficit
 
 - [ ] **Test: Calculate multiple deficits**
   - Input: target={kcal:2000, protein:150, carb:200}, plan={kcal:1800, protein:140, carb:220}
-  - Expected: deficits={kcal:200, protein:10, carb:-20}
+  - Expected: deficits={kcal:200, protein:10, carb:-20} (internal step)
   - Coverage: Mixed deficits and surplus
+
+- [ ] **Test: Suggest high-protein snack for protein deficit**
+  - Input: deficit={protein:30g}, candidates=[protein_bar:25g, apple:1g]
+  - Expected: protein_bar suggested (internal step)
+  - Coverage: Deficit-driven selection
+
+- [ ] **Test: Apply snack to plan**
+  - Input: snack suggestion and plan
+  - Expected: Updated plan with snack added, total macros recalculated
+  - Coverage: Snack application
 
 - [ ] **Test: No deficits (plan meets all targets)**
   - Input: plan equals or exceeds all targets
-  - Expected: All deficits ≤ 0
+  - Expected: All deficits ≤ 0, no snack suggestions
   - Coverage: Target met scenario
-
-#### SuggestSnack (`tools/gap_fill/suggest_snack.py`)
-- [ ] **Test: Suggest high-protein snack for protein deficit**
-  - Input: deficit={protein:30g}, candidates=[protein_bar:25g, apple:1g]
-  - Expected: protein_bar suggested
-  - Coverage: Deficit-driven selection
 
 - [ ] **Test: No suitable snack available**
   - Input: deficit={protein:30g}, candidates all have <5g protein
   - Expected: Text warning or best available option
   - Coverage: Insufficient options
 
+**Note**: Gap calculation, snack suggestion, and application are now handled by a single `gap_fill_tool` to reduce tool calls.
+
 ### Component: Micronutrient Tools
 
-#### MicronutrientCheck (`tools/micros/micronutrient_check.py`)
+#### micros_tool (`tools/micros/micros.py`) - Merged: check + suggest
 - [ ] **Test: Aggregate vitamin C from 3 meals**
   - Setup: breakfast=20mg, lunch=30mg, dinner=40mg
-  - Expected: total_vitamin_c=90mg
+  - Expected: total_vitamin_c=90mg (internal step)
   - Coverage: Micronutrient summation
 
 - [ ] **Test: FdcPortion conversion (1 cup → grams → nutrients)**
   - Setup: Recipe uses "1 cup broccoli", FdcPortion maps to 91g, FdcNutrient has per-100g values
-  - Expected: Correct proportional calculation
+  - Expected: Correct proportional calculation (internal step)
   - Coverage: Portion conversion accuracy
+
+- [ ] **Test: Suggest foods rich in deficient nutrients**
+  - Input: deficit={vitamin_c: 50mg}
+  - Expected: Foods high in vitamin C suggested (internal step)
+  - Coverage: Nutrient-driven suggestions
 
 - [ ] **Test: Missing FdcPortion data**
   - Setup: Ingredient without FdcPortion entry
   - Expected: Warning logged; skip or use approximation
   - Coverage: Missing data handling
+
+**Note**: Micronutrient checking and suggestion are now handled by a single `micros_tool` to reduce tool calls.
+
+### Component: Substitution Tools
+
+#### substitute_tool (`tools/substitution/substitute.py`) - Merged: suggest + apply
+- [ ] **Test: Find ingredient substitutes with macro matching**
+  - Input: ingredient="chicken breast", tolerance=±20%
+  - Expected: Substitutes with similar macros (protein, fat, carb) suggested
+  - Coverage: Macro equivalence matching
+
+- [ ] **Test: Apply substitute to plan**
+  - Input: substitute suggestion and plan
+  - Expected: Updated plan with ingredient replaced, macros recalculated
+  - Coverage: Substitution application
+
+- [ ] **Test: No suitable substitute found**
+  - Input: ingredient with unique macro profile, tolerance too strict
+  - Expected: Warning or best available option
+  - Coverage: Insufficient options
+
+- [ ] **Test: Allergen violation check**
+  - Input: Substitute contains allergen (e.g., nuts)
+  - Expected: Substitute rejected or flagged
+  - Coverage: Constraint enforcement
+
+**Note**: Substitution suggestion and application are now handled by a single `substitute_tool` to reduce tool calls.
 
 ### Component: Utilities
 
@@ -280,14 +365,14 @@ description: Define testing approach, test cases, and quality assurance for Meal
 
 ### Workflow: Profile Setup → Daily Plan
 
-#### Integration Test 1: Complete Daily Plan Generation
+#### Integration Test 1: Complete Daily Plan Generation (Optimized)
 ```python
 async def test_daily_plan_workflow():
     """
-    End-to-end workflow: Create profile → Calculate macros → Search → Rank → Assemble → Validate
+    End-to-end workflow: Create profile → Calculate macros → Apply constraints → Search and rank → Assemble plan (E2E)
+    Note: plan_day_e2e_tool handles all planning steps internally (resolve targets, search, rank, assemble, validate)
     """
     # Setup
-    environment = {}
     # Note: In Elysia, tools receive tree_data and client_manager automatically
     tree_data = TreeData(...)
     client_manager = MockClientManager()
@@ -317,59 +402,42 @@ async def test_daily_plan_workflow():
             assert targets_results and targets_results[0].objects[0]["tdee_kcal"] > 0
     
     # Step 3: Apply constraints
-    async for output in diet_allergen_guard_tool(
+    async for output in constraints_guard_tool(
         tree_data=tree_data,
         client_manager=client_manager
     ):
         if isinstance(output, Result):
             assert output.name == "filters"
-            # Check environment: environment["diet_allergen_guard_tool"]["filters"]
+            # Check environment: environment["constraints_guard_tool"]["filters"]
+            filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
+            assert filters_results and filters_results[0].objects[0].get("where")
     
-    # Step 4: Search recipes
-    async for output in query_tool(
+    # Step 4: Search and rank recipes (optimized - single tool using Elysia query)
+    async for output in search_and_rank_tool(
         tree_data=tree_data,
         client_manager=client_manager,
-        query_text="healthy meals"
-    ):
-        if isinstance(output, Result):
-            # Check environment: environment["query_tool"]["results"]
-            results = tree_data.environment.find("query_tool", "results")
-            assert results and len(results[0].objects) > 0
-    
-    # Step 5: Rank recipes
-    async for output in score_and_rank_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
+        query_text="healthy meals",
         top_k=20
     ):
         if isinstance(output, Result):
-            # Check environment: environment["score_and_rank_tool"]["topk"]
-            topk_results = tree_data.environment.find("score_and_rank_tool", "topk")
+            # Check environment: environment["search_and_rank_tool"]["topk"]
+            topk_results = tree_data.environment.find("search_and_rank_tool", "topk")
             assert topk_results and len(topk_results[0].objects) == 20
     
-    # Step 6: Assemble plan
-    async for output in plan_assemble_day_tool(
+    # Step 5: Assemble daily plan (optimized - E2E tool handles all steps internally)
+    async for output in plan_day_e2e_tool(
         tree_data=tree_data,
         client_manager=client_manager
     ):
         if isinstance(output, Result):
-            # Check environment: environment["plan_assemble_day_tool"]["plan"]
-            plan_results = tree_data.environment.find("plan_assemble_day_tool", "plan")
+            # Check environment: environment["plan_day_e2e_tool"]["plan"]
+            plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
             plan = plan_results[0].objects[0] if plan_results else {}
             assert "breakfast" in plan.get("meals", {})
             assert "lunch" in plan.get("meals", {})
             assert "dinner" in plan.get("meals", {})
-    
-    # Step 7: Validate plan
-    async for output in plan_validate_tool(
-        tree_data=tree_data,
-        client_manager=client_manager
-    ):
-        if isinstance(output, Result):
-            # Check environment: environment["plan_validate_tool"]["report"]
-            report_results = tree_data.environment.find("plan_validate_tool", "report")
-            report = report_results[0].objects[0] if report_results else {}
-            assert report.get("valid") == True
+            # Plan validation is handled internally by plan_day_e2e_tool
+            assert plan.get("validation", {}).get("valid") == True
 ```
 
 ### Tree-Based Execution (Elysia)
@@ -422,12 +490,13 @@ def test_tree_based_daily_plan():
   - Expected: Steps yielded progressively (not all at once)
   - Coverage: Streaming behavior
 
-### Workflow: Meal Logging with Confirmation
+### Workflow: Meal Logging with Confirmation (Optimized)
 
 - [ ] **Test: Log meal requires confirmation before save**
-  - Flow: parse → calculate nutrition → show preview → confirm=false → no `MealLogEntry` persisted
+  - Flow: `log_meal_e2e_tool` handles parse → calculate nutrition internally → show preview → confirm=false → no `MealLogEntry` persisted
   - Then confirm=true → `MealLogEntry` created and profile updated
   - Coverage: UX confirmation gate per requirements
+  - Note: `log_meal_e2e_tool` orchestrates all steps (parse, calculate, update) internally to reduce tool calls
 
 ### Error Handling Integration
 
@@ -438,7 +507,7 @@ def test_tree_based_daily_plan():
 
 - [ ] **Test: Insufficient recipes after filtering**
   - Setup: Constraints so strict only 1 recipe matches
-  - Expected: Error in PlanAssemble (need 3 for daily plan)
+  - Expected: Error in `plan_day_e2e_tool` (need 3 for daily plan)
   - Coverage: Data insufficiency
 
 ## End-to-End Tests
@@ -560,7 +629,7 @@ npm run test -- --coverage
 ### Coverage Gaps (To Be Filled)
 - **Complex ETL Logic**: Recipe normalization script (low priority for MVP; manual QA sufficient)
 - **Preprocessor**: Metadata generation (integration tests cover; unit tests deferred)
-- **LLM-based Features**: Explain tool (hard to unit test; rely on integration tests)
+- **LLM-based Features**: Elysia `cited_summarize` tool (hard to unit test; rely on integration tests)
 
 ### Links to Test Reports
 - CI/CD Pipeline: [GitHub Actions workflow badge]

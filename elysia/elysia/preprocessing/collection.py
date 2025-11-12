@@ -228,8 +228,7 @@ async def _evaluate_field_statistics(
 
     # List (lengths)
     elif properties[property].endswith("[]"):
-        values = [obj.get(property) for obj in sample_objects if isinstance(obj.get(property), list)]
-        lengths = [len(v) for v in values]
+        lengths = [len(obj[property]) for obj in sample_objects]
 
         if len(lengths) == 0:
             out["range"] = None

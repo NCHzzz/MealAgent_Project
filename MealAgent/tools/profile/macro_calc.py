@@ -6,7 +6,7 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
-from elysia.MealAgent.utils.nutrition import calculate_harris_benedict_tdee
+from MealAgent.utils.nutrition import calculate_harris_benedict_tdee
 
 
 @tool

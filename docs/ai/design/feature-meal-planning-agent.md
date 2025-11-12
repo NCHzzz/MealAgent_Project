@@ -48,36 +48,65 @@ graph TD
 ### Component Responsibilities
 
 - **elysia-frontend (Next.js)**: User interface for profile management, meal browsing, plan viewing, cooking mode
-- **Elysia API**: FastAPI-based backend exposing WebSocket (streaming) and REST endpoints
+- **Elysia API**: FastAPI service that mounts Elysia's built-in routers (see `elysia/api/routes/`) and primarily serves `/ws/query`, `/ws/processor`, `/ws/init` WebSocket endpoints for Tree execution
 - **Decision Tree**: Orchestrates tool execution based on Environment state and user prompts
 - **Tools (async generators)**: Implement specific functionality (search, plan, validate, etc.); yield Result/Text objects
-- **Environment**: Shared state container (accessed via `tree_data.environment`) where all Result objects are stored with structure `environment[tool_name][name]` - each tool yields Result objects with a `name` parameter that identifies the data in the environment
-- **Managers**: 
-  - **UserManager**: Per-user isolation of TreeManager and ClientManager
-  - **TreeManager**: Manages decision tree instances and execution context
-  - **ClientManager**: Manages Weaviate client connections and query execution
+- **Environment**: Shared state container (accessed via `tree_data.environment`) where all Result objects are automatically stored when yielded. Structure: `environment[tool_name][name]` where `tool_name` is the tool's function/class name and `name` is the Result's `name` parameter. Each object automatically gets a `_REF_ID` for unique identification. Tools can read via `environment.find(tool_name, name)` and manually manipulate via `.add()`, `.replace()`, `.remove()` if needed.
+- **Managers** (see [User and Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/)): 
+  - **UserManager**: Manages multiple users, each with their own TreeManager and ClientManager. Key methods:
+    - `process_tree(query, user_id, conversation_id, query_id, ...)` - Processes query for a user's conversation, automatically sends timeout error payloads if user/tree timed out
+    - `check_all_users_timeout()` - Removes inactive users (configurable via `user_timeout`)
+    - `check_all_trees_timeout()` - Removes inactive trees for all users (configurable via `tree_timeout`)
+    - `check_restart_clients()` - Restarts Weaviate clients that exceeded `client_timeout`
+  - **TreeManager**: Manages multiple decision tree instances per user (keyed by `conversation_id`). Each TreeManager is initialized with default configs (`style`, `agent_description`, `end_goal`, `branch_initialisation`, `settings`) shared across all trees for that user.
+  - **ClientManager**: Manages Weaviate client connections and query execution per user
 - **Preprocessor**: Runs during setup (batch process) via Elysia's official `preprocess` API to generate collection summaries, field statistics, return type mappings, and save to `ELYSIA_METADATA__` (one-time per collection) [Preprocessor]
 - **Weaviate**: Vector database storing recipes, nutritional data, user profiles, plans, pantry, and shopping lists
 
 ### Tree Integration (Elysia)
 
+**Critical Architecture Point**: MealAgent does NOT use custom REST API endpoints. All functionality is implemented as tools registered to an Elysia Tree, accessed through standard WebSocket endpoints (`/ws/query`).
+
 - A dedicated MealAgent Tree is created and populated with branches matching feature areas.
-- Tools are registered into branches so Elysia can orchestrate execution per Environment state.
-- Factory function:
-  - `build_meal_agent_tree(settings: Settings | None = None, user_id: str | None = None) -> Tree`
-  - Location: `elysia/elysia/MealAgent/tree/meal_tree.py`
-- Alternative registration (when Tree already exists via Managers):
-  - `get_meal_agent_tools()` and `try_register_meal_agent_tools(tree_or_manager)`
-  - Location: `elysia/elysia/MealAgent/tree/config.py`
+- Tools are registered into branches so Elysia's decision agent (LLM) can automatically select and orchestrate execution based on natural language queries.
+- **Tree Creation** (see [Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)):
+  - Factory function: `build_meal_agent_tree(settings: Settings | None = None, user_id: str | None = None, conversation_id: str | None = None) -> Tree`
+  - Location: `MealAgent/tree/meal_tree.py`
+  - Creates Tree with `branch_initialisation="empty"` and registers all MealAgent tools
+- **Alternative Registration** (when Tree already exists via Managers):
+  - `get_meal_agent_tools()` - Returns dict of all MealAgent tools
+  - `try_register_meal_agent_tools(tree_or_manager)` - Registers tools to existing Tree or TreeManager
+  - Location: `MealAgent/tree/config.py`
 
-Branch layout:
-- `profile`, `constraints`, `search`, `nutrition`, `plan_day`, `plan_week`, `pantry`, `shopping`,
-  `gap_fill`, `substitution`, `micros`, `logging`, `cooking`, `explain`
+Branch layout (optimized - 8 branches):
+- `profile` - Profile management and macro calculation
+- `planning` - Daily/weekly meal planning (merged from plan_day + plan_week)
+- `search` - Recipe/food search and ranking
+- `logging` - Meal logging and history
+- `pantry` - Pantry and shopping list management
+- `optimization` - Gap fill, substitution, micros (merged from 3 branches)
+- `cooking` - Cooking mode
+- `explain` - Explanations (using Elysia `cited_summarize`)
 
-Registration rules (align with Elysia docs):
-- Tool functions decorated with `@tool` are added to branches via `tree.add_tool(fn, branch_id=...)`.
-- Environment key convention: `environment[tool_function_name][result_name]`.
-- Workflows in `meal_tree.py` call tools in sequence and stream `Text`/`Result`/`Error`.
+Registration rules (align with [Elysia Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)):
+- **Tree Initialization**: `Tree(branch_initialisation="empty", style="...", agent_description="...", end_goal="...", user_id="...", conversation_id="...", low_memory=False, use_elysia_collections=True, settings=Settings())`
+  - `branch_initialisation`: `"default"`, `"one_branch"`, `"multi_branch"`, or `"empty"` (use `"empty"` for custom setup)
+- **Branch Creation**: `tree.add_branch(branch_id, instruction, description="", root=False, from_branch_id="", from_tool_ids=[], status="")`
+  - `instruction`: What tools/actions are in this branch (shown to decision maker when branch is chosen)
+  - `description`: How the model knows to choose this branch (required for non-root branches)
+  - `root=True`: Creates root branch (beginning of tree)
+  - `from_branch_id`: Parent branch ID (required for non-root branches)
+  - `from_tool_ids`: Tools that precede this branch (optional)
+  - `status`: Status message when branch is chosen (default: "Running {branch_id}...")
+- **Tool Registration**: `tree.add_tool(tool, branch_id=None, from_tool_ids=[], root=False, **kwargs)`
+  - `tool`: Tool instance (from `@tool` decorator) or Tool class
+  - `branch_id`: Branch to add tool to (None = root branch)
+  - `from_tool_ids`: Add tool after these tools (optional)
+  - `root=True`: Add to root branch (ignores `branch_id`)
+  - **kwargs**: Additional arguments for tool initialization
+- **Environment Key Convention**: `environment[tool_name][result_name]` where `tool_name` is the tool's `name` attribute
+- **Tool Requirements**: Tools must be async generators that yield `Result`, `Response`, `Status`, `Error`, or other `Return` objects
+- **Automatic Tool Selection**: The Tree's decision agent (LLM) automatically selects which tools to run based on the user's natural language query - no explicit routing or action parameters needed
 
 ### Technology Stack
 
@@ -129,8 +158,7 @@ Registration rules (align with Elysia docs):
             {"name": "confidence", "dataType": ["number"]}
          ]
         },
-        # Constraint filtering fields (required for diet_allergen_guard_tool and time_device_guard_tool)
-        # TODO: Add these fields to Recipe schema during migration/ETL
+        # Constraint filtering fields (required for constraints_guard_tool)
         {"name": "diet_type", "dataType": ["text[]"], "indexFilterable": True,
          "description": "Diet types this recipe supports (e.g., 'vegetarian', 'vegan', 'keto', 'paleo')"},
         {"name": "allergens", "dataType": ["text[]"], "indexFilterable": True,
@@ -146,13 +174,15 @@ Note: We intentionally keep only the CSV fields to reduce redundancy and simplif
 
 ##### Macros-per-serving strategy (VN→EN tool-only)
 - Recipes are Vietnamese; FDC is English. We do NOT precompute mappings during ETL.
-- A runtime tool translates ingredients (VN→EN), searches `FdcFood`, computes macros, and caches to `Recipe.macros_per_serving`.
+- A runtime tool (`calculate_recipe_macros_tool`) translates ingredients (VN→EN), searches `FdcFood`, computes macros, and caches to `Recipe.macros_per_serving`.
 - Subsequent calls read the cached value; no re-computation.
+- **Caching**: `Recipe.macros_per_serving` is a cached, optional field; may be absent on first read. When absent, the tool computes and persists it automatically.
 
 ##### Ingredient-to-FDC mapping cache
 - To speed up subsequent calculations and queries, each Recipe also stores `ingredient_fdc_map` (object[]):
   - `ingredient_vn` (text), `ingredient_en` (text), `fdc_id` (int), `quantity_g` (number), `confidence` (number)
 - The VN→EN macro tool writes/updates this array when it resolves ingredients.
+- **Caching**: `Recipe.ingredient_fdc_map` may also be populated on-demand by the same tool and persisted for subsequent requests.
 
 #### FdcFood 
 ```python
@@ -329,27 +359,6 @@ Notes:
 - No ETL-side Vietnamese→English mapping is maintained; translation occurs at runtime for flexibility.
 - Implemented as an async tool and invoked by scoring/plan tools when macros are missing.
 
-#### VN→EN Macro Calculation Sequence (mermaid)
-```mermaid
-sequenceDiagram
-    participant UI
-    participant API
-    participant Tool as CalculateRecipeMacrosTool
-    participant LLM as LLM (VN→EN)
-    participant Wvt as Weaviate (FdcFood)
-
-    UI->>API: Request recipes / planning
-    API->>Tool: For recipe without macros_per_serving
-    Tool->>LLM: Translate ingredient (VN) → English JSON
-    LLM-->>Tool: {name: "beef", quantity: 100, unit: "g"}
-    Tool->>Wvt: Hybrid search FdcFood by English name
-    Wvt-->>Tool: Best match (fdc_id, per-100g macros)
-    Tool->>Tool: Sum macros (scaled), divide by serving_size
-    Tool->>Wvt: Update Recipe.macros_per_serving (cache)
-    Tool-->>API: macros_per_serving
-    API-->>UI: Response (with macros)
-```
-
 ### Non-Functional Requirements (Design Summary)
 - Hybrid search latency: < 2s for 4k corpus; < 3s for 10k+
 - Daily plan generation: < 5s end-to-end
@@ -358,29 +367,51 @@ sequenceDiagram
 - Meal logging (parse + calc + save): < 2s
 - Vectorizer: `text2vec-transformers`; consistent across collections
 
-### API Notes (Macros Cache)
-- `Recipe.macros_per_serving` is a cached, optional field; may be absent on first read.
-- When absent, backend calls CalculateRecipeMacrosTool to compute and persist it before returning.
-- `Recipe.ingredient_fdc_map` may also be populated on-demand by the same tool and persisted for subsequent requests.
-
-Cross-reference:
-- Environment key conventions and per-tool keys: `docs/ai/design/environment_keys.md`
+**Cross-references:**
 - Implementation patterns and route integration: `docs/ai/implementation/feature-meal-planning-agent.md`
 - Elysia Preprocessor reference: [Preprocessor]
 
-### Environment Keys (Minimal Reference)
-| Tool | Reads | Writes |
-|------|-------|--------|
-| query_tool | constraints filters | query_tool.results |
-| query_postprocessing_tool | query_tool.results | query_postprocessing_tool.deduped |
-| score_and_rank_tool | deduped, targets | score_and_rank_tool.topk |
-| plan_assemble_day_tool | topk, targets | plan_assemble_day_tool.plan |
-| calculate_recipe_macros_tool | Recipe (by id) | calculate_recipe_macros_tool.macros and Recipe.macros_per_serving |
-
 ### Environment Keys Reference
 
-- Tools follow the `environment[tool_name][name]` convention.
-- Quick reference is maintained in `docs/ai/design/environment_keys.md`. Keep this file updated alongside tool changes and link it from implementation docs.
+**Convention**: `environment[tool_name][name]` where `tool_name` is the tool's function name and `name` is the Result's `name` parameter.
+
+**Important Notes**:
+- **Automatic Adding**: When tools `yield Result(...)`, the Tree automatically calls `environment.add(tool_name, result)`. No manual `.add()` needed.
+- **Reading Data**: Use `tree_data.environment.find(tool_name, name)` to read data from environment.
+- **Automatic _REF_ID**: Each object in environment automatically gets a unique `_REF_ID` attribute.
+- **Hidden Environment**: Use `tree_data.environment.hidden_environment` (dict) for storing data not shown to LLM.
+
+**Environment Keys by Tool** (Optimized Tool List):
+
+| Tool | Reads | Writes |
+|------|-------|--------|
+| profile_crud_tool | - | profile |
+| macro_calc_tool | profile | targets |
+| constraints_guard_tool | profile | filters |
+| search_and_rank_tool | filters, targets | topk |
+| calculate_recipe_macros_tool | Recipe by id | macros (and updates Recipe.macros_per_serving, ingredient_fdc_map) |
+| plan_day_e2e_tool | topk, targets, filters | plan |
+| plan_week_e2e_tool | topk, targets, filters | plan |
+| log_meal_e2e_tool | meal_description | updated_profile |
+| meal_history_tool | user_id | history |
+| pantry_crud_tool | - | state |
+| pantry_diff_tool | plan_day_e2e_tool.plan (shopping list items extracted from plan), pantry_crud_tool.state | diff |
+| cook_mode_tool | recipe_id (or from plan/search results) | steps |
+| gap_fill_tool | plan/weekly_plan, targets | updated_plan, deficits |
+| substitute_tool | plan or recipe | updated_plan, substitutes |
+| micros_tool | plan/weekly_plan | totals, suggestions |
+
+**Elysia Built-in Tools**:
+- `query` - Writes to environment based on collection type (e.g., `query.results` for Recipe)
+- `query_postprocessing` - Reads from `query.results`, writes processed results
+- `cited_summarize` - Reads from entire environment, writes summary with citations
+
+**Notes**:
+- **Automatic Storage**: Tools write to environment by yielding `Result(name="key", objects=[...], ...)`. The Tree automatically stores it at `environment[tool_name]["key"]`.
+- **Reading**: Tools read from environment using `tree_data.environment.find(tool_name, name)` which returns a list of `{metadata: {...}, objects: [...]}` or `None` if not found.
+- **Payload Size**: Tools should keep payloads small; store identifiers or summaries when possible.
+- **Caching**: The VN→EN macros tool persists `macros_per_serving` and `ingredient_fdc_map` on `Recipe` for caching.
+- **Tool Names**: Tool names match function names (e.g., `profile_crud_tool` function → `environment["profile_crud_tool"]`).
 
 **Key Relationships:**
 - **UserProfile → MealPlan**: One user can create multiple meal plans (one-to-many)
@@ -494,367 +525,424 @@ Note: `ingredients`, `calculated_macros`, and `calculated_micros` are stored as 
 sequenceDiagram
     participant User
     participant UI
-    participant API
+    participant WS as WebSocket<br/>/ws/query
+    participant UserMgr as UserManager
+    participant TreeMgr as TreeManager
     participant Tree
     participant ProfileTool
-    participant SearchTool
-    participant PlanTool
+    participant MacroTool
     participant Env as Environment<br/>tree_data.environment
     participant Weaviate
 
-    User->>UI: Create Profile
-    UI->>API: POST /api/v1/user/profile
-    API->>Tree: tree.process_tree(user_id, query)
-    Tree->>ProfileTool: ProfileCRUDTool (async generator)
-    ProfileTool->>Weaviate: Save UserProfile via client_manager
-    ProfileTool->>Env: yield Result(name="profile", objects=[...])
-    Tree->>ProfileTool: MacroCalcTool
-    ProfileTool->>Env: Read environment.find("profile", "profile")
-    ProfileTool->>Env: yield Result(name="targets", objects=[...])
-    Tree->>API: Return response + objects
-    API->>UI: 200 OK + profile data
+    User->>UI: "Create my profile: age 30, weight 75kg"
+    UI->>WS: WebSocket message: {user_id, query, conversation_id, query_id}
+    WS->>UserMgr: user_manager.process_tree(query, user_id, conversation_id, query_id)
+    Note over UserMgr: Checks timeout, auto-sends error if timed out
+    UserMgr->>TreeMgr: tree_manager.process_tree(query, conversation_id, query_id, client_manager)
+    TreeMgr->>Tree: tree.async_run(user_prompt=query, query_id=query_id, collection_names=collection_names, client_manager=client_manager, training_route="", close_clients_after_completion=False)
+    Note over Tree: Decision agent selects profile_crud_tool
+    Tree->>ProfileTool: profile_crud_tool(tree_data, client_manager, action="create", profile_data={...})
+    ProfileTool->>Weaviate: Save UserProfile via client_manager.get_client()
+    ProfileTool->>Env: yield Result(name="profile", objects=[profile_data])
+    ProfileTool->>Tree: yield "Profile created successfully"
+    Tree->>WS: Stream: {"type": "text", "payload": {"text": "Profile created..."}}
+    Tree->>WS: Stream: {"type": "result", "payload": {"type": "profile_crud_tool", "objects": [...]}}
     
-    User->>UI: Request Daily Plan
-    UI->>API: POST /api/v1/plans/day (WebSocket)
-    API->>Tree: tree.process_tree(user_id, query)
-    Tree->>SearchTool: query tool (hybrid search)
-    SearchTool->>Weaviate: client_manager.get_client().collections.query.hybrid()
-    SearchTool->>Env: yield Result(name="results", objects=[recipes])
-    Tree->>SearchTool: ScoreAndRank tool
-    SearchTool->>Env: Read environment.find("query", "results")
-    SearchTool->>Env: yield Result(name="topk", objects=[ranked_recipes])
-    Tree->>PlanTool: PlanAssembleDay tool
-    PlanTool->>Env: Read targets, topk via environment.find()
-    PlanTool->>Env: yield Result(name="plan", objects=[daily_plan])
-    Tree->>API: Stream results (yield strings = Text responses)
-    API->>UI: WebSocket stream (Text + Result objects)
+    Note over Tree: Decision agent selects macro_calc_tool
+    Tree->>MacroTool: macro_calc_tool(tree_data, ...)
+    MacroTool->>Env: Read environment.find("profile_crud_tool", "profile")
+    MacroTool->>MacroTool: Calculate TDEE, macros from profile
+    MacroTool->>Env: yield Result(name="targets", objects=[targets])
+    MacroTool->>Tree: yield "Nutritional targets calculated"
+    Tree->>WS: Stream: {"type": "result", "payload": {"type": "macro_calc_tool", "objects": [...]}}
+    Tree->>WS: Stream: {"type": "completed"}
+    WS->>UI: Display profile + targets
 ```
 
-### Meal Logging Data Flow (NEW)
+### Meal Logging Data Flow (Optimized)
 
 ```mermaid
 sequenceDiagram
     participant User
     participant UI
-    participant API
+    participant WS as WebSocket<br/>/ws/query
+    participant UserMgr as UserManager
     participant Tree
-    participant MealParser as MealParser Tool<br/>Uses base_lm
-    participant NutritionCalc
+    participant LogMealE2E as log_meal_e2e_tool<br/>End-to-end workflow
     participant Env as Environment<br/>tree_data.environment
     participant Weaviate
     
-    User->>UI: "Tôi vừa ăn salad gà"
-    UI->>API: POST /api/v1/meals/log (WebSocket)
-    API->>Tree: tree.process_tree(user_id, meal_description)
-    Tree->>MealParser: MealParser tool (has base_lm parameter)
-    MealParser->>MealParser: base_lm call (structured JSON output)
-    MealParser->>Tree: yield "Parsing meal..." (string = Text response)
-    Tree->>UI: Stream: "Parsing meal..."
-    MealParser->>Weaviate: Validate ingredients via client_manager
-    MealParser->>Env: yield Result(name="parsed_meal", objects=[...])
+    User->>UI: "Tôi vừa ăn salad gà với dầu olive"
+    UI->>WS: WebSocket: {user_id, query, conversation_id, query_id}
+    WS->>UserMgr: user_manager.process_tree(query, user_id, conversation_id, query_id)
+    Note over UserMgr: Checks timeout, auto-sends error if timed out
+    UserMgr->>TreeMgr: tree_manager.process_tree(query, conversation_id, query_id, client_manager)
+    TreeMgr->>Tree: tree.async_run(user_prompt=query, query_id=query_id, collection_names=collection_names, client_manager=client_manager, training_route="", close_clients_after_completion=False)
     
-    Tree->>NutritionCalc: NutritionCalc tool
-    NutritionCalc->>Env: Read environment.find("meal_parser", "parsed_meal")
-    NutritionCalc->>Weaviate: Query FdcNutrient + FdcPortion
-    NutritionCalc->>Env: yield Result(name="calculated", objects=[nutrition_data])
+    Note over Tree: Decision agent selects log_meal_e2e_tool
+    Tree->>LogMealE2E: log_meal_e2e_tool(tree_data, base_lm, client_manager, meal_description="...")
+    LogMealE2E->>LogMealE2E: Step 1: Parse meal (LLM-assisted)
+    LogMealE2E->>Tree: yield Response("Parsing meal description...")
+    Tree->>WS: Stream: {"type": "text", "payload": {"text": "Parsing meal..."}}
+    LogMealE2E->>Weaviate: Validate ingredients via client_manager.get_client()
     
-    Tree->>Weaviate: Save MealLogEntry via client_manager
-    Tree->>Weaviate: Update UserProfile (read + update)
-    Tree->>API: Stream: "Meal logged successfully"
-    API->>UI: Display consumed nutrition + remaining targets
+    LogMealE2E->>LogMealE2E: Step 2: Calculate nutrition (FDC lookup)
+    LogMealE2E->>Weaviate: Query FdcFood, FdcNutrient, FdcPortion
+    LogMealE2E->>Tree: yield Response("Calculating nutrition...")
+    Tree->>WS: Stream: {"type": "text", "payload": {"text": "Calculating nutrition..."}}
+    
+    LogMealE2E->>LogMealE2E: Step 3: Update profile and save log
+    LogMealE2E->>Weaviate: Save MealLogEntry
+    LogMealE2E->>Weaviate: Update UserProfile (remaining targets)
+    LogMealE2E->>Env: yield Result(name="updated_profile", objects=[updated_data])
+    LogMealE2E->>Tree: yield Response("Meal logged successfully")
+    Tree->>WS: Stream: {"type": "result", "payload": {"type": "log_meal_e2e_tool", ...}}
+    Tree->>WS: Stream: {"type": "text", "payload": {"text": "Meal logged..."}}
+    Tree->>WS: Stream: {"type": "completed"}
+    WS->>UI: Display consumed nutrition + remaining targets
 ```
 
 ## API Design
 **How do components communicate?**
 
-### External API Endpoints
+### Elysia WebSocket-Based Communication
 
-#### REST Endpoints
+MealAgent does **NOT** use custom REST API endpoints. Instead, all interactions flow through Elysia's standard WebSocket endpoints, where the Tree orchestrates tool execution based on natural language queries.
 
-All endpoints use prefix `/api/v1/meal/` for consistency.
+#### Standard Elysia WebSocket Endpoints
 
-**User Profile Management**
-```
-POST   /api/v1/meal/user/profile           # Create/update user profile
-GET    /api/v1/meal/user/profile/{user_id} # Retrieve profile
-```
-
-**Request (POST /api/v1/meal/user/profile):**
-```json
-{
-  "user_id": "user_123",
-  "age": 30,
-  "gender": "male",
-  "weight_kg": 75.0,
-  "height_cm": 180.0,
-  "activity_level": "moderate",
-  "diet_type": "vegetarian",
-  "allergens": ["nuts", "dairy"],
-  "preferences": ["italian", "asian"],
-  "max_cooking_time_min": 45,
-  "available_equipment": ["oven", "stovetop"]
-}
-```
-
-**Response:**
-```json
-{
-  "status": "created" | "updated",
-  "profile": {
-    "user_id": "user_123",
-    "tdee_kcal": 2450.5,
-    "protein_g": 183.8,
-    "fat_g": 81.7,
-    "carb_g": 245.0,
-    ...
-  }
-}
-```
-
-**Recipe Search**
-```
-GET    /api/v1/meal/recipes?query={query}&limit={limit}  # Search recipes (hybrid query)
-GET    /api/v1/meal/recipes/{recipe_id}                  # Get recipe details
-```
-
-**Response (GET /api/v1/meal/recipes):**
-```json
-{
-  "recipes": [
-    {
-      "recipe_id": "recipe_001",
-      "title": "Vegetarian Pasta",
-      "macros_per_serving": {"kcal": 450, "protein_g": 15, "fat_g": 12, "carb_g": 70},
-      "ingredient_fdc_map": [
-        {"ingredient_vn": "mì ống", "ingredient_en": "pasta", "fdc_id": 174506, "quantity_g": 80, "confidence": 0.9},
-        {"ingredient_vn": "cà chua", "ingredient_en": "tomato", "fdc_id": 169091, "quantity_g": 100, "confidence": 0.93}
-      ]
-    }
-  ],
-  "total": 42
-}
-```
-
-**Meal Planning**
-```
-POST   /api/v1/meal/plans/day              # Generate daily meal plan
-POST   /api/v1/meal/plans/week             # Generate weekly meal plan
-GET    /api/v1/meal/plans/{plan_id}         # Retrieve plan
-DELETE /api/v1/meal/plans/{plan_id}         # Delete plan
-```
-
-**Request (POST /api/v1/meal/plans/day):**
-```json
-{
-  "user_id": "user_123",
-  "query": "healthy breakfast options",
-  "date": "2025-01-27"
-}
-```
-
-**Response:**
-```json
-{
-  "plan_id": "plan_abc123",
-  "user_id": "user_123",
-  "plan_type": "day",
-  "meals": {
-    "breakfast": {
-      "recipe_id": "recipe_001",
-      "title": "Vegetarian Pasta",
-      "macros_per_serving": {"kcal": 450, "protein_g": 15, "fat_g": 12, "carb_g": 70},
-      "ingredient_fdc_map": [
-        {"ingredient_vn": "mì ống", "ingredient_en": "pasta", "fdc_id": 174506, "quantity_g": 80, "confidence": 0.9}
-      ]
-    },
-    "lunch": {...},
-    "dinner": {...}
-  },
-  "total_macros": {"kcal": 2100, "protein_g": 150, ...}
-}
-```
-
-**Pantry Management**
-```
-GET    /api/v1/meal/pantry/{user_id}        # Get pantry inventory
-POST   /api/v1/meal/pantry/{user_id}        # Update pantry items
-```
-
-**Shopping Lists**
-```
-GET    /api/v1/meal/shopping/{plan_id}                   # Get shopping list for plan
-POST   /api/v1/meal/shopping/{plan_id}/generate         # Generate shopping list from plan
-```
-
-**Meal Logging**
-```
-POST   /api/v1/meal/meals/log                          # Log consumed meal via natural language
-GET    /api/v1/meal/meals/history/{user_id}             # Get meal log history
-GET    /api/v1/meal/meals/consumed-today/{user_id}      # Get today's consumed nutrition
-```
-
-**Request (POST /api/v1/meal/meals/log):**
-```json
-{
-  "user_id": "user_123",
-  "meal_description": "Tôi vừa ăn salad gà với dầu olive"
-}
-```
-
-**Response:**
-```json
-{
-  "log_id": "log_xyz789",
-  "calculated_macros": {"kcal": 320, "protein_g": 25, ...},
-  "remaining_targets": {"kcal": 1780, "protein_g": 125, ...}
-}
-```
-
-**Explanations**
-```
-POST   /api/v1/meal/explain/{plan_id}       # Get explanation for plan decisions
-```
-
-**HTTP Status Codes:**
-- `200 OK`: Success
-- `201 Created`: Resource created successfully
-- `400 Bad Request`: Validation error or invalid input
-- `404 Not Found`: Resource not found
-- `500 Internal Server Error`: Server error
-
-#### WebSocket Endpoints
-
-All WebSocket endpoints support bidirectional communication for streaming.
+All MealAgent functionality is accessed through Elysia's existing WebSocket infrastructure:
 
 ```
-WS     /ws/tree/{user_id}                  # Main Tree execution stream (tool results)
-WS     /ws/cook/{recipe_id}                # Cooking mode step-by-step stream
-WS     /ws/meals/log/{user_id}             # Real-time meal parsing and nutrition calculation
+WS     /ws/query                           # Main Tree execution stream (all MealAgent queries)
+WS     /ws/processor                       # Alternative processing endpoint
+WS     /ws/init                            # Initialize user/tree configuration
 ```
 
-**WebSocket Message Format:**
+**Key Architecture Points:**
+- **No custom REST endpoints**: All functionality is handled by tools registered to the MealAgent Tree
+- **Natural language interface**: Users send queries like "Create a meal plan for today" or "Log that I ate chicken salad"
+- **Tree orchestration**: The Elysia decision tree automatically selects and executes the appropriate tools based on the query
+- **Streaming responses**: All tool outputs (Text, Result, Error) are streamed back via WebSocket
+
+#### WebSocket Message Format (Elysia Standard)
 
 **Client → Server:**
 ```json
 {
-  "action": "generate_plan" | "search" | "log_meal",
   "user_id": "user_123",
-  "query": "Create a healthy meal plan",
-  "conversation_id": "conv_abc"  // Optional, for resuming conversations
+  "conversation_id": "conv_abc",           // Required: identifies which tree/conversation
+  "query_id": "query_xyz",                 // Required: unique ID for this query
+  "query": "Create a healthy meal plan for today with vegetarian options",
+  "collection_names": ["Recipe", "FdcFood", "UserProfile"],  // Optional: hint which collections to use
+  "training_route": "",                    // Optional: training route (e.g., "tool1/tool2/tool1")
+  "mimick": false                          // Optional: mimick model flag
 }
 ```
 
+**Note**: The WebSocket route handler calls `user_manager.process_tree(query, user_id, conversation_id, query_id, training_route, collection_names, ...)` which automatically handles timeout checks and error payloads.
+
 **Server → Client (streaming):**
+
+According to [Elysia Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/), when a `Result` object is yielded from a tool:
+1. Objects and metadata are **automatically added** to Environment via `environment.add(tool_name, result)`
+2. The `.to_frontend()` method is **automatically called** to convert to frontend format and streamed via WebSocket
+
+All payloads have the same outer structure:
 ```json
 {
-  "type": "text" | "result" | "error",
-  "data": {
-    // For type="text": string message
-    "message": "Searching recipes...",
-    
-    // For type="result": Result object structure
-    "tool_name": "query",
-    "name": "results",
-    "objects": [...],
-    "metadata": {...}
-    
-    // For type="error": error info
-    "error": "Invalid input",
-    "recoverable": true
+  "type": str,           // "result", "text", "error", "status", "completed", "title", "ner"
+  "id": str,            // Unique UUID for this payload
+  "user_id": str,       // User identifier
+  "conversation_id": str, // Conversation identifier
+  "query_id": str,      // Query identifier
+  "payload": dict       // Payload-specific content (see below)
+}
+```
+
+The `payload` dictionary always contains:
+```json
+{
+  "type": str,          // Payload type (e.g., "query", "generic", etc.)
+  "metadata": dict,     // Tool-specific metadata
+  "objects": list[dict] // List of objects (each includes _REF_ID)
+}
+```
+
+Elysia streams multiple payload types during tree execution:
+
+1. **NER (Named Entity Recognition)** - Sent immediately:
+```json
+{
+  "type": "ner",
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {
+    "entities": [...]
   }
 }
 ```
 
+2. **Text Responses** - From tools yielding `Response()` or `Text()` objects:
+```json
+{
+  "type": "text",
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {
+    "type": "response",  // or "text" depending on object type
+    "text": "Searching for vegetarian recipes...",
+    "metadata": {},
+    "objects": [{"text": "Searching for vegetarian recipes..."}]
+  }
+}
+```
+
+**Note**: `Response()` and `Text()` objects do NOT add to Environment (unlike `Result`), but they still stream to frontend via `.to_frontend()`.
+
+3. **Result Objects** - From tools yielding `Result()`:
+```json
+{
+  "type": "result",
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {
+    "type": "query",                       // Tool name
+    "metadata": {
+      "collection_name": "Recipe",
+      "query_search_term": "vegetarian"
+    },
+    "objects": [
+      {
+      "recipe_id": "recipe_001",
+        "dish_name": "Vegetarian Pasta",
+        "macros_per_serving": {"kcal": 450, "protein_g": 15, ...},
+        "_REF_ID": "ref_123"               // Unique reference ID for environment
+      }
+    ]
+  }
+}
+```
+
+4. **Error Objects** - From tools yielding `Error()` or timeout errors:
+```json
+{
+  "type": "error",  // or "self_healing_error", "tree_timeout_error", "user_timeout_error"
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {
+    "type": "update",
+    "text": "Profile not found for user user_123",
+    "metadata": {},
+    "feedback": "Profile not found for user user_123",  // For Error objects
+    "error_message": ""  // Optional error message
+  }
+}
+```
+
+**Note**: `Error()` objects (subclass of `Update`) do NOT add to Environment, but they are saved in TreeData for retry logic and streamed to frontend. UserManager automatically sends timeout error payloads if user/tree has timed out.
+
+5. **Status Updates** - From tools yielding `Status()`:
+```json
+{
+  "type": "status",
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {
+    "type": "update",
+    "text": "Processing...",
+    "metadata": {}
+  }
+}
+```
+
+**Note**: `Status()` objects (subclass of `Update`) do NOT add to Environment, but stream to frontend for progress updates.
+
+6. **Completed** - When tree execution finishes:
+```json
+{
+  "type": "completed",
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {}
+}
+```
+
+7. **Title** - Conversation title (sent after first query completes):
+```json
+{
+  "type": "title",
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "conv_abc",
+  "query_id": "query_xyz",
+  "payload": {
+    "title": "Meal Planning Session",
+    "error": ""
+  }
+}
+```
+
+#### How MealAgent Features Map to Tree Tools
+
+All MealAgent functionality is implemented as tools registered to branches in the MealAgent Tree:
+
+| User Query Example | Tree Branch | Tools Executed | Environment Keys |
+|-------------------|-------------|----------------|------------------|
+| "Create my profile: age 30, weight 75kg" | `profile` | `profile_crud_tool` → `macro_calc_tool` | `profile_crud_tool.profile`, `macro_calc_tool.targets` |
+| "Find vegetarian pasta recipes" | `search` | `search_and_rank_tool` (uses Elysia `query` internally) | `search_and_rank_tool.topk` |
+| "Plan my meals for today" | `planning` | `plan_day_e2e_tool` (handles all steps internally) | `plan_day_e2e_tool.plan` |
+| "I ate chicken salad with olive oil" | `logging` | `log_meal_e2e_tool` (handles parsing → calc → update internally) | `log_meal_e2e_tool.updated_profile` |
+| "Show me how to cook recipe_001" | `cooking` | `cook_mode_tool` | `cook_mode_tool.steps` |
+| "Why did you choose these recipes?" | `explain` | `cited_summarize` (Elysia built-in) | (summarizes from environment) |
+
+**Important**: The Tree's decision agent (LLM) automatically selects which tools to run based on the user's natural language query. There is no need for explicit action parameters or endpoint routing.
+
 ### Internal Interfaces (Tool Contracts)
 
-All tools follow the Elysia async generator pattern with automatic parameter injection:
-
-```python
-from typing import AsyncGenerator
-from elysia import tool
-from elysia.tree.objects import TreeData, Result, Error
-from elysia.api.services.user import UserManager
-from elysia.util.client import ClientManager
-
-@tool
-async def profile_crud_tool(
-    tree_data: TreeData,           # Automatically injected - access environment via tree_data.environment
-    client_manager: ClientManager,  # Automatically injected - Weaviate client access
-    base_lm,                       # Optional - LLM for structured output
-    complex_lm,                    # Optional - More powerful LLM if needed
-    action: str = "create",        # LLM-chosen or default parameter
-    profile_data: dict = None      # LLM-chosen parameter
-) -> AsyncGenerator[Result | str | Error, None]:
-    """
-    Create, read, or update user profile in UserProfile collection.
-    
-    Parameters:
-        action: "create", "read", or "update"
-        profile_data: Dictionary with user profile fields (required for create/update)
-    
-    Environment:
-        Reads: None (first tool in workflow)
-        Writes: environment["profile_crud_tool"]["profile"] - stores profile data
-    """
-    # Yield strings = Text responses shown to user
-    yield f"Processing profile {action}..."
-    
-    # Access environment (structure: environment[tool_name][name])
-    # Reading example:
-    # existing_profile = tree_data.environment.find("profile_crud", "profile")
-    
-    # Get Weaviate client
-    client = client_manager.get_client()
-    collection = client.collections.get("UserProfile")
-    
-    try:
-        if action == "create" or action == "update":
-            # Validate and save
-            result = collection.data.insert(profile_data)
-            
-            # Yield Result to add to environment
-            yield Result(
-                name="profile",  # Environment key: environment["profile_crud_tool"]["profile"]
-                objects=[profile_data],
-                metadata={"action": action, "user_id": profile_data.get("user_id")}
-            )
-            yield f"Profile {action}d successfully"
-            
-        elif action == "read":
-            user_id = profile_data.get("user_id") if profile_data else None
-            result = collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                limit=1
-            )
-            
-            if result.objects:
-                profile = result.objects[0].properties
-                yield Result(
-                    name="profile",
-                    objects=[profile],
-                    metadata={"action": "read"}
-                )
-            else:
-                yield Error(f"Profile not found for user {user_id}")
-                return
-                
-    except Exception as e:
-        yield Error(f"Profile operation failed: {str(e)}")
-        return
-```
+MealAgent tools follow Elysia's async generator pattern. Tools use the `@tool` decorator pattern (recommended) or can inherit from `Tool` class.
 
 **Key Points:**
 - **Automatic Injection**: `tree_data`, `client_manager`, `base_lm`, `complex_lm` are automatically provided by Elysia
-- **Environment Access**: Use `tree_data.environment.find(tool_name, name)` to read, `Result` objects are automatically added
-- **Result Structure**: `Result(name="key", objects=[...], metadata={...})` creates `environment[tool_name]["key"]`
-- **String Yields**: Plain strings automatically become Text responses shown to user
-- **Error Handling**: Yield `Error()` objects for recoverable errors (Tree can retry or continue)
+- **Environment Access**: Use `tree_data.environment.find(tool_name, name)` to read data
+- **Automatic Result Adding**: When you `yield Result(...)`, the Tree automatically:
+  1. Calls `environment.add(tool_name, result)` to store in Environment
+  2. Calls `result.to_frontend(user_id, conversation_id, query_id)` to convert to frontend format
+  3. Streams the frontend payload via WebSocket
+- **Result Structure** (see [Objects Reference](https://weaviate.github.io/elysia/Reference/Objects/)): 
+```python
+  Result(
+      objects=[...],              # Required: list of dict objects
+      metadata={...},             # Optional: metadata dict
+      payload_type="generic",     # Optional: identifier for result type (default: "default")
+      name="key",                 # Optional: name for environment indexing (default: "default")
+      mapping=None,                # Optional: frontend key mapping dict
+      llm_message=None,           # Optional: message template for LLM with placeholders
+      unmapped_keys=["_REF_ID"],  # Optional: keys not mapped to frontend
+      display=True                 # Optional: whether to display on frontend
+  )
+  ```
+  Creates `environment[tool_name]["key"]` when yielded.
+- **Response Objects** (subclass of `Text`): 
+  ```python
+  Response(text="message", metadata={}, display=True)
+  ```
+  Does NOT add to Environment, but streams to frontend via `.to_frontend()`.
+- **Text Objects**: 
+  ```python
+  Text(payload_type="text", objects=[{"text": "..."}], metadata={}, display=True)
+  ```
+  Does NOT add to Environment, but streams to frontend.
+- **Error Objects** (subclass of `Update`, see [Objects Reference](https://weaviate.github.io/elysia/Reference/Objects/)): 
+  ```python
+  Error(feedback="error message", error_message="")
+  ```
+  Does NOT add to Environment, but:
+  - Saved in TreeData for retry logic (automatically shown to decision agent)
+  - Streamed to frontend as `"self_healing_error"` type
+  - When same tool called again, saved Error is automatically loaded
+- **Status Objects** (subclass of `Update`): 
+  ```python
+  Status(status_message="Processing...")
+  ```
+  Does NOT add to Environment, but streams to frontend for progress updates.
+- **Update Objects** (base class): 
+  ```python
+  Update(frontend_type="status", object={"text": "..."})
+  ```
+  Base class for non-displayed frontend updates (warnings, errors, status).
 
 **Environment Key Convention:**
-- Use `tool_name` = function name (e.g., "profile_crud_tool" → use full function name "profile_crud_tool")
-- Use descriptive `name` parameter (e.g., "profile", "targets", "results", "plan")
+- Use `tool_name` = function/class name (e.g., "profile_crud_tool")
+- Use descriptive `name` parameter in `Result()` (e.g., "profile", "targets", "results", "plan")
 - Structure: `environment[tool_name][name]` = list of `{objects: [...], metadata: {...}}`
 - When using `@tool` decorator, the tool_name is automatically set to the function name
+- Each object in the environment automatically gets a `_REF_ID` attribute for unique identification
+
+**Environment Methods (Advanced Use Cases):**
+- **Reading**: `environment.find(tool_name, name, index=None)` - Returns list of results or specific index
+- **Manual Adding**: `environment.add(tool_name, result)` or `environment.add_objects(tool_name, name, objects, metadata)` - For manually adding data (usually not needed since yielding Result auto-adds)
+- **Replacing**: `environment.replace(tool_name, name, objects, metadata, index=None)` - Replace existing data
+- **Removing**: `environment.remove(tool_name, name, index=None)` - Remove data from environment
+- **Hidden Environment**: `tree_data.environment.hidden_environment` - Dictionary for storing data not shown to LLM (e.g., temporary processing state)
+
+### UserManager and TreeManager Configuration
+
+**UserManager Initialization** (see [User and Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/)):
+```python
+from elysia.api.services.user import UserManager
+
+user_manager = UserManager(
+    user_timeout=datetime.timedelta(minutes=20),  # Default: 20 minutes or USER_TIMEOUT env var
+    # tree_timeout and client_timeout are passed to TreeManager/ClientManager per user
+)
+```
+
+**TreeManager Configuration** (per user, see [Managers Reference](https://weaviate.github.io/elysia/Reference/Managers/)):
+- **Initialization**: `TreeManager(user_id, config=Config(), tree_timeout=timedelta(minutes=10))`
+  - `user_id`: Required unique identifier for user
+  - `config`: Config object with default settings (`style`, `agent_description`, `end_goal`, `branch_initialisation`, `settings`)
+  - `tree_timeout`: Default 10 minutes (or `TREE_TIMEOUT` env var)
+- **Default Configs**: Shared across all trees for a user via `Config` object
+- **Adding Trees**: `tree_manager.add_tree(conversation_id, low_memory=False)`
+  - Creates Tree with default configs from TreeManager
+  - Each conversation (tree) can have unique configs via `tree.configure(**kwargs)` after creation
+- **Config Updates**: `tree_manager.update_config(conversation_id=None, style=..., agent_description=..., end_goal=..., branch_initialisation=..., settings=...)`
+  - Updates default configs (if `conversation_id=None`) or specific tree configs
+
+**ClientManager Configuration** (see [Client Reference](https://weaviate.github.io/elysia/Reference/Client/)):
+- **Initialization**: `ClientManager(wcd_url=None, wcd_api_key=None, weaviate_is_local=None, weaviate_is_custom=None, client_timeout=timedelta(minutes=3), query_timeout=60, insert_timeout=120, init_timeout=5, **kwargs)`
+  - `wcd_url`, `wcd_api_key`: Weaviate Cloud Database connection
+  - `weaviate_is_local`: Use local Weaviate (defaults to `localhost:8080`)
+  - `weaviate_is_custom`: Use custom connection parameters
+  - `client_timeout`: Default 3 minutes (or `CLIENT_TIMEOUT` env var)
+  - `query_timeout`: Weaviate query timeout (default: 60 seconds, Weaviate default: 30 seconds)
+  - `insert_timeout`: Weaviate insert timeout (default: 120 seconds, Weaviate default: 90 seconds)
+  - `init_timeout`: Weaviate initialization timeout (default: 5 seconds, Weaviate default: 2 seconds)
+  - `**kwargs`: API keys for third-party services (e.g., `OPENAI_APIKEY="..."`)
+- **Client Methods**: `get_client()`, `get_async_client()`, `start_clients()`, `restart_client()`, `restart_async_client()`
+- **Thread Safety**: ClientManager uses threading and asyncio locks for concurrent access
+
+**Timeout Management**:
+- **User Timeout**: Users inactive for `user_timeout` are removed (call `check_all_users_timeout()`)
+- **Tree Timeout**: Trees inactive for `tree_timeout` are removed (call `check_all_trees_timeout()`)
+- **Client Timeout**: Weaviate clients inactive for `client_timeout` are restarted (call `check_restart_clients()`)
+- **Automatic Error Payloads**: `UserManager.process_tree()` automatically sends timeout error payloads if user/tree has timed out
+
+**Example FastAPI Integration**:
+```python
+from fastapi import FastAPI
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    user_manager = get_user_manager()  # Global UserManager instance
+    
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(user_manager.check_all_trees_timeout, "interval", seconds=23)
+    scheduler.add_job(user_manager.check_all_users_timeout, "interval", seconds=29)
+    scheduler.add_job(user_manager.check_restart_clients, "interval", seconds=31)
+    scheduler.start()
+    
+    yield
+    scheduler.shutdown()
+    await user_manager.close_all_clients()
+
+app = FastAPI(lifespan=lifespan)
+```
 
 ### Authentication/Authorization (v1 Simplified)
 
@@ -881,21 +969,35 @@ async def profile_crud_tool(
 
 ### Backend Services (Elysia Python)
 
-#### Tool Branches (elysia/tools/)
+#### Tool Organization (MealAgent/tools/) - Optimized
 
-1. **profile/** (ProfileCRUDTool, MacroCalcTool)
-2. **constraints/** (DietAllergenGuard, TimeDeviceGuard)
-3. **search/** (query, query_postprocessing, ScoreAndRank)
-4. **plan_day/** (TargetResolver, PlanAssembleDay, PlanValidate, BuildShoppingList)
-5. **plan_week/** (PlanAssembleWeekly, VarietyGuard)
-6. **meal_logging/** (MealParser, NutritionCalc, ProfileUpdate, MealHistoryRetrieval)
-7. **pantry/** (PantryCRUDTool, PantryDiff)
-8. **gap_fill/** (GapCalc, SuggestSnack, ApplySnack)
-9. **substitution/** (SuggestSubstitutes, ApplySubstitute)
-10. **family/** (MergeConstraints, PlanFamily)
-11. **micros/** (MicronutrientCheck, SuggestMicrosFoods)
-12. **cook_mode/** (CookMode - parse/stream cooking steps)
-13. **explain/** (Explain - generate decision explanations)
+**MealAgent Tools (15 tools):**
+
+**Core Tools (12 tools):**
+1. `profile_crud_tool` - Profile CRUD operations
+2. `macro_calc_tool` - TDEE and macro target calculation
+3. `constraints_guard_tool` - Generate constraint filters (used by planning/search)
+4. `search_and_rank_tool` - Search + rank (uses Elysia `query` internally)
+5. `calculate_recipe_macros_tool` - VN→EN macro calculation
+6. `plan_day_e2e_tool` - End-to-end daily planning
+7. `plan_week_e2e_tool` - End-to-end weekly planning (includes variety guard)
+8. `log_meal_e2e_tool` - End-to-end meal logging
+9. `meal_history_tool` - View meal history
+10. `pantry_crud_tool` - Pantry management
+11. `pantry_diff_tool` - Shopping list with pantry subtraction
+12. `cook_mode_tool` - Cooking instructions
+
+**Optimization Tools (3 tools):**
+13. `gap_fill_tool` - Calculate gaps + suggest + apply snacks (merged from 3 tools)
+14. `substitute_tool` - Suggest + apply ingredient substitutions (merged from 2 tools)
+15. `micros_tool` - Check + suggest micronutrient foods (merged from 2 tools)
+
+**Elysia Built-in Tools (Used Directly):**
+- `query` (from `elysia.tools.retrieval.query.Query`) - Recipe/food retrieval
+- `query_postprocessing` (from `elysia.tools.postprocessing.summarise_items.SummariseItems`) - Postprocessing
+- `cited_summarize` (from `elysia.tools.text.text.CitedSummarizer`) - Explanations with citations
+
+**Note**: Tools are registered in `MealAgent/tree/config.py` and added to Tree branches using `tree.add_tool()`. E2E tools (`plan_day_e2e_tool`, `log_meal_e2e_tool`) handle multiple steps internally to reduce tool calls and improve performance.
 
 #### Core Modules (elysia/)
 
@@ -903,13 +1005,18 @@ async def profile_crud_tool(
 - **preprocessing/**: Preprocessor implementations for each collection
 - **tree/tree.py**: Main decision tree logic and tool orchestration
 - **util/client.py**: Weaviate client wrapper with retry logic
-- **config.py**: Settings and environment variable management
+- **config.py**: Settings and environment variable management (see [Settings Reference](https://weaviate.github.io/elysia/Reference/Settings/))
+  - `Settings()` class: Handles configuration of models, providers, Weaviate connection, API keys, logging
+  - `settings.configure(**kwargs)`: Configure settings (base_model, complex_model, base_provider, complex_provider, wcd_url, wcd_api_key, weaviate_is_local, logging_level, api_keys, etc.)
+  - `settings.smart_setup()`: Auto-configure from environment variables with fallback defaults
+  - Global `settings` object: `from elysia.config import settings` (initialized from env vars)
+  - Custom Settings: Create `Settings()` instance and pass to Tree/Managers
 
 ### Database Layer (Weaviate)
 
 - **Collections**: 10 primary collections (Recipe, FdcFood, FdcNutrient, FdcPortion, UserProfile [includes NutrientTarget], MealPlan, MealPlanItem, MealLogEntry, Pantry/PantryItem, ShoppingList/ShoppingItem)
 - **Indexing**: Filterable properties on user_id, fdc_id, diet_type, allergens, tags, time_min, logged_at
-- **Vectorization**: text2vec-openai (or local transformers) for Recipe descriptions, FdcFood descriptions
+- **Vectorization**: `text2vec-transformers` (consistent across all collections) for Recipe descriptions, FdcFood descriptions
 - **Hybrid Search**: BM25 + vector similarity with alpha=0.5 default (configurable per query - 0.0 = BM25 only, 1.0 = vector only, 0.5 = balanced)
 
 ### Third-Party Integrations (v1)
@@ -917,15 +1024,20 @@ async def profile_crud_tool(
 - **USDA FoodData Central**: Offline batch import of CSV files into FdcFood/FdcNutrient/FdcPortion collections
 - **OpenAI (optional)**: Embeddings for recipe vectorization, optional LLM for explanations/substitutions
 
-### References
-- Preprocessor: https://weaviate.github.io/elysia/Reference/Preprocessor/
-- Tree: https://weaviate.github.io/elysia/Reference/Tree/
-- Client: https://weaviate.github.io/elysia/Reference/Client/
-- Managers: https://weaviate.github.io/elysia/Reference/Managers/
-- Settings: https://weaviate.github.io/elysia/Reference/Settings/
-- Objects: https://weaviate.github.io/elysia/Reference/Objects/
-- Payload Types: https://weaviate.github.io/elysia/Reference/PayloadTypes/
-- Util: https://weaviate.github.io/elysia/Reference/Util/
+### Settings Configuration
+
+**Key Configuration Points** (see [Settings Reference](https://weaviate.github.io/elysia/Reference/Settings/)):
+- **Global Settings**: Use `from elysia.config import settings` and configure via `settings.configure()` or `settings.smart_setup()`
+- **Custom Settings**: Create `Settings()` instance and pass to Tree/Managers
+- **Main Parameters**: `base_model`, `complex_model`, `base_provider`, `complex_provider`, `wcd_url`, `weaviate_is_local`, `logging_level`, `api_keys`
+- **Environment Variables**: All settings can be configured via environment variables (e.g., `BASE_MODEL`, `WCD_URL`, `OPENAI_APIKEY`)
+
+**References:**
+- [Settings Reference](https://weaviate.github.io/elysia/Reference/Settings/)
+- [Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)
+- [Managers Reference](https://weaviate.github.io/elysia/Reference/Managers/)
+- [Objects Reference](https://weaviate.github.io/elysia/Reference/Objects/)
+- [Client Reference](https://weaviate.github.io/elysia/Reference/Client/)
 
 ## Design Decisions
 **Why did we choose this approach?**
@@ -1043,26 +1155,9 @@ async def profile_crud_tool(
 **Last Updated**: 2025-01-27
 **Owner**: MealAgent Development Team
 
-**Changelog v0.3:**
-- ✅ **Gộp NutrientTarget vào UserProfile**: Embedded nutrient targets directly in UserProfile collection to simplify data model
-- ✅ **Cập nhật Architecture Diagram**: Added MealLogEntry, LLM service node, bidirectional WebSocket connections
-- ✅ **Cải thiện Tool Contracts**: Updated to match Elysia framework conventions (tree_data, client_manager auto-injection)
-- ✅ **Thêm API Schemas**: Added detailed request/response formats for all REST endpoints
-- ✅ **Thêm WebSocket Message Format**: Documented client/server message structures
-- ✅ **Cập nhật Environment Structure**: Corrected to match Elysia's `environment[tool_name][name]` pattern
-- ✅ **Thêm Data Relationship Diagram**: ER diagram showing all collection relationships
-- ✅ **Cập nhật Data Flow Diagrams**: More accurate sequence diagrams with Elysia API patterns
-- ✅ **Clarify Preprocessor**: Documented batch execution timing
-- ✅ **Hybrid Search Alpha**: Added explanation of alpha parameter meaning
-
-**Changelog v0.2:**
-- ✅ Added MealLogEntry collection schema
-- ✅ Added meal logging API endpoints (REST + WebSocket)
-- ✅ Added meal_logging tool branch
-- ✅ Added MealLoggingChat and MealHistoryView components
-- ✅ Added meal logging sequence diagram
-- ✅ Fixed recipe corpus size (100k → 4k demo, 10k+ production)
-- ✅ Added LLM usage strategy expansion
-- ✅ Added data retention policy
-- ✅ Simplified scalability/deployment for graduation project context
+**Changelog:**
+- v0.5: **Tool Optimization** - Reduced from 28 to 15 MealAgent tools + 3 Elysia tools (36% reduction), reduced branches from 14 to 8 (43% reduction). Replaced `query_tool`/`query_postprocessing_tool` with Elysia `query`, replaced `explain_tool` with Elysia `cited_summarize`. Consolidated intermediate tools into E2E tools (`plan_day_e2e_tool`, `log_meal_e2e_tool`). Merged related tools (gap_fill, substitution, micros). Integrated environment_keys.md into design document.
+- v0.4: Removed REST API references, updated to WebSocket-only architecture, added Settings/Objects/Tree/Managers documentation
+- v0.3: Embedded NutrientTarget in UserProfile, updated architecture diagrams, improved tool contracts, added WebSocket message formats
+- v0.2: Added MealLogEntry schema, meal logging tools, fixed recipe corpus size, added LLM usage strategy
 

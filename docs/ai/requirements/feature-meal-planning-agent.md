@@ -98,14 +98,14 @@ description: Clarify the problem space, gather requirements, and define success 
    - Acceptance: Remaining daily targets updated (target - consumed)
    - Acceptance: Next meal recommendations adjusted based on remaining targets
 
-### Key Workflows
+### Key Workflows (Optimized)
 
 1. **Initial Setup**: Create profile → Calculate TDEE/macros → Set constraints → Save to UserProfile collection
-2. **Daily Planning**: Retrieve user targets → Search recipes (hybrid retrieval) → Rank by fit → Assemble 3-meal plan → Validate constraints → Generate shopping list
-3. **Weekly Planning**: Same as daily but 21 meals with variety enforcement across days
-4. **Meal Logging & Nutrition Tracking**: User inputs meal consumed via chat → Parse meal description (LLM-assisted) → Calculate nutrition/kcal for that meal → Save to UserProfile (meal history) → Update remaining daily targets → Adjust subsequent meal recommendations
-5. **Gap Filling**: Calculate deficit (target - consumed from logged meals) → Suggest snacks → Validate updated plan
-6. **Cooking Mode**: Select recipe → Parse into steps → Stream instructions with timing
+2. **Daily Planning**: `plan_day_e2e_tool` handles all steps internally: resolve targets → apply constraints → search and rank recipes → assemble 3-meal plan → validate constraints and macros → generate shopping list (optional)
+3. **Weekly Planning**: `plan_week_e2e_tool` handles all steps internally: same as daily but 21 meals with variety enforcement across days
+4. **Meal Logging & Nutrition Tracking**: `log_meal_e2e_tool` handles all steps internally: parse meal description (LLM-assisted) → calculate nutrition/kcal → save to UserProfile (meal history) → update remaining daily targets → adjust subsequent meal recommendations
+5. **Gap Filling**: `gap_fill_tool` handles all steps internally: calculate deficit (target - consumed from logged meals) → suggest snacks → optionally apply to plan → validate updated plan
+6. **Cooking Mode**: `cook_mode_tool` parses recipe into steps and streams instructions with timing
 7. **Pantry Management**: Add/update/remove pantry items → Recalculate shopping list differential
 
 ### Edge Cases to Consider
@@ -281,4 +281,7 @@ description: Clarify the problem space, gather requirements, and define success 
 
 ---
 
-**Last Updated**: 2025-10-29
+**Last Updated**: 2025-01-27
+
+**Changelog:**
+- v0.2: Updated workflows to reflect optimized tool architecture (E2E tools, merged tools, Elysia built-in tools)

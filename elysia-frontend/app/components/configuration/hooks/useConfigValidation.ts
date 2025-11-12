@@ -24,25 +24,52 @@ export function useConfigValidation(
         base_model: false,
         complex_provider: false,
         complex_model: false,
+
+        // Custom Weaviate validation
+        custom_weaviate_http_host: false,
+        custom_weaviate_grpc_host: false,
+
+        // Storage validation
+        custom_storage_http_host: false,
+        custom_storage_grpc_host: false,
       };
     }
 
     const isWeaviateLocal = currentUserConfig.settings
       ?.WEAVIATE_IS_LOCAL as boolean;
+    const isWeaviateCustom = currentUserConfig.settings
+      ?.WEAVIATE_IS_CUSTOM as boolean;
+    const isStorageCustom =
+      currentFrontendConfig?.save_location_weaviate_is_custom as boolean;
 
     return {
-      wcd_url: Boolean(currentUserConfig.settings.WCD_URL?.trim()),
-      wcd_api_key: isWeaviateLocal
+      wcd_url: isWeaviateCustom
         ? true
-        : Boolean(currentUserConfig.settings.WCD_API_KEY?.trim()),
+        : Boolean(currentUserConfig.settings.WCD_URL?.trim()),
+      wcd_api_key:
+        isWeaviateLocal || isWeaviateCustom
+          ? true
+          : Boolean(currentUserConfig.settings.WCD_API_KEY?.trim()),
       base_provider: Boolean(currentUserConfig.settings.BASE_PROVIDER?.trim()),
       base_model: Boolean(currentUserConfig.settings.BASE_MODEL?.trim()),
       complex_provider: Boolean(
         currentUserConfig.settings.COMPLEX_PROVIDER?.trim()
       ),
       complex_model: Boolean(currentUserConfig.settings.COMPLEX_MODEL?.trim()),
+      custom_weaviate_http_host: isWeaviateCustom
+        ? Boolean(currentUserConfig.settings.CUSTOM_HTTP_HOST?.trim())
+        : true,
+      custom_weaviate_grpc_host: isWeaviateCustom
+        ? Boolean(currentUserConfig.settings.CUSTOM_GRPC_HOST?.trim())
+        : true,
+      custom_storage_http_host: isStorageCustom
+        ? Boolean(currentFrontendConfig?.save_location_custom_http_host?.trim())
+        : true,
+      custom_storage_grpc_host: isStorageCustom
+        ? Boolean(currentFrontendConfig?.save_location_custom_grpc_host?.trim())
+        : true,
     };
-  }, [currentUserConfig]);
+  }, [currentUserConfig, currentFrontendConfig]);
 
   // API key validation for models - checks if required API keys are available
   const getMissingApiKeys = useMemo(() => {
@@ -104,15 +131,33 @@ export function useConfigValidation(
     if (needsStorageValidation) {
       const isStorageLocal =
         currentFrontendConfig?.save_location_weaviate_is_local;
+      const isStorageCustom =
+        currentFrontendConfig?.save_location_weaviate_is_custom;
 
-      if (!currentFrontendConfig?.save_location_wcd_url?.trim()) {
+      if (
+        !isStorageCustom &&
+        !currentFrontendConfig?.save_location_wcd_url?.trim()
+      ) {
         issues.push("Storage URL required when saving is enabled");
       }
       if (
         !isStorageLocal &&
+        !isStorageCustom &&
         !currentFrontendConfig?.save_location_wcd_api_key?.trim()
       ) {
         issues.push("Storage API Key required when saving is enabled");
+      }
+      if (
+        isStorageCustom &&
+        !currentFrontendConfig?.save_location_custom_http_host?.trim()
+      ) {
+        issues.push("Storage HTTP Host required when saving is enabled");
+      }
+      if (
+        isStorageCustom &&
+        !currentFrontendConfig?.save_location_custom_grpc_host?.trim()
+      ) {
+        issues.push("Storage GRPC Host required when saving is enabled");
       }
     }
     return issues;
@@ -137,14 +182,22 @@ export function useConfigValidation(
     const issues: string[] = [];
     const isWeaviateLocal = currentUserConfig?.settings
       ?.WEAVIATE_IS_LOCAL as boolean;
+    const isWeaviateCustom = currentUserConfig?.settings
+      ?.WEAVIATE_IS_CUSTOM as boolean;
 
-    if (!currentValidation.wcd_url) issues.push("Weaviate Cluster URL");
+    if (!isWeaviateCustom && !currentValidation.wcd_url)
+      issues.push("Weaviate Cluster URL");
     if (
       !isWeaviateLocal &&
+      !isWeaviateCustom &&
       !Boolean(currentUserConfig?.settings?.WCD_API_KEY?.trim())
     ) {
       issues.push("Weaviate API Key");
     }
+    if (isWeaviateCustom && !currentValidation.custom_weaviate_http_host)
+      issues.push("Custom Weaviate HTTP Host");
+    if (isWeaviateCustom && !currentValidation.custom_weaviate_grpc_host)
+      issues.push("Custom Weaviate GRPC Host");
     return issues;
   };
 

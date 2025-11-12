@@ -1,5 +1,4 @@
 import datetime
-import asyncio
 import os
 import random
 import json
@@ -18,7 +17,6 @@ from elysia.api.core.log import logger
 from elysia.api.utils.config import Config
 from elysia.api.utils.config import FrontendConfig
 from elysia.tree.util import get_saved_trees_weaviate
-from elysia.MealAgent.tree.config import try_register_meal_agent_tools
 
 
 class TreeTimeoutError(Update):
@@ -311,28 +309,11 @@ class UserManager:
         local_user = await self.get_user_local(user_id)
         tree_manager: TreeManager = local_user["tree_manager"]
         if not tree_manager.tree_exists(conversation_id):
-            # Build a MealAgent-specific tree with branches and tools
-            from elysia.MealAgent.tree.meal_tree import build_meal_agent_tree
-
-            meal_tree = build_meal_agent_tree(
-                settings=tree_manager.settings, user_id=user_id
+            tree_manager.add_tree(
+                conversation_id,
+                low_memory,
             )
-            # Respect low_memory setting if supported
-            if hasattr(meal_tree, "low_memory"):
-                meal_tree.low_memory = low_memory
-
-            # Inject into manager
-            tree_manager.trees[conversation_id] = {
-                "tree": meal_tree,
-                "last_request": datetime.datetime.now(),
-                "event": asyncio.Event(),
-            }
-            tree_manager.trees[conversation_id]["event"].set()
-
-        # Ensure MealAgent tools present (idempotent)
-        tree = tree_manager.get_tree(conversation_id)
-        try_register_meal_agent_tools(tree)
-        return tree
+        return tree_manager.get_tree(conversation_id)
 
     async def save_tree(
         self,
@@ -605,12 +586,6 @@ class UserManager:
         await self.update_user_last_request(user_id)
 
         tree_manager: TreeManager = local_user["tree_manager"]
-        # Ensure MealAgent tools are registered on the loaded/existing tree before processing
-        try:
-            tree = tree_manager.get_tree(conversation_id)
-            try_register_meal_agent_tools(tree)
-        except Exception as e:
-            logger.warning(f"Failed to (re)register MealAgent tools for tree {conversation_id}: {e}")
 
         async for yielded_result in tree_manager.process_tree(
             query,

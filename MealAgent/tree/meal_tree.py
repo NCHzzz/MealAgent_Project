@@ -43,7 +43,7 @@ from elysia.tree.tree import Tree
 from elysia.config import Settings
 
 # Import all tools
-from elysia.MealAgent.tree.config import MEAL_AGENT_TOOLS
+from MealAgent.tree.config import MEAL_AGENT_TOOLS
 
 
 async def process_daily_planning_workflow(

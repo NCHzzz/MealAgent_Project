@@ -21,10 +21,9 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - Daily plan generation
 
 - [ ] **Milestone 2.5: Meal Logging Feature** (Week 5-6)
-  - Meal parsing (LLM-assisted) with validation and fallback
-  - Nutrition calculation from FDC + FdcPortion
-  - Profile updates (consumed_today, remaining targets)
-  - REST + WebSocket endpoints and UI hooks
+  - End-to-end meal logging tool (parse → calculate → update)
+  - Meal history viewing
+  - WebSocket integration via `/ws/query`
 
 - [ ] **Milestone 3: Extended Features** (Week 7-9)
   - Weekly planning with variety
@@ -152,41 +151,20 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Status**: ✅ COMPLETED - Computes TDEE and 30/30/40 macro targets; utility added at `elysia/MealAgent/utils/nutrition.py`.
 
 #### 2.2 Constraint Branch Tools
-- [x] **Task 2.2.1**: Implement DietAllergenGuard (generate hard filters for Weaviate)
+- [x] **Task 2.2.1**: Implement constraints_guard_tool (consolidated constraint filtering)
   - **Estimated Effort**: 2 days
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/constraints/diet_allergen_guard.py`
-  - **Environment Keys**: Writes `environment["diet_allergen_guard_tool"]["filters"]`
-  - **Status**: ✅ COMPLETED - Generates Weaviate where-clause for diet types and allergen exclusions; outputs `{"where": ...}` object to environment.
-
-- [x] **Task 2.2.2**: Implement TimeDeviceGuard (optional time/equipment constraints)
-  - **Estimated Effort**: 1 day
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/constraints/time_device_guard.py`
-  - **Environment Keys**: Writes `environment["time_device_guard_tool"]["filters"]`
-  - **Status**: ✅ COMPLETED - Builds optional filters for `cooking_time` and `devices` (required/excluded) and emits `{"where": ...}`.
+  - **Deliverables**: `elysia/MealAgent/tools/constraints/constraints_guard.py`
+  - **Environment Keys**: Reads `environment["profile_crud_tool"]["profile"]`, Writes `environment["constraints_guard_tool"]["filters"]`
+  - **Status**: ✅ COMPLETED - Consolidated tool that generates Weaviate where-clause for diet types, allergen exclusions, and optional time/equipment constraints. Outputs `{"where": ...}` object to environment. Replaces separate `diet_allergen_guard_tool` and `time_device_guard_tool`.
 
 #### 2.3 Search Branch Tools
-- [x] **Task 2.3.1**: Implement query tool (hybrid search with filters)
-  - **Estimated Effort**: 3 days (includes Weaviate client integration)
+- [x] **Task 2.3.1**: Implement search_and_rank_tool (end-to-end search + ranking using Elysia query)
+  - **Estimated Effort**: 3 days (includes Elysia query integration and ranking logic)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/search/query.py`
-  - **Environment Keys**: Reads `environment["diet_allergen_guard_tool"]["filters"]`, `environment["time_device_guard_tool"]["filters"]`, Writes `environment["query_tool"]["results"]`
-  - **Status**: ✅ COMPLETED - Hybrid search with merged filters from constraint tools, configurable alpha, writes results to environment.
-
-- [x] **Task 2.3.2**: Implement query_postprocessing (deduplication, normalization)
-  - **Estimated Effort**: 1 day
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/search/query_postprocessing.py`
-  - **Environment Keys**: Reads `environment["query_tool"]["results"]`, Writes `environment["query_postprocessing_tool"]["deduped"]`
-  - **Status**: ✅ COMPLETED - Deduplicates by food_id/dish_name, normalizes text fields, outputs deduped recipes.
-
-- [x] **Task 2.3.3**: Implement ScoreAndRank (multi-criteria scoring)
-  - **Estimated Effort**: 3 days (includes scoring algorithm design)
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/search/score_and_rank.py`
-  - **Environment Keys**: Reads `environment["query_postprocessing_tool"]["deduped"]`, `environment["macro_calc_tool"]["targets"]`, Writes `environment["score_and_rank_tool"]["topk"]`
-  - **Status**: ✅ COMPLETED - Multi-criteria scoring (macro fit, semantic relevance, diversity) with configurable weights, returns top-k ranked recipes.
+  - **Deliverables**: `elysia/MealAgent/tools/search/search_and_rank.py`
+  - **Environment Keys**: Reads `environment["constraints_guard_tool"]["filters"]`, `environment["macro_calc_tool"]["targets"]`, Writes `environment["search_and_rank_tool"]["topk"]`
+  - **Status**: ✅ COMPLETED - Uses Elysia `query` tool internally for hybrid search, then applies multi-criteria ranking (macro fit, semantic relevance, diversity). Returns top-k ranked recipes.
 
 - [x] **Task 2.3.4**: Implement CalculateRecipeMacrosTool (VN→EN on-demand + cache)
   - **Estimated Effort**: 2 days
@@ -203,33 +181,12 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Status**: ✅ COMPLETED - Integrated into CalculateRecipeMacrosTool; persists ingredient_fdc_map entries on Recipe for cache reuse.
 
 #### 2.4 Plan Day Branch Tools
-- [x] **Task 2.4.1**: Implement TargetResolver (resolve query vs profile targets)
-  - **Estimated Effort**: 1 day
+- [x] **Task 2.4.1**: Implement plan_day_e2e_tool (end-to-end daily planning)
+  - **Estimated Effort**: 5 days (includes all planning steps: resolve targets → search → rank → assemble → validate → shopping list)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/plan_day/target_resolver.py`
-  - **Environment Keys**: Writes `environment["target_resolver_tool"]["resolved"]`
-  - **Status**: ✅ COMPLETED - Resolves targets with priority: query override > profile > defaults; reads from macro_calc_tool.targets.
-
-- [x] **Task 2.4.2**: Implement PlanAssembleDay (3-meal assembly)
-  - **Estimated Effort**: 3 days (includes portion scaling logic)
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/plan_day/plan_assemble.py`
-  - **Environment Keys**: Reads `environment["score_and_rank_tool"]["topk"]`, Writes `environment["plan_assemble_day_tool"]["plan"]`
-  - **Status**: ✅ COMPLETED - Assembles 3-meal plan (breakfast=highest_carb, lunch=balanced, dinner=highest_protein); calculates total macros; supports serving adjustments.
-
-- [x] **Task 2.4.3**: Implement PlanValidate (constraint and macro validation)
-  - **Estimated Effort**: 2 days
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/plan_day/plan_validate.py`
-  - **Environment Keys**: Reads `environment["plan_assemble_day_tool"]["plan"]`, Writes `environment["plan_validate_tool"]["report"]`
-  - **Status**: ✅ COMPLETED - Validates macro targets (15% tolerance) and constraints (diet/allergen); generates detailed validation report with violations/warnings.
-
-- [x] **Task 2.4.4**: Implement BuildShoppingList (extract ingredients from plan)
-  - **Estimated Effort**: 2 days
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/plan_day/build_shopping.py`
-  - **Environment Keys**: Reads `environment["plan_assemble_day_tool"]["plan"]`, Writes `environment["build_shopping_tool"]["items"]`
-  - **Status**: ✅ COMPLETED - Extracts and aggregates ingredients from all meals; builds shopping list with quantity tracking per ingredient.
+  - **Deliverables**: `elysia/MealAgent/tools/plan_day/plan_day_e2e.py`
+  - **Environment Keys**: Reads `environment["macro_calc_tool"]["targets"]`, `environment["constraints_guard_tool"]["filters"]`, `environment["search_and_rank_tool"]["topk"]`, Writes `environment["plan_day_e2e_tool"]["plan"]`
+  - **Status**: ✅ COMPLETED - End-to-end daily planning tool that orchestrates all steps internally: resolves targets, applies constraints, searches and ranks recipes, assembles 3-meal plan, validates constraints and macros, and optionally generates shopping list. Reduces tool calls and improves performance.
 
 #### 2.5 Decision Tree Logic
 - [x] **Task 2.5.1**: Implement main decision tree for daily planning workflow
@@ -245,25 +202,12 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Status**: ✅ COMPLETED - Registered all MealAgent tools in `MEAL_AGENT_TOOLS` dictionary for tree invocation. Added Tree factory `build_meal_agent_tree(...)` and helper `try_register_meal_agent_tools(...)` to integrate with Elysia Managers per docs.
 
 #### 2.6 Meal Logging Branch Tools (Week 5-6)
-- [x] **Task 2.6.1**: Implement MealParser (LLM-assisted parsing with validation and fallback)
-  - **Estimated Effort**: 2 days
+- [x] **Task 2.6.1**: Implement log_meal_e2e_tool (end-to-end meal logging)
+  - **Estimated Effort**: 4 days (includes all logging steps: parse → calculate → update)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/meal_parser.py`
-  - **Environment Keys**: Writes `environment["meal_parser_tool"]["parsed_meal"]`
-  - **Status**: ✅ COMPLETED - LLM-assisted parsing with FDC validation; handles partial validation gracefully.
-
-- [x] **Task 2.6.2**: Implement NutritionCalc (calculate nutrition from FdcNutrient + FdcPortion)
-  - **Estimated Effort**: 2 days
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/nutrition_calc.py`
-  - **Environment Keys**: Writes `environment["nutrition_calc_tool"]["calculated"]`
-  - **Status**: ✅ COMPLETED - Calculates macros from FdcFood per-100g fields (simplified approach using FdcFood directly for performance).
-
-- [x] **Task 2.6.3**: Implement ProfileUpdate (update consumed_today and remaining targets)
-  - **Estimated Effort**: 1 day
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/profile_update.py`
-  - **Status**: ✅ COMPLETED - Aggregates today's consumed nutrition from all MealLogEntry, calculates remaining targets, saves MealLogEntry.
+  - **Deliverables**: `elysia/MealAgent/tools/meal_logging/log_meal_e2e.py`
+  - **Environment Keys**: Reads `meal_description` (from user query), Writes `environment["log_meal_e2e_tool"]["updated_profile"]`
+  - **Status**: ✅ COMPLETED - End-to-end meal logging tool that orchestrates all steps internally: parses meal description (LLM-assisted), calculates nutrition from FDC, updates UserProfile and saves MealLogEntry. Reduces tool calls and improves performance.
 
 - [x] **Task 2.6.4**: Implement MealHistoryRetrieval (list/detail endpoints)
   - **Estimated Effort**: 1 day
@@ -271,34 +215,27 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Deliverables**: `elysia/MealAgent/tools/meal_logging/meal_history.py`
   - **Status**: ✅ COMPLETED - Retrieves meal logs with date filtering, aggregates daily totals, returns history with metadata.
 
-- [ ] **Task 2.6.5**: Integrate meal logging workflow via existing `/query` route
+- [x] **Task 2.6.5**: Integrate meal logging workflow via existing `/ws/query` route
   - **Estimated Effort**: 0.5 day
   - **Owner**: Backend Engineer
-  - **Deliverables**: Payload contract for `action="meal.log"` documented; workflow hooked into Tree
-  - **Status**: ✅ COMPLETED - Meal logging executed entirely through Tree + `WS /query`; không cần tạo REST endpoint riêng.
+  - **Deliverables**: Workflow hooked into Tree via standard `/ws/query` WebSocket endpoint
+  - **Status**: ✅ COMPLETED - Meal logging executed entirely through Tree + `/ws/query`; no custom endpoints needed. Tree automatically selects tools based on natural language queries.
 
-- [ ] **Task 2.6.6**: Document `/query` payload patterns cho MealAgent
+- [x] **Task 2.6.6**: Document `/ws/query` payload patterns for MealAgent
   - **Estimated Effort**: 0.5 day
   - **Owner**: Backend Engineer
-  - **Deliverables**: Section trong design/implementation mô tả `action`/`parameters` cho planning, logging, cooking, explain.
-  - **Status**: ✅ COMPLETED - Docs cập nhật, không cần WebSocket mới (`/ws/meals/log`).
+  - **Deliverables**: Section in design/implementation describing standard WebSocket message format
+  - **Status**: ✅ COMPLETED - Docs updated with standard Elysia WebSocket message format. No `action` parameter needed; Tree automatically selects tools based on query content.
 
 ### Phase 3: Extended Features (Week 7-9)
 
 #### 3.1 Plan Week Branch Tools
-- [x] **Task 3.1.1**: Implement PlanAssembleWeekly (21-meal assembly)
-  - **Estimated Effort**: 3 days
+- [x] **Task 3.1.1**: Implement plan_week_e2e_tool (end-to-end weekly planning with variety)
+  - **Estimated Effort**: 4 days (includes 21-meal assembly and variety enforcement)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/plan_week/plan_assemble_weekly.py`
-  - **Environment Keys**: Writes `environment["plan_assemble_weekly_tool"]["plan"]`
-  - **Status**: ✅ COMPLETED - Assembles 21-meal weekly plan (7 days × 3 meals), calculates total and average daily macros, handles recipe reuse with variety tracking.
-
-- [x] **Task 3.1.2**: Implement VarietyGuard (repetition detection and scoring)
-  - **Estimated Effort**: 2 days
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/plan_week/variety_guard.py`
-  - **Environment Keys**: Reads `environment["plan_assemble_weekly_tool"]["plan"]`, Writes `environment["variety_guard_tool"]["report"]`
-  - **Status**: ✅ COMPLETED - Detects recipe repetitions, calculates variety score (0-100) based on uniqueness, repetition penalty, and ingredient diversity. Works with both daily and weekly plans.
+  - **Deliverables**: `elysia/MealAgent/tools/plan_week/plan_week_e2e.py`
+  - **Environment Keys**: Reads `environment["search_and_rank_tool"]["topk"]`, `environment["macro_calc_tool"]["targets"]`, `environment["constraints_guard_tool"]["filters"]`, Writes `environment["plan_week_e2e_tool"]["plan"]`
+  - **Status**: ✅ COMPLETED - End-to-end weekly planning tool that assembles 21-meal plan (7 days × 3 meals), enforces variety (detects repetitions, calculates variety score), calculates total and average daily macros. Reduces tool calls by merging plan_assemble_weekly and variety_guard into one tool.
 
 #### 3.2 Pantry & Shopping Tools
 - [x] **Task 3.2.1**: Implement PantryCRUDTool (CRUD operations on PantryItem)
@@ -312,54 +249,32 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Estimated Effort**: 3 days (includes unit conversion logic)
   - **Owner**: Backend Engineer
   - **Deliverables**: `elysia/MealAgent/tools/shopping/pantry_diff.py`
-  - **Environment Keys**: Reads `environment["build_shopping_tool"]["items"]`, `environment["pantry_crud_tool"]["state"]`, Writes `environment["pantry_diff_tool"]["diff"]`
-  - **Status**: ✅ COMPLETED - Subtracts pantry items from shopping list using FdcPortion for unit conversion, handles ingredient name normalization, generates warnings for excess pantry stock.
+  - **Environment Keys**: Reads `environment["plan_day_e2e_tool"]["plan"]` (or shopping list items), `environment["pantry_crud_tool"]["state"]`, Writes `environment["pantry_diff_tool"]["diff"]`
+  - **Status**: ✅ COMPLETED - Subtracts pantry items from shopping list using FdcPortion for unit conversion, handles ingredient name normalization, generates warnings for excess pantry stock. Can read shopping list from plan_day_e2e_tool.plan or standalone shopping list items.
 
 #### 3.3 Gap Fill Branch Tools
-- [x] **Task 3.3.1**: Implement GapCalc (calculate macro deficits)
-  - **Estimated Effort**: 1 day
+- [x] **Task 3.3.1**: Implement gap_fill_tool (merged: calculate + suggest + apply snacks)
+  - **Estimated Effort**: 3 days (includes all gap filling steps)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/gap_fill/gap_calc.py`
-  - **Environment Keys**: Reads `environment["plan_assemble_day_tool"]["plan"]` or `environment["plan_assemble_weekly_tool"]["plan"]`, Writes `environment["gap_calc_tool"]["deficits"]`
-  - **Status**: ✅ COMPLETED - Calculates macro deficits by comparing plan macros to targets, supports both daily and weekly plans, identifies which macros have deficits.
-
-- [x] **Task 3.3.2**: Implement SuggestSnack (recommend deficit-filling snacks)
-  - **Estimated Effort**: 2 days
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/gap_fill/suggest_snack.py`
-  - **Status**: ✅ COMPLETED - Scores recipes by how well they fit deficit needs, returns top-k suggestions ranked by fit score.
-
-- [x] **Task 3.3.3**: Implement ApplySnack (add snack to plan and recalculate)
-  - **Estimated Effort**: 1 day
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/gap_fill/apply_snack.py`
-  - **Status**: ✅ COMPLETED - Adds snack to plan (daily or weekly), recalculates total macros, supports fetching snack by food_id or using suggestions.
+  - **Deliverables**: `elysia/MealAgent/tools/gap_fill/gap_fill.py`
+  - **Environment Keys**: Reads `environment["plan_day_e2e_tool"]["plan"]` or `environment["plan_week_e2e_tool"]["plan"]`, `environment["macro_calc_tool"]["targets"]`, Writes `environment["gap_fill_tool"]["updated_plan"]`, `environment["gap_fill_tool"]["deficits"]`
+  - **Status**: ✅ COMPLETED - End-to-end gap filling tool that calculates deficits, suggests snacks, and optionally applies them to the plan. Reduces tool calls by merging three separate tools into one.
 
 #### 3.4 Substitution Branch Tools
-- [x] **Task 3.4.1**: Implement SuggestSubstitutes (find ingredient alternatives)
-  - **Estimated Effort**: 3 days (includes ±20% macro matching logic)
+- [x] **Task 3.4.1**: Implement substitute_tool (merged: suggest + apply substitutions)
+  - **Estimated Effort**: 3 days (includes ±20% macro matching logic and application)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/substitution/suggest_substitutes.py`
-  - **Status**: ✅ COMPLETED - Finds ingredient substitutes using macro matching with configurable tolerance (default ±20%), scores by match quality, returns top-k suggestions.
-
-- [x] **Task 3.4.2**: Implement ApplySubstitute (swap ingredient in plan)
-  - **Estimated Effort**: 1 day
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/substitution/apply_substitute.py`
-  - **Status**: ✅ COMPLETED - Updates recipe ingredient_fdc_map in Weaviate and plan, replaces original ingredient with substitute, supports both daily and weekly plans.
+  - **Deliverables**: `elysia/MealAgent/tools/substitution/substitute.py`
+  - **Environment Keys**: Reads `environment["plan_day_e2e_tool"]["plan"]` or recipe data, Writes `environment["substitute_tool"]["updated_plan"]`, `environment["substitute_tool"]["substitutes"]`
+  - **Status**: ✅ COMPLETED - End-to-end substitution tool that finds ingredient substitutes using macro matching (default ±20% tolerance) and optionally applies them to the plan. Reduces tool calls by merging two separate tools into one.
 
 #### 3.5 Micronutrient Tools
-- [x] **Task 3.5.1**: Implement MicronutrientCheck (aggregate micros from FdcNutrient + FdcPortion)
-  - **Estimated Effort**: 4 days (includes portion conversion logic)
+- [x] **Task 3.5.1**: Implement micros_tool (merged: check + suggest micronutrient foods)
+  - **Estimated Effort**: 4 days (includes aggregation, portion conversion, and suggestion logic)
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/micros/micronutrient_check.py`
-  - **Status**: ✅ COMPLETED - Aggregates micronutrients from FdcFood per-100g fields (simplified approach), calculates totals and averages for weekly plans, supports portion conversion via FdcPortion.
-
-- [x] **Task 3.5.2**: Implement SuggestMicrosFoods (recommend foods rich in deficient nutrients)
-  - **Estimated Effort**: 2 days
-  - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/micros/suggest_micros_foods.py`
-  - **Status**: ✅ COMPLETED - Suggests foods rich in deficient micronutrients, scores by nutrient content, returns top-k suggestions per nutrient.
+  - **Deliverables**: `elysia/MealAgent/tools/micros/micros.py`
+  - **Environment Keys**: Reads `environment["plan_day_e2e_tool"]["plan"]` or `environment["plan_week_e2e_tool"]["plan"]`, Writes `environment["micros_tool"]["totals"]`, `environment["micros_tool"]["suggestions"]`
+  - **Status**: ✅ COMPLETED - End-to-end micronutrient tool that aggregates micronutrients from FdcFood (with portion conversion via FdcPortion), identifies deficits, and optionally suggests foods rich in deficient nutrients. Reduces tool calls by merging two separate tools into one.
 
 ### Phase 4: UI & Polish (Week 10-12)
 
@@ -412,11 +327,11 @@ description: Break down work into actionable tasks and estimate timeline for Mea
   - **Deliverables**: `elysia/MealAgent/tools/cook_mode/cook_mode.py`
   - **Status**: ✅ COMPLETED - Deterministic step extraction from `cooking_method_array` (with fallback to ingredients), streams step-by-step guidance via async generator. Emits `cook_mode_tool.steps` for UI/WebSocket consumption.
 
-- [x] **Task 4.3.2**: Implement Explain (generate natural language explanation from Environment)
-  - **Estimated Effort**: 3 days (may use LLM or template-based generation)
+- [x] **Task 4.3.2**: Integrate Elysia `cited_summarize` for explanations
+  - **Estimated Effort**: 1 day
   - **Owner**: Backend Engineer
-  - **Deliverables**: `elysia/MealAgent/tools/explain/explain.py`
-  - **Status**: ✅ COMPLETED - Composes explanation from Environment (profile, targets, constraints, ranking, plan, deficits). Optional LLM polish if `base_lm` provided. Emits `explain_tool.explanation`.
+  - **Deliverables**: Tree configuration updated to use Elysia `cited_summarize` tool
+  - **Status**: ✅ COMPLETED - Replaced custom `explain_tool` with Elysia built-in `cited_summarize` tool. Provides better citations and is well-tested. Reads from entire Environment and generates summary with citations.
 
 ### Tree Integration Plan (Elysia)
 - Create a dedicated MealAgent Tree on user session creation:

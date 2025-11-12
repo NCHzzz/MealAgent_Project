@@ -3,7 +3,7 @@
 import React from "react";
 import { MdStorage } from "react-icons/md";
 import { IoCopy } from "react-icons/io5";
-import { FaCloud, FaServer } from "react-icons/fa";
+import { FaCloud, FaServer, FaDatabase } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
 import {
   SettingCard,
@@ -21,6 +21,8 @@ interface StorageSectionProps {
   currentFrontendConfig: FrontendConfig | null;
   storageIssues: string[];
   shouldHighlightUseSameCluster: boolean;
+  customStorageHttpHostValid: boolean;
+  customStorageGrpcHostValid: boolean;
   onUpdateFrontend: (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     keyOrUpdates: string | Record<string, any>,
@@ -40,8 +42,11 @@ export default function StorageSection({
   shouldHighlightUseSameCluster,
   onUpdateFrontend,
   onCopyWeaviateValues,
+  customStorageHttpHostValid,
+  customStorageGrpcHostValid,
 }: StorageSectionProps) {
   const isLocal = currentFrontendConfig?.save_location_weaviate_is_local;
+  const isCustom = currentFrontendConfig?.save_location_weaviate_is_custom;
 
   return (
     <SettingCard>
@@ -85,11 +90,12 @@ export default function StorageSection({
             description="Choose between local or remote Weaviate storage."
           />
           <SettingToggle
-            value={isLocal ? "Local" : "Cloud"}
+            value={isLocal ? "Local" : isCustom ? "Custom" : "Cloud"}
             onChange={(value) => {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const updates: Record<string, any> = {
                 save_location_weaviate_is_local: value === "Local",
+                save_location_weaviate_is_custom: value === "Custom",
               };
 
               // Auto-populate URL when switching to local if it's empty
@@ -102,31 +108,133 @@ export default function StorageSection({
               }
               onUpdateFrontend(updates);
             }}
-            labelA="Cloud"
-            labelB="Local"
-            iconA={<FaCloud />}
-            iconB={<FaServer />}
+            labels={["Cloud", "Local", "Custom"]}
+            icons={[
+              <FaCloud key="cloud" />,
+              <FaServer key="server" />,
+              <FaDatabase key="custom" />,
+            ]}
           />
         </SettingItem>
-        <SettingItem>
-          <SettingTitle
-            title="URL"
-            description="The URL of your Weaviate cluster to save configs and conversations to."
-          />
-          <SettingInput
-            key="elysia-storage-url"
-            isProtected={false}
-            value={currentFrontendConfig?.save_location_wcd_url || ""}
-            onChange={(value) => {
-              onUpdateFrontend("save_location_wcd_url", value);
-            }}
-            isInvalid={
-              (currentFrontendConfig?.save_configs_to_weaviate ||
-                currentFrontendConfig?.save_trees_to_weaviate) &&
-              !currentFrontendConfig?.save_location_wcd_url?.trim()
-            }
-          />
-        </SettingItem>
+
+        {!isCustom && (
+          <SettingItem>
+            <SettingTitle
+              title="URL"
+              description="The URL of your Weaviate cluster to save configs and conversations to."
+            />
+            <SettingInput
+              key="elysia-storage-url"
+              isProtected={false}
+              value={currentFrontendConfig?.save_location_wcd_url || ""}
+              onChange={(value) => {
+                onUpdateFrontend("save_location_wcd_url", value);
+              }}
+              isInvalid={
+                (currentFrontendConfig?.save_configs_to_weaviate ||
+                  currentFrontendConfig?.save_trees_to_weaviate) &&
+                !currentFrontendConfig?.save_location_wcd_url?.trim()
+              }
+            />
+          </SettingItem>
+        )}
+
+        {isCustom && (
+          <>
+            <SettingItem>
+              <SettingTitle
+                title="HTTP Host"
+                description="The HTTP host of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  currentFrontendConfig?.save_location_custom_http_host || ""
+                }
+                onChange={(value) => {
+                  onUpdateFrontend("save_location_custom_http_host", value);
+                }}
+                isInvalid={!customStorageHttpHostValid}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="HTTP Port"
+                description="The HTTP port of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  currentFrontendConfig?.save_location_custom_http_port || 80
+                }
+                onChange={(value) => {
+                  onUpdateFrontend("save_location_custom_http_port", value);
+                }}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="HTTP Secure"
+                description="Whether the HTTP connection is secure."
+              />
+              <SettingCheckbox
+                value={
+                  currentFrontendConfig?.save_location_custom_http_secure ||
+                  false
+                }
+                onChange={(value) => {
+                  onUpdateFrontend("save_location_custom_http_secure", value);
+                }}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="GRPC Host"
+                description="The GRPC host of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  currentFrontendConfig?.save_location_custom_grpc_host || ""
+                }
+                onChange={(value) => {
+                  onUpdateFrontend("save_location_custom_grpc_host", value);
+                }}
+                isInvalid={!customStorageGrpcHostValid}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="GRPC Port"
+                description="The GRPC port of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  currentFrontendConfig?.save_location_custom_grpc_port || 50051
+                }
+                onChange={(value) => {
+                  onUpdateFrontend("save_location_custom_grpc_port", value);
+                }}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="GRPC Secure"
+                description="Whether the GRPC connection is secure."
+              />
+              <SettingCheckbox
+                value={
+                  currentFrontendConfig?.save_location_custom_grpc_secure ||
+                  false
+                }
+                onChange={(value) => {
+                  onUpdateFrontend("save_location_custom_grpc_secure", value);
+                }}
+              />
+            </SettingItem>
+          </>
+        )}
 
         {isLocal && (
           <>
@@ -139,7 +247,7 @@ export default function StorageSection({
                 isProtected={false}
                 value={
                   currentFrontendConfig?.save_location_local_weaviate_grpc_port ||
-                  0
+                  50051
                 }
                 onChange={(value) => {
                   onUpdateFrontend("save_location_weaviate_grpc_port", value);
@@ -184,6 +292,7 @@ export default function StorageSection({
             }}
             isInvalid={
               !isLocal &&
+              !isCustom &&
               (currentFrontendConfig?.save_configs_to_weaviate ||
                 currentFrontendConfig?.save_trees_to_weaviate) &&
               !currentFrontendConfig?.save_location_wcd_api_key?.trim()

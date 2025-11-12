@@ -62,9 +62,42 @@ OPENAI_API_KEY=your_key_here
 # If you explicitly choose OpenAI embeddings, set a model, otherwise leave unset
 # OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
-# Elysia Settings
-ELYSIA_ENV=development
-ELYSIA_LOG_LEVEL=INFO
+# Elysia Settings (see https://weaviate.github.io/elysia/Reference/Settings/)
+# Model Configuration
+BASE_MODEL=gpt-4o-mini                    # Base model for structured output
+COMPLEX_MODEL=gpt-4o                      # Complex model for reasoning
+BASE_PROVIDER=openai                      # Provider for base model (e.g., "openai", "openrouter/openai", "anthropic", "gemini")
+COMPLEX_PROVIDER=openai                   # Provider for complex model
+MODEL_API_BASE=                            # Optional: API base URL (required for ollama/local models)
+
+# Weaviate Configuration (can also be set via Settings.configure())
+WCD_URL=http://localhost:8080              # Weaviate Cloud Database URL
+WCD_API_KEY=                               # Optional API key for Weaviate
+WEAVIATE_IS_LOCAL=True                     # Whether Weaviate is local
+LOCAL_WEAVIATE_PORT=8080                   # Local Weaviate HTTP port
+LOCAL_WEAVIATE_GRPC_PORT=50051             # Local Weaviate gRPC port
+
+# Custom Weaviate Connection (optional)
+WEAVIATE_IS_CUSTOM=False                   # Use custom connection parameters
+CUSTOM_HTTP_HOST=                          # Custom HTTP host
+CUSTOM_HTTP_PORT=8080                      # Custom HTTP port
+CUSTOM_HTTP_SECURE=False                   # Use HTTPS
+CUSTOM_GRPC_HOST=                          # Custom gRPC host
+CUSTOM_GRPC_PORT=50051                     # Custom gRPC port
+CUSTOM_GRPC_SECURE=False                   # Use secure gRPC
+
+# Logging
+LOGGING_LEVEL=INFO                         # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# API Keys (can also be set via Settings.configure(openai_apikey="..."))
+OPENAI_APIKEY=your_key_here                # OpenAI API key
+# ANTHROPIC_APIKEY=                        # Anthropic API key (if using Claude)
+# GEMINI_APIKEY=                           # Google Gemini API key (if using Gemini)
+
+# Experimental Features
+USE_FEEDBACK=False                         # EXPERIMENTAL: Use feedback from previous runs
+BASE_USE_REASONING=True                    # Use reasoning output for base model
+COMPLEX_USE_REASONING=True                 # Use reasoning output for complex model
 
 # MealAgent Specific
 FDC_DATA_PATH=data/fdc/raw
@@ -99,57 +132,41 @@ elysia/
     │   │   │   └── macro_calc.py           # Task 2.1.2
     │   │   ├── constraints/
     │   │   │   ├── __init__.py
-    │   │   │   ├── diet_allergen_guard.py  # Task 2.2.1
-    │   │   │   └── time_device_guard.py    # Task 2.2.2
+    │   │   │   └── constraints_guard.py    # Consolidated constraint filtering
     │   │   ├── search/
     │   │   │   ├── __init__.py
-    │   │   │   ├── query.py                # Task 2.3.1
-    │   │   │   ├── query_postprocessing.py # Task 2.3.2
-    │   │   │   └── score_and_rank.py       # Task 2.3.3
+    │   │   │   └── search_and_rank.py      # Uses Elysia `query` internally
     │   │   ├── nutrition/
     │   │   │   ├── __init__.py
-    │   │   │   └── calculate_recipe_macros.py # Task 2.3.4 (VN→EN on-demand + cache)
+    │   │   │   └── calculate_recipe_macros.py # VN→EN on-demand + cache
     │   │   ├── plan_day/
     │   │   │   ├── __init__.py
-    │   │   │   ├── target_resolver.py      # Task 2.4.1
-    │   │   │   ├── plan_assemble.py        # Task 2.4.2
-    │   │   │   ├── plan_validate.py        # Task 2.4.3
-    │   │   │   └── build_shopping.py       # Task 2.4.4
+    │   │   │   └── plan_day_e2e.py         # End-to-end daily planning
     │   │   ├── plan_week/
     │   │   │   ├── __init__.py
-    │   │   │   ├── plan_assemble_weekly.py # Task 3.1.1
-    │   │   │   └── variety_guard.py        # Task 3.1.2
+    │   │   │   └── plan_week_e2e.py        # End-to-end weekly planning (includes variety)
     │   │   ├── pantry/
     │   │   │   ├── __init__.py
-    │   │   │   └── pantry_crud.py          # Task 3.2.1
+    │   │   │   └── pantry_crud.py          # Pantry management
     │   │   ├── shopping/
     │   │   │   ├── __init__.py
-    │   │   │   └── pantry_diff.py          # Task 3.2.2
+    │   │   │   └── pantry_diff.py          # Shopping list with pantry subtraction
     │   │   ├── gap_fill/
     │   │   │   ├── __init__.py
-    │   │   │   ├── gap_calc.py             # Task 3.3.1
-    │   │   │   ├── suggest_snack.py        # Task 3.3.2
-    │   │   │   └── apply_snack.py          # Task 3.3.3
+    │   │   │   └── gap_fill.py             # Merged: calc + suggest + apply
     │   │   ├── substitution/
     │   │   │   ├── __init__.py
-    │   │   │   ├── suggest_substitutes.py  # Task 3.4.1
-    │   │   │   └── apply_substitute.py     # Task 3.4.2
+    │   │   │   └── substitute.py           # Merged: suggest + apply
     │   │   ├── micros/
     │   │   │   ├── __init__.py
-    │   │   │   ├── micronutrient_check.py  # Task 3.5.1
-    │   │   │   └── suggest_micros_foods.py # Task 3.5.2
+    │   │   │   └── micros.py               # Merged: check + suggest
     │   │   ├── meal_logging/
     │   │   │   ├── __init__.py
-    │   │   │   ├── meal_parser.py          # Task 2.6.1
-    │   │   │   ├── nutrition_calc.py       # Task 2.6.2
-    │   │   │   ├── profile_update.py       # Task 2.6.3
-    │   │   │   └── meal_history.py         # Task 2.6.4
-    │   │   ├── cook_mode/
-    │   │   │   ├── __init__.py
-    │   │   │   └── cook_mode.py            # Task 4.3.1
-    │   │   └── explain/
+    │   │   │   ├── log_meal_e2e.py         # End-to-end meal logging
+    │   │   │   └── meal_history.py         # View meal history
+    │   │   └── cook_mode/
     │   │       ├── __init__.py
-    │   │       └── explain.py              # Task 4.3.2
+    │   │       └── cook_mode.py            # Cooking instructions
     │   ├── tree/
     │   │   ├── __init__.py
     │   │   ├── meal_tree.py                # Task 2.5.1
@@ -158,8 +175,7 @@ elysia/
     │       └── create_collections.py       # + --drop-only/--create-only
     │
     ├── api/
-    │   ├── routes/                         # REST/WS endpoints (Phase 2.6, later)
-    │   └── services/
+    │   └── services/                       # UserManager, TreeManager (Elysia built-in)
     │       ├── user.py                     # UserManager
     │       └── tree.py                     # TreeManager
     │
@@ -184,19 +200,21 @@ elysia-frontend/
 ### Cooking & Explanation (Phase 4.3)
 
 - `cook_mode_tool` (`elysia/MealAgent/tools/cook_mode/cook_mode.py`)
-  - Inputs: optional `food_id`; otherwise reads from `plan_assemble_day_tool.plan` / `plan_assemble_weekly_tool.plan` / `score_and_rank_tool.topk`
+  - Inputs: optional `food_id`; otherwise reads from `plan_day_e2e_tool.plan` / `plan_week_e2e_tool.plan` / `search_and_rank_tool.topk`
   - Outputs (Environment): `environment["cook_mode_tool"]["steps"]` with fields `index`, `instruction`, `estimated_seconds`
   - Streaming: yields text per step
   - Notes: deterministic from `cooking_method_array`; fallback to `ingredients`
 
-- `explain_tool` (`elysia/MealAgent/tools/explain/explain.py`)
-  - Inputs: reads context from Environment (profile, targets, constraints, ranking, plan, deficits, snacks, substitutes, variety)
-  - Outputs (Environment): `environment["explain_tool"]["explanation"]` (and streams final text)
-  - Optional: `base_lm` to polish explanation
+- `cited_summarize` (Elysia built-in from `elysia.tools.text.text.CitedSummarizer`)
+  - Inputs: reads context from entire Environment (profile, targets, constraints, ranking, plan, deficits, snacks, substitutes, variety)
+  - Outputs: Summary with citations from environment data
+  - Notes: Replaces `explain_tool`; provides better citations and is well-tested
 
 API Integration:
-- Không tạo thêm endpoint mới. Những workflow này được kích hoạt thông qua payload `action` tương ứng trên WebSocket `/query`.
-- Frontend hoặc client khác gửi `{"action": "meal.cook", ...}` hoặc `{"action": "meal.explain", ...}` cùng `user_id`, `conversation_id`, Tree sẽ điều phối `cook_mode_tool` và `explain_tool`.
+- **No custom endpoints needed**: All functionality flows through Elysia's standard `/ws/query` WebSocket endpoint.
+- **Natural language queries**: Frontend sends natural language queries like "Show me how to cook recipe_001" or "Why did you choose these recipes?" through the standard WebSocket message format.
+- **Tree orchestration**: The Elysia decision tree automatically selects and executes `cook_mode_tool` or `cited_summarize` based on the user's query. No explicit action parameters are needed.
+- **WebSocket format**: Use standard Elysia WebSocket message format: `{user_id, conversation_id, query_id, query, collection_names, ...}` (see design doc for full format).
 
 ### Naming Conventions
 
@@ -251,8 +269,8 @@ async def calculate_recipe_macros_tool(recipe_id: str, client_manager, llm_clien
 ```
 
 Integration points:
-- In `score_and_rank_tool`: before scoring, if a recipe lacks `macros_per_serving`, call this tool and enrich the recipe object in-memory.
-- In `plan_assemble_day_tool`: ensure selected recipes have macros; call tool if missing.
+- In `search_and_rank_tool`: before ranking, if a recipe lacks `macros_per_serving`, call this tool and enrich the recipe object in-memory.
+- In `plan_day_e2e_tool`: ensure selected recipes have macros; call tool if missing.
 
 Performance:
 - Cache hit: read from Recipe in Weaviate
@@ -265,22 +283,23 @@ Ingredient mapping cache:
 API contract note:
 - Responses that include recipes may return objects without `macros_per_serving` on first read; backend will compute and persist on-demand via this tool when needed.
 
-**ProfileCRUDTool Implementation**:
+**ProfileCRUDTool Implementation** (Actual Code Pattern):
 ```python
-# elysia/MealAgent/tools/profile/profile_crud.py
-from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
+# MealAgent/tools/profile/profile_crud.py
+from typing import AsyncGenerator, Optional
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
 @tool
 async def profile_crud_tool(
-    tree_data: TreeData,           # Automatically injected - access environment via tree_data.environment
-    client_manager: ClientManager,  # Automatically injected - Weaviate client access
-    action: str = "create",        # "create", "read", "update"
-    profile_data: dict = None,      # LLM-chosen or user-provided parameter
-    **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
+    tree_data: TreeData,
+    client_manager: ClientManager,
+    action: str = "create",
+    profile_data: dict | None = None,
+    **kwargs,
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Create, read, or update user profile in UserProfile collection.
     
@@ -288,34 +307,45 @@ async def profile_crud_tool(
         Reads: None (first tool in workflow)
         Writes: environment["profile_crud_tool"]["profile"] - stores profile data
     """
-    yield f"Processing profile {action}..."
+    # Use Response() for user-visible text (not plain strings)
+    yield Response(f"Processing profile {action}...")
     
     client = client_manager.get_client()
     collection = client.collections.get("UserProfile")
     
     try:
-        if action == "create" or action == "update":
-            # Validate profile_data
-            required_fields = ["user_id", "age", "gender", "weight_kg", "height_cm", "activity_level"]
-            if not profile_data or not all(field in profile_data for field in required_fields):
-                yield Error(f"Missing required fields: {required_fields}")
+        if action in {"create", "update"}:
+            # Validate profile_data (validation function omitted for brevity)
+            if not profile_data:
+                yield Response("Skipping profile operation: missing profile_data")
                 return
             
-            # Upsert to Weaviate
-            result = collection.data.insert(profile_data)
+            # Upsert by user_id
+            user_id = profile_data["user_id"]
+            existing = collection.query.fetch_objects(
+                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                limit=1
+            )
+            
+            if existing.objects:
+                collection.data.update(uuid=existing.objects[0].uuid, properties=profile_data)
+            else:
+                collection.data.insert(profile_data)
             
             # Yield Result to add to environment
             yield Result(
-                name="profile",  # Environment key: environment["profile_crud_tool"]["profile"]
-                objects=[profile_data],
-                metadata={"action": action, "user_id": profile_data.get("user_id")}
+                objects=[profile_data],  # Required: list of dict objects
+                metadata={"action": action, "user_id": user_id},  # Optional: metadata
+                payload_type="generic",  # Optional: result type identifier
+                name="profile",  # Optional: creates environment["profile_crud_tool"]["profile"]
+                display=True  # Optional: whether to display on frontend
             )
-            yield f"Profile {action}d successfully for user {profile_data['user_id']}"
+            yield Response(f"Profile {action}d successfully for user {user_id}")
             
         elif action == "read":
             user_id = profile_data.get("user_id") if profile_data else kwargs.get("user_id")
             if not user_id:
-                yield Error("user_id is required for read operation")
+                yield Response("Skipping profile read: user_id is required")
                 return
                 
             result = collection.query.fetch_objects(
@@ -328,10 +358,12 @@ async def profile_crud_tool(
                 yield Result(
                     name="profile",
                     objects=[profile],
-                    metadata={"action": "read"}
+                    metadata={"action": "read", "user_id": user_id},
+                    payload_type="generic"
                 )
+                yield Response(f"Profile read successfully for user {user_id}")
             else:
-                yield Error(f"Profile not found for user {user_id}")
+                yield Response(f"Profile not found for user {user_id}")
                 return
                 
     except Exception as e:
@@ -339,20 +371,22 @@ async def profile_crud_tool(
         return
 ```
 
-**MacroCalcTool Implementation**:
+**MacroCalcTool Implementation** (Actual Code Pattern):
 ```python
-# elysia/MealAgent/tools/profile/macro_calc.py
+# MealAgent/tools/profile/macro_calc.py
 from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
-from elysia.MealAgent.utils.nutrition import calculate_harris_benedict_tdee
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error, Response
+from elysia.util.client import ClientManager
+from MealAgent.utils.nutrition import calculate_harris_benedict_tdee
 from elysia import tool
 
 @tool
 async def macro_calc_tool(
-    tree_data: TreeData,           # Automatically injected
-    client_manager: ClientManager,  # Automatically injected
+    tree_data: TreeData,
+    client_manager: ClientManager,
     **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Calculate TDEE and macro targets using Harris-Benedict equation.
     
@@ -360,18 +394,15 @@ async def macro_calc_tool(
         Reads: environment["profile_crud_tool"]["profile"]
         Writes: environment["macro_calc_tool"]["targets"]
     """
-    yield "Calculating nutritional targets..."
+    yield Response("Calculating nutritional targets...")
     
     # Read profile from environment
     profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-    if not profile_results:
+    if not profile_results or not profile_results[0].objects:
         yield Error("Profile not found in environment. Run profile_crud_tool first.")
         return
     
-    profile = profile_results[0].objects[0] if profile_results and profile_results[0].objects else None
-    if not profile:
-        yield Error("Profile data is empty. Run profile_crud_tool first.")
-        return
+    profile = profile_results[0].objects[0]
     
     # Calculate TDEE
     tdee = calculate_harris_benedict_tdee(
@@ -395,11 +426,13 @@ async def macro_calc_tool(
     }
     
     yield Result(
-        name="targets",
-        objects=[targets],
-        metadata={"calculated_from": profile.get("user_id")}
+        objects=[targets],  # Required: list of dict objects
+        metadata={"calculated_from": profile.get("user_id")},  # Optional: metadata
+        payload_type="generic",  # Optional: result type identifier
+        name="targets",  # Optional: creates environment["macro_calc_tool"]["targets"]
+        display=True  # Optional: whether to display on frontend
     )
-    yield f"Target: {tdee:.0f} kcal | {protein_g:.0f}g P | {fat_g:.0f}g F | {carb_g:.0f}g C"
+    yield Response(f"Target: {tdee:.0f} kcal | {protein_g:.0f}g P | {fat_g:.0f}g F | {carb_g:.0f}g C")
 ```
 
 **Harris-Benedict Utility** (`utils/nutrition.py`):
@@ -442,626 +475,206 @@ def calculate_harris_benedict_tdee(
     return tdee
 ```
 
-#### 2. Hybrid Search (query, ScoreAndRank)
+#### 2. Hybrid Search (search_and_rank_tool)
 
-**query Tool Implementation** (`tools/search/query.py`) — aligned with minimal Recipe schema:
+**search_and_rank_tool Implementation** (`tools/search/search_and_rank.py`) — uses Elysia `query` internally:
 ```python
 from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData, Result, Error, Response
 from elysia.util.client import ClientManager
+from elysia.tools.retrieval.query import Query  # Elysia built-in
 from elysia import tool
 
 @tool
-async def query_tool(
+async def search_and_rank_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
     query_text: str = "",
+    collection_name: str = "Recipe",
     limit: int = 100,
-    **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
-    """
-    Hybrid search on Recipe collection with supported filters.
-    
-    Environment:
-        Reads: optional filters (e.g., dish_type), and time constraints if available
-        Writes: environment["query_tool"]["results"]
-    """
-    yield f"Searching recipes: '{query_text}'..."
-    
-    client = client_manager.get_client()
-    collection = client.collections.get("Recipe")
-    
-    # Build filters from available properties in current Recipe schema
-    where_conditions = []
-    
-    # Example: filter by dish_type if provided via environment or kwargs
-    dish_type = kwargs.get("dish_type")
-    if dish_type:
-        where_conditions.append({
-            "path": ["dish_type"],
-            "operator": "Equal",
-            "valueString": dish_type
-        })
-    
-    # Example: filter by cooking_time
-    max_cooking_time = kwargs.get("max_cooking_time")
-    if isinstance(max_cooking_time, int):
-        where_conditions.append({
-            "path": ["cooking_time"],
-            "operator": "LessThanEqual",
-            "valueInt": max_cooking_time
-        })
-    
-    # Build where clause (combine with AND)
-    where_clause = None
-    if len(where_conditions) == 1:
-        where_clause = where_conditions[0]
-    elif len(where_conditions) > 1:
-        where_clause = {
-            "operator": "And",
-            "operands": where_conditions
-        }
-    
-    # Execute hybrid search
-    try:
-        results = collection.query.hybrid(
-        query=query_text,
-        alpha=0.5,  # 50% BM25, 50% vector
-        where=where_clause,
-        limit=limit
-    )
-    
-    recipes = [obj.properties for obj in results.objects]
-    
-    yield Result(
-            name="results",
-            objects=recipes,
-            metadata={"query": query_text, "count": len(recipes)}
-        )
-        yield f"Found {len(recipes)} matching recipes"
-    except Exception as e:
-        yield Error(f"Search failed: {str(e)}")
-        return
-```
-
-**ScoreAndRank Tool** (`tools/search/score_and_rank.py`):
-```python
-from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
-from elysia.util.client import ClientManager
-from elysia import tool
-
-@tool
-async def score_and_rank_tool(
-    tree_data: TreeData,
-    client_manager: ClientManager,
     top_k: int = 20,
     **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Multi-criteria scoring and ranking of recipes.
-    
-    Criteria:
-        1. Macro fit (how close to targets per meal)
-        2. Semantic relevance (from hybrid search score)
-        3. Diversity (prefer varied ingredients/cuisines)
+    End-to-end search → postprocess → rank using Elysia query internally.
     
     Environment:
-        Reads: environment["query_postprocessing_tool"]["deduped"], 
-               environment["macro_calc_tool"]["targets"]
-        Writes: environment["score_and_rank_tool"]["topk"]
+        Reads: constraints_guard_tool.filters, macro_calc_tool.targets
+        Writes: search_and_rank_tool.topk
     """
-    yield "Ranking recipes by fit and diversity..."
+    yield Response("Searching and ranking recipes...")
     
-    # Read recipes from environment
-    recipes_results = tree_data.environment.find("query_postprocessing_tool", "deduped")
-    if not recipes_results or not recipes_results[0].objects:
-        recipes = []
-    else:
-        recipes = recipes_results[0].objects
+    # Use Elysia Query tool internally
+    elysia_query = Query()
     
-    # Read targets from environment
-    targets_results = tree_data.environment.find("macro_calc_tool", "targets")
-    if not targets_results or not targets_results[0].objects:
-        yield Error("Targets not found in environment. Run macro_calc_tool first.")
+    # Get constraints from environment
+    constraints_results = tree_data.environment.find("constraints_guard_tool", "filters")
+    where_clause = None
+    if constraints_results and constraints_results[0].objects:
+        where_clause = constraints_results[0].objects[0].get("where")
+    
+    # Execute Elysia query
+    async for result in elysia_query(
+        tree_data=tree_data,
+        base_lm=kwargs.get("base_lm"),
+        complex_lm=kwargs.get("complex_lm"),
+        client_manager=client_manager,
+        inputs={"collection_names": [collection_name]},
+    **kwargs
+    ):
+        if isinstance(result, Error):
+            yield result
         return
+        # Elysia query yields Retrieval objects - extract results
+        if hasattr(result, "objects"):
+            recipes = [obj.properties for obj in result.objects]
     
+            # Rank by macro fit (read targets from environment)
+            targets_results = tree_data.environment.find("macro_calc_tool", "targets")
+            if targets_results and targets_results[0].objects:
     targets = targets_results[0].objects[0]
-    
-    if not recipes:
-        yield Error("No recipes to rank")
-        return
-    
-    # Calculate target per meal (assume 3 meals/day)
-    target_per_meal = {
-        "kcal": targets.get("tdee_kcal", 2000) / 3,
-        "protein_g": targets.get("protein_g", 150) / 3,
-        "fat_g": targets.get("fat_g", 67) / 3,
-        "carb_g": targets.get("carb_g", 200) / 3
-    }
-    
-    # Score each recipe
-    scored_recipes = []
-    for recipe in recipes:
-        macros = recipe.get("macros_per_serving", {})
-        
-        # Calculate macro deviation (lower is better)
-        kcal_dev = abs(macros.get("kcal", 0) - target_per_meal["kcal"]) / target_per_meal["kcal"] if target_per_meal["kcal"] > 0 else 1.0
-        protein_dev = abs(macros.get("protein_g", 0) - target_per_meal["protein_g"]) / target_per_meal["protein_g"] if target_per_meal["protein_g"] > 0 else 1.0
-        
-        # Composite score (0-100, higher is better)
-        macro_score = max(0, 100 - (kcal_dev + protein_dev) * 50)
-        
-        # Semantic score from hybrid search (if available in metadata)
-        semantic_score = 50  # Default if not available
-        if "_additional" in recipe:
-            search_score = recipe.get("_additional", {}).get("score", 0.5)
-            semantic_score = search_score * 100
-        
-        # Weighted average
-        total_score = 0.6 * macro_score + 0.4 * semantic_score
-        
-        scored_recipes.append({
-            **recipe,
-            "fit_score": total_score
-        })
-    
-    # Sort and take top_k
-    scored_recipes.sort(key=lambda x: x.get("fit_score", 0), reverse=True)
-    top_recipes = scored_recipes[:top_k]
+                # Score and rank recipes...
+                ranked = rank_recipes(recipes, targets, top_k)
     
     yield Result(
+                    objects=ranked,
+                    metadata={"query": query_text, "top_k": top_k},
+                    payload_type="generic",
         name="topk",
-        objects=top_recipes,
-        metadata={"top_k": top_k, "total_scored": len(scored_recipes)}
+                    display=True
     )
-    yield f"Top {len(top_recipes)} recipes ranked by fit"
+                yield Response(f"Top {len(ranked)} recipes ranked by fit")
+                return
 ```
 
-#### 3. Plan Assembly (PlanAssembleDay)
+**Note**: This is a simplified example. The actual `search_and_rank_tool` should handle Elysia Query's output format properly and include ranking logic internally.
 
-**Implementation** (`tools/plan_day/plan_assemble.py`):
+#### 3. Plan Assembly (plan_day_e2e_tool)
+
+**Implementation** (`tools/plan_day/plan_day_e2e.py`) — end-to-end daily planning:
 ```python
 from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData, Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
 @tool
-async def plan_assemble_day_tool(
+async def plan_day_e2e_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
     **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Assemble 3-meal daily plan from top-ranked recipes.
+    End-to-end daily planning: resolve targets → search → rank → assemble → validate.
     
-    Strategy:
-        - Breakfast: Highest carb recipe (energy for day)
-        - Lunch: Balanced macro recipe
-        - Dinner: Highest protein recipe (recovery)
+    This tool orchestrates the full daily planning workflow internally:
+    1. Resolve targets (from profile or query override)
+    2. Apply constraints (diet/allergen/time)
+    3. Search and rank recipes
+    4. Assemble 3-meal plan
+    5. Validate constraints and macros
+    6. Generate shopping list (optional)
     
     Environment:
-        Reads: environment["score_and_rank_tool"]["topk"], 
-               environment["target_resolver_tool"]["resolved"]
-        Writes: environment["plan_assemble_day_tool"]["plan"]
+        Reads: macro_calc_tool.targets, constraints_guard_tool.filters, search_and_rank_tool.topk
+        Writes: plan_day_e2e_tool.plan
     """
-    yield "Assembling daily meal plan..."
+    yield Response("Planning daily meals...")
     
-    # Read recipes from environment
-    recipes_results = tree_data.environment.find("score_and_rank_tool", "topk")
-    if not recipes_results or not recipes_results[0].objects:
-        yield Error("No ranked recipes found. Run score_and_rank_tool first.")
-        return
+    # Internal steps (simplified - actual implementation would be more detailed)
+    # Step 1: Resolve targets
+    targets = await _resolve_targets(tree_data, kwargs)
     
-    recipes = recipes_results[0].objects
+    # Step 2: Apply constraints
+    filters = await _apply_constraints(tree_data, kwargs)
     
-    if len(recipes) < 3:
-        yield Error("Insufficient recipes for 3-meal plan")
-        return
+    # Step 3: Search and rank (uses search_and_rank_tool or calls it internally)
+    recipes = await _search_and_rank(tree_data, client_manager, filters, targets, kwargs)
     
-    # Separate into meal categories (simplified heuristic)
-    breakfast_candidates = [r for r in recipes if "breakfast" in r.get("tags", [])]
-    lunch_candidates = [r for r in recipes if "lunch" in r.get("tags", []) or "main" in r.get("tags", [])]
-    dinner_candidates = [r for r in recipes if "dinner" in r.get("tags", []) or "main" in r.get("tags", [])]
+    # Step 4: Assemble plan
+    plan = await _assemble_plan(recipes, targets)
     
-    # Fallback: use top recipes if category filtering leaves empty
-    if not breakfast_candidates:
-        breakfast_candidates = recipes
-    if not lunch_candidates:
-        lunch_candidates = recipes
-    if not dinner_candidates:
-        dinner_candidates = recipes
-    
-    # Select meals (avoid duplicates)
-    breakfast = breakfast_candidates[0]
-    lunch = lunch_candidates[0] if lunch_candidates[0] != breakfast else lunch_candidates[1] if len(lunch_candidates) > 1 else breakfast
-    dinner = dinner_candidates[0] if dinner_candidates[0] not in [breakfast, lunch] else dinner_candidates[1] if len(dinner_candidates) > 1 else breakfast
-    
-    plan = {
-        "breakfast": breakfast,
-        "lunch": lunch,
-        "dinner": dinner
-    }
-    
-    # Calculate total macros
-    total_macros = {
-        "kcal": sum(meal.get("macros_per_serving", {}).get("kcal", 0) for meal in plan.values()),
-        "protein_g": sum(meal.get("macros_per_serving", {}).get("protein_g", 0) for meal in plan.values()),
-        "fat_g": sum(meal.get("macros_per_serving", {}).get("fat_g", 0) for meal in plan.values()),
-        "carb_g": sum(meal.get("macros_per_serving", {}).get("carb_g", 0) for meal in plan.values())
-    }
-    
-    plan_output = {
-        "meals": plan,
-        "total_macros": total_macros
-    }
+    # Step 5: Validate
+    validation = await _validate_plan(plan, targets, filters)
     
     yield Result(
+        objects=[plan],
+        metadata={"plan_type": "day", "validation": validation},
+        payload_type="generic",
         name="plan",
-        objects=[plan_output],
-        metadata={"plan_type": "day", "meals_count": 3}
+        display=True
     )
-    yield f"Daily plan: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P"
+    yield Response(f"Daily plan created: {plan.get('total_macros', {}).get('kcal', 0):.0f} kcal")
 ```
 
-#### 4. Meal Logging (MealParser, NutritionCalc, ProfileUpdate)
+**Note**: Internal functions `_resolve_targets`, `_apply_constraints`, `_search_and_rank`, `_assemble_plan`, `_validate_plan` are private helpers within the tool.
 
-**MealParser Tool Implementation** (`tools/meal_logging/meal_parser.py`):
+#### 4. Meal Logging (log_meal_e2e_tool)
+
+**log_meal_e2e_tool Implementation** (`tools/meal_logging/log_meal_e2e.py`) — end-to-end meal logging:
 ```python
 from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData, Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
-import json
 
 @tool
-async def meal_parser_tool(
+async def log_meal_e2e_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
     base_lm,                       # LLM for structured output
     meal_description: str = "",    # User input: "Tôi vừa ăn salad gà"
-    **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
-    """
-    Parse natural language meal description into structured data.
-    
-    LLM-Enhanced Tool: Uses base_lm to extract dish name and ingredients.
-    
-    Environment:
-        Reads: None (first tool in meal logging workflow)
-        Writes: environment["meal_parser_tool"]["parsed_meal"]
-    """
-    yield "Parsing meal description..."
-    
-    if not meal_description:
-        yield Error("Meal description is required")
-        return
-    
-    # Step 1: LLM Call - Parse meal description
-    llm_prompt = f"""Parse this meal description into structured JSON:
-"{meal_description}"
-
-Return JSON with:
-- dish: dish name (e.g., "Chicken Salad")
-- ingredients: list of [{{"name": str, "amount": float, "unit": str}}]
-- portion_size: number (default 1.0)
-
-Example: {{"dish": "Chicken Salad", "ingredients": [{{"name": "chicken", "amount": 100, "unit": "g"}}, {{"name": "lettuce", "amount": 50, "unit": "g"}}], "portion_size": 1.0}}"""
-
-    try:
-        llm_response = await base_lm.generate_structured(
-            prompt=llm_prompt,
-            schema={
-                "type": "object",
-                "properties": {
-                    "dish": {"type": "string"},
-                    "ingredients": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string"},
-                                "amount": {"type": "number"},
-                                "unit": {"type": "string"}
-                            }
-                        }
-                    },
-                    "portion_size": {"type": "number"}
-                }
-            }
-        )
-        
-        parsed_data = json.loads(llm_response) if isinstance(llm_response, str) else llm_response
-        
-    except Exception as e:
-        yield Error(f"Failed to parse meal description: {str(e)}")
-        return
-    
-    # Step 2: Code Validation - Check if ingredients exist in FDC
-    client = client_manager.get_client()
-    fdc_collection = client.collections.get("FdcFood")
-    
-    validated_ingredients = []
-    for ing in parsed_data.get("ingredients", []):
-        # Search for ingredient in FDC
-        search_results = fdc_collection.query.hybrid(
-            query=ing["name"],
-            limit=1
-        )
-        
-        if search_results.objects:
-            fdc_food = search_results.objects[0].properties
-            validated_ingredients.append({
-                **ing,
-                "fdc_id": fdc_food.get("fdc_id")
-            })
-        else:
-            yield Error(f"Ingredient '{ing['name']}' not found in FDC database")
-            return
-    
-    parsed_meal = {
-        "dish": parsed_data.get("dish", ""),
-        "ingredients": validated_ingredients,
-        "portion_size": parsed_data.get("portion_size", 1.0),
-        "original_description": meal_description,
-        "validation_status": "complete"
-    }
-    
-    # Step 3: Yield Result
-    yield Result(
-        name="parsed_meal",
-        objects=[parsed_meal],
-        metadata={"parsing_method": "llm", "ingredients_count": len(validated_ingredients)}
-    )
-    yield f"Parsed meal: {parsed_meal['dish']} with {len(validated_ingredients)} ingredients"
-```
-
-**NutritionCalc Tool Implementation** (`tools/meal_logging/nutrition_calc.py`):
-```python
-from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
-from elysia.util.client import ClientManager
-from elysia import tool
-
-@tool
-async def nutrition_calc_tool(
-    tree_data: TreeData,
-    client_manager: ClientManager,
-    **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
-    """
-    Calculate nutrition (macros/micros) from parsed meal ingredients.
-    
-    Code-Based Tool: Uses FdcNutrient + FdcPortion for calculations.
-    
-    Environment:
-        Reads: environment["meal_parser_tool"]["parsed_meal"]
-        Writes: environment["nutrition_calc_tool"]["calculated"]
-    """
-    yield "Calculating nutrition..."
-    
-    # Read parsed meal from environment
-    parsed_results = tree_data.environment.find("meal_parser_tool", "parsed_meal")
-    if not parsed_results or not parsed_results[0].objects:
-        yield Error("Parsed meal not found. Run meal_parser_tool first.")
-        return
-    
-    parsed_meal = parsed_results[0].objects[0]
-    ingredients = parsed_meal.get("ingredients", [])
-    portion_size = parsed_meal.get("portion_size", 1.0)
-    
-    client = client_manager.get_client()
-    nutrient_collection = client.collections.get("FdcNutrient")
-    portion_collection = client.collections.get("FdcPortion")
-    
-    total_macros = {"kcal": 0, "protein_g": 0, "fat_g": 0, "carb_g": 0}
-    total_micros = {}
-    
-    # Calculate nutrition for each ingredient
-    for ing in ingredients:
-        fdc_id = ing.get("fdc_id")
-        amount = ing.get("amount", 0)
-        unit = ing.get("unit", "g")
-        
-        if not fdc_id:
-            continue
-        
-        # Convert to grams using FdcPortion
-        grams = amount
-        if unit != "g":
-            # Find portion conversion
-            portion_results = portion_collection.query.fetch_objects(
-                where={
-                    "path": ["fdc_id"],
-                    "operator": "Equal",
-                    "valueInt": fdc_id
-                },
-                limit=10
-            )
-            
-            # Find matching portion
-            for portion_obj in portion_results.objects:
-                portion = portion_obj.properties
-                if portion.get("measure_unit") == unit and abs(portion.get("amount", 0) - amount) < 0.1:
-                    grams = portion.get("gram_weight", amount)
-                    break
-        
-        # Get nutrients for this FDC food
-        nutrient_results = nutrient_collection.query.fetch_objects(
-            where={
-                "path": ["fdc_id"],
-                "operator": "Equal",
-                "valueInt": fdc_id
-            }
-        )
-        
-        # Calculate nutrition (per 100g basis)
-        for nutrient_obj in nutrient_results.objects:
-            nutrient = nutrient_obj.properties
-            nutrient_id = nutrient.get("nutrient_id")
-        nutrient_name = nutrient.get("nutrient_name", "").lower()
-        amount_per_100g = nutrient.get("amount_100g", 0)
-            
-            # Calculate actual amount (proportional to grams)
-            actual_amount = (amount_per_100g * grams * portion_size) / 100.0
-            
-            # Accumulate macros
-            if nutrient_id == 1008:  # Energy (kcal)
-                total_macros["kcal"] += actual_amount
-            elif "protein" in nutrient_name:
-                total_macros["protein_g"] += actual_amount
-            elif "fat" in nutrient_name and "total" in nutrient_name:
-                total_macros["fat_g"] += actual_amount
-            elif "carbohydrate" in nutrient_name and "total" in nutrient_name:
-                total_macros["carb_g"] += actual_amount
-            else:
-                # Micronutrients
-                unit_key = f"{nutrient_name}_{nutrient.get('unit', '')}"
-                total_micros[unit_key] = total_micros.get(unit_key, 0) + actual_amount
-    
-    calculated_nutrition = {
-        "calculated_macros": total_macros,
-        "calculated_micros": total_micros,
-        "portion_size": portion_size
-    }
-    
-    yield Result(
-        name="calculated",
-        objects=[calculated_nutrition],
-        metadata={"ingredients_count": len(ingredients)}
-    )
-    yield f"Nutrition calculated: {total_macros['kcal']:.0f} kcal | {total_macros['protein_g']:.0f}g P"
-```
-
-**ProfileUpdate Tool Implementation** (`tools/meal_logging/profile_update.py`):
-```python
-from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
-from elysia.util.client import ClientManager
-from elysia import tool
-from datetime import datetime
-
-@tool
-async def profile_update_tool(
-    tree_data: TreeData,
-    client_manager: ClientManager,
     user_id: str = "",
     **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Update UserProfile with consumed nutrition and calculate remaining targets.
+    End-to-end meal logging: parse → calculate nutrition → update profile.
     
-    Code-Based Tool: Updates profile and saves MealLogEntry.
+    This tool orchestrates the full meal logging workflow internally:
+    1. Parse meal description (LLM-assisted)
+    2. Calculate nutrition from FDC
+    3. Update UserProfile and save MealLogEntry
     
     Environment:
-        Reads: environment["meal_parser_tool"]["parsed_meal"],
-               environment["nutrition_calc_tool"]["calculated"]
-        Writes: environment["profile_update_tool"]["updated_profile"]
+        Reads: user_id (from kwargs or tree_data)
+        Writes: log_meal_e2e_tool.updated_profile
     """
-    yield "Updating profile with consumed nutrition..."
+    yield Response("Logging meal...")
     
-    if not user_id:
-        yield Error("user_id is required")
+    # Step 1: Parse meal (internal function)
+    parsed_meal = await _parse_meal(meal_description, base_lm, client_manager)
+    if not parsed_meal:
+        yield Error("Failed to parse meal description")
         return
     
-    # Read parsed meal and calculated nutrition
-    parsed_results = tree_data.environment.find("meal_parser_tool", "parsed_meal")
-    nutrition_results = tree_data.environment.find("nutrition_calc_tool", "calculated")
-    
-    if not parsed_results or not parsed_results[0].objects:
-        yield Error("Parsed meal not found")
+    # Step 2: Calculate nutrition (internal function)
+    calculated_nutrition = await _calculate_nutrition(parsed_meal, client_manager)
+    if not calculated_nutrition:
+        yield Error("Failed to calculate nutrition")
         return
     
-    if not nutrition_results or not nutrition_results[0].objects:
-        yield Error("Calculated nutrition not found")
-        return
-    
-    parsed_meal = parsed_results[0].objects[0]
-    calculated_nutrition = nutrition_results[0].objects[0]
-    
-    client = client_manager.get_client()
-    profile_collection = client.collections.get("UserProfile")
-    log_collection = client.collections.get("MealLogEntry")
-    
-    # Read current profile
-    profile_results = profile_collection.query.fetch_objects(
-        where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-        limit=1
-    )
-    
-    if not profile_results.objects:
-        yield Error(f"Profile not found for user {user_id}")
-        return
-    
-    profile = profile_results.objects[0].properties
-    
-    # Calculate remaining targets
-    consumed_macros = calculated_nutrition.get("calculated_macros", {})
-    target_macros = {
-        "kcal": profile.get("tdee_kcal", 2000),
-        "protein_g": profile.get("protein_g", 150),
-        "fat_g": profile.get("fat_g", 67),
-        "carb_g": profile.get("carb_g", 200)
-    }
-    
-    # Get today's consumed (would need to query MealLogEntry for today)
-    # For simplicity, assume this is first meal logged today
-    remaining_targets = {
-        "kcal": max(0, target_macros["kcal"] - consumed_macros.get("kcal", 0)),
-        "protein_g": max(0, target_macros["protein_g"] - consumed_macros.get("protein_g", 0)),
-        "fat_g": max(0, target_macros["fat_g"] - consumed_macros.get("fat_g", 0)),
-        "carb_g": max(0, target_macros["carb_g"] - consumed_macros.get("carb_g", 0))
-    }
-    
-    # Save MealLogEntry
-    log_entry = {
-        "log_id": f"log_{user_id}_{int(datetime.now().timestamp())}",
-        "user_id": user_id,
-        "logged_at": datetime.now().isoformat(),
-        "meal_description": parsed_meal.get("original_description", ""),
-        "parsed_dish": parsed_meal.get("dish", ""),
-        "ingredients": parsed_meal.get("ingredients", []),
-        "portion_size": parsed_meal.get("portion_size", 1.0),
-        "calculated_macros": consumed_macros,
-        "calculated_micros": calculated_nutrition.get("calculated_micros", {}),
-        "validation_status": "complete",
-        "parsing_method": "llm"
-    }
-    
-    log_collection.data.insert(log_entry)
-    
-    # Update profile (store remaining targets - would need to aggregate all today's meals)
-    # For MVP, just update last_logged_at
-    profile.update({
-        "updated_at": datetime.now().isoformat()
-    })
-    
-    profile_collection.data.update(
-        uuid=profile_results.objects[0].uuid,
-        properties=profile
-    )
-    
-    updated_data = {
-        "remaining_targets": remaining_targets,
-        "consumed_macros": consumed_macros,
-        "log_entry": log_entry
-    }
+    # Step 3: Update profile (internal function)
+    updated_profile = await _update_profile(user_id, parsed_meal, calculated_nutrition, client_manager)
     
     yield Result(
+        objects=[updated_profile],
+        metadata={"user_id": user_id, "meal": parsed_meal.get("dish", "")},
+        payload_type="generic",
         name="updated_profile",
-        objects=[updated_data],
-        metadata={"user_id": user_id, "logged_at": log_entry["logged_at"]}
+        display=True
     )
-    yield f"Meal logged successfully. Remaining: {remaining_targets['kcal']:.0f} kcal | {remaining_targets['protein_g']:.0f}g P"
+    yield Response(f"Meal logged: {calculated_nutrition.get('calculated_macros', {}).get('kcal', 0):.0f} kcal")
 ```
+
+**Note**: Internal functions `_parse_meal`, `_calculate_nutrition`, `_update_profile` are private helpers within the tool. The `log_meal_e2e_tool` handles all three steps (parse, calculate, update) internally to reduce tool calls and improve performance.
 
 ### Patterns & Best Practices
 
 #### Async Generator Pattern (All Tools)
 ```python
 from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error
+from elysia.tree.objects import TreeData
+from elysia.objects import Result, Error, Response, Status
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -1074,9 +687,11 @@ async def tool_function(
     param1: str = "default",
     param2: dict = None,
     **kwargs
-) -> AsyncGenerator[Result | str | Error, None]:
-    # 1. Yield string for progress updates (automatically becomes Text response)
-    yield "Starting operation..."
+) -> AsyncGenerator[Result | Response | Status | Error, None]:
+    # 1. Yield Response/Status for progress updates (not plain strings)
+    yield Response("Starting operation...")
+    # or
+    yield Status("Processing...")
     
     # 2. Read from environment (upstream tool outputs)
     upstream_results = tree_data.environment.find("upstream_tool_name", "output_name")
@@ -1092,9 +707,11 @@ async def tool_function(
     
     # 4. Yield Result to store in environment
     yield Result(
-        name="output",  # Creates environment["tool_function"]["output"]
-        objects=[result_data],
-        metadata={"operation": "example"}
+        objects=[result_data],  # Required: list of dict objects
+        metadata={"operation": "example"},  # Optional: metadata
+        payload_type="generic",  # Optional: result type identifier (default: "default")
+        name="output",  # Optional: creates environment["tool_function"]["output"]
+        display=True  # Optional: whether to display on frontend (default: True)
     )
     
     # 5. Handle errors gracefully
@@ -1102,17 +719,36 @@ async def tool_function(
         yield Error("Descriptive error message")
         return
     
-    # 6. Final string for completion
-    yield "Operation completed successfully"
+    # 6. Final Response for completion
+    yield Response("Operation completed successfully")
 ```
 
 #### Environment Key Conventions
 - **Elysia Standard Pattern**: `environment[tool_name][name]` where:
   - `tool_name` = function name (e.g., "profile_crud_tool")
   - `name` = Result's `name` parameter (e.g., "profile", "targets")
-- **Tools write only to their namespace**: Each tool writes to `environment[function_name][...]`
-- **Tools read from any namespace**: Use `tree_data.environment.find(tool_name, name)`
+- **Automatic Adding**: When you `yield Result(...)`, the Tree automatically calls `environment.add(tool_name, result)`. No manual `.add()` needed.
+- **Tools write only to their namespace**: Each tool writes to `environment[function_name][...]` via yielding Result objects
+- **Tools read from any namespace**: Use `tree_data.environment.find(tool_name, name)` to read data from any tool
 - **Use descriptive name parameters**: `"profile"`, `"targets"`, `"results"`, `"plan"`, `"report"`
+- **Automatic _REF_ID**: Each object in environment gets a unique `_REF_ID` attribute automatically
+- **Hidden Environment**: Use `tree_data.environment.hidden_environment` (dict) to store data not shown to LLM (e.g., temporary processing state)
+
+**Advanced Environment Methods** (for manual manipulation if needed):
+```python
+# Manual adding (usually not needed - yielding Result auto-adds)
+tree_data.environment.add(tool_name, result)
+tree_data.environment.add_objects(tool_name, name, objects, metadata)
+
+# Replacing existing data
+tree_data.environment.replace(tool_name, name, objects, metadata, index=None)
+
+# Removing data
+tree_data.environment.remove(tool_name, name, index=None)  # index=None removes all
+
+# Finding data (most common)
+results = tree_data.environment.find(tool_name, name, index=None)  # Returns list or None
+```
 
 #### Error Handling (No Exceptions)
 ```python
@@ -1153,46 +789,92 @@ results = collection.query.fetch_objects(
 ### API Integration Details
 
 - MealAgent **không thêm** REST/WS endpoint mới; mọi workflow chạy qua WebSocket `/query` mặc định của Elysia.
-- Client gửi payload chứa `user_id`, `conversation_id`, `query_id`, `action` và các `parameters` cần thiết; Tree chọn chuỗi tool tương ứng.
-- Route/minh kiến `elysia/elysia/api/routes/*.py` hiện hữu chỉ làm nhiệm vụ chuẩn Elysia (vd. `/query`, `/tools`, `/collections`); không cần chỉnh sửa khi phát triển MealAgent.
+- Client gửi payload tiêu chuẩn của Elysia với các trường `user_id`, `conversation_id`, `query_id`, `query`, tùy chọn `collection_names`, `training_route`, `mimick`. Không có trường `action`; Tree quyết định tool chain dựa vào nội dung `query` và trạng thái `environment`.
 
-Ví dụ payload kích hoạt daily plan:
+**WebSocket Handler Flow** (see [User and Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/)):
+```python
+# In elysia/api/routes/query.py (Elysia's built-in route)
+async def websocket_handler(websocket, user_manager: UserManager):
+    message = await websocket.receive_json()
+    
+    # Extract required fields
+    query = message["query"]
+    user_id = message["user_id"]
+    conversation_id = message["conversation_id"]
+    query_id = message["query_id"]
+    collection_names = message.get("collection_names", [])
+    training_route = message.get("training_route", "")
+    
+    # UserManager.process_tree() automatically:
+    # 1. Checks if user/tree has timed out → sends error payload if so
+    # 2. Gets or creates TreeManager for user
+    # 3. Calls tree_manager.process_tree() which calls tree.async_run()
+    # 4. Streams all yielded payloads via WebSocket
+    async for payload in user_manager.process_tree(
+        query=query,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        query_id=query_id,
+        training_route=training_route,
+        collection_names=collection_names,
+        save_trees_to_weaviate=None,  # Optional: save trees after completion
+        wcd_url=None,  # Optional: Weaviate Cloud Database URL for saving trees
+        wcd_api_key=None,  # Optional: API key for WCD
+    ):
+        await websocket.send_json(payload)
+```
+
+**Client Payload Example**:
 ```json
 {
-  "action": "meal.generate_daily_plan",
   "user_id": "user_123",
-  "query": "healthy breakfast options",
-  "parameters": {
-    "plan_type": "day"
-  }
+  "conversation_id": "demo",
+  "query_id": "q-001",
+  "query": "healthy breakfast options for today",
+  "collection_names": ["Recipe", "UserProfile"],
+  "training_route": "",  // Optional
+  "mimick": false       // Optional
 }
 ```
 
-Tree stream về:
+**Server Response Payload** (see [Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/)):
+All payloads have consistent outer structure:
 ```json
 {
-  "type": "result",
-  "data": {
-    "tool_name": "plan_assemble_day_tool",
-    "name": "plan",
-    "objects": [...],
-    "metadata": {...}
+  "type": "result",  // or "text", "error", "status", "completed", "title", "ner"
+  "id": "uuid",
+  "user_id": "user_123",
+  "conversation_id": "demo",
+  "query_id": "q-001",
+  "payload": {
+    "type": "generic",  // or tool-specific type
+    "metadata": {...},
+    "objects": [
+      {
+        "plan": {...},
+        "_REF_ID": "ref_123"  // Automatically added
+      }
+    ]
   }
 }
 ```
 
-Frontend chiếu trực tiếp cấu trúc `Result`/`Text` này; không cần adapter bổ sung.
+**Key Points**:
+- `Result` objects automatically call `.to_frontend()` to generate payload format
+- `Update` classes (`Status`, `Error`) do NOT add to Environment but still stream via `.to_frontend()`
+- All objects in `payload.objects` automatically include `_REF_ID` for environment tracking
+- UserManager automatically handles timeout checks and sends error payloads if timed out
 
 ### Database Connections
 
-**Note**: MealAgent uses Elysia's built-in `ClientManager` which is automatically injected into tools. No custom ClientManager needed unless you need MealAgent-specific configurations.
+**Note**: MealAgent uses Elysia's built-in `ClientManager` which is automatically injected into tools. Each user has their own ClientManager instance managed by UserManager.
 
 **Using ClientManager in Tools**:
 ```python
 # ClientManager is automatically injected by Elysia
 async def my_tool(
     tree_data: TreeData,
-    client_manager: ClientManager,  # Auto-injected
+    client_manager: ClientManager,  # Auto-injected (per-user instance)
     **kwargs
 ):
     client = client_manager.get_client()
@@ -1211,6 +893,20 @@ async def my_tool(
 WEAVIATE_URL=http://localhost:8080
 WEAVIATE_API_KEY=optional_api_key
 ```
+
+**ClientManager Configuration** (see [Client Reference](https://weaviate.github.io/elysia/Reference/Client/)):
+- **Initialization**: `ClientManager(wcd_url=None, wcd_api_key=None, weaviate_is_local=None, weaviate_is_custom=None, client_timeout=timedelta(minutes=3), query_timeout=60, insert_timeout=120, init_timeout=5, **kwargs)`
+  - Default `client_timeout`: 3 minutes (or `CLIENT_TIMEOUT` env var)
+  - Default `query_timeout`: 60 seconds (Weaviate default: 30 seconds)
+  - Default `insert_timeout`: 120 seconds (Weaviate default: 90 seconds)
+  - Default `init_timeout`: 5 seconds (Weaviate default: 2 seconds)
+- **Client Methods**: `get_client()`, `get_async_client()`, `start_clients()`, `restart_client()`, `restart_async_client()`
+- **Thread Safety**: ClientManager uses threading and asyncio locks for concurrent access
+
+**Client Timeout Management** (see [User and Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/)):
+- UserManager automatically manages ClientManager instances per user
+- Call `user_manager.check_restart_clients()` periodically to restart inactive clients (configurable via `client_timeout`)
+- Default timeout: 3 minutes (or `CLIENT_TIMEOUT` env var)
 
 ## Error Handling
 **How do we handle failures?**
@@ -1395,26 +1091,160 @@ export PREPROCESS_FORCE=true
 
 Reference: [Preprocessor]
 
-## Tool Registration (tree/config.py)
-Tools are registered in the decision tree configuration so they can be invoked by name.
-Pattern (example):
-```python
-# elysia/elysia/MealAgent/tree/config.py (example)
-from elysia.MealAgent.tools.search.query import query_tool
-from elysia.MealAgent.tools.search.score_and_rank import score_and_rank_tool
-from elysia.MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+## Tool Registration (MealAgent/tree/config.py)
 
-TOOLS = {
-    "query_tool": query_tool,
-    "score_and_rank_tool": score_and_rank_tool,
-    "calculate_recipe_macros_tool": calculate_recipe_macros_tool,
+Tools are registered in `MealAgent/tree/config.py` via the `MEAL_AGENT_TOOLS` dictionary. Tools are then added to the Tree using `tree.add_tool()`.
+
+**Registration Pattern:**
+```python
+# MealAgent/tree/config.py
+from MealAgent.tools.profile.profile_crud import profile_crud_tool
+from MealAgent.tools.profile.macro_calc import macro_calc_tool
+# ... import all tools
+
+MEAL_AGENT_TOOLS = {
+    "profile_crud_tool": profile_crud_tool,
+    "macro_calc_tool": macro_calc_tool,
+    # ... all tools
 }
+
+def get_meal_agent_tools() -> dict[str, callable]:
+    """Return dict of MealAgent tools for Tree registration."""
+    return dict(MEAL_AGENT_TOOLS)
 ```
-Tree logic (e.g., `meal_tree.py`) will import `TOOLS` and orchestrate calls based on Environment state.
+
+**Adding Tools to Tree** (see [Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)):
+```python
+# In meal_tree.py or tree initialization
+from MealAgent.tree.config import get_meal_agent_tools
+from elysia.tree.tree import Tree
+from elysia.config import Settings
+
+# Create tree with empty branch initialization
+tree = Tree(
+    branch_initialisation="empty",  # Start with no branches
+    style="Friendly and helpful meal planning assistant",
+    agent_description="Meal planning agent that helps users create personalized meal plans",
+    end_goal="Generate meal plans that meet user's nutritional targets and preferences",
+    user_id="user_123",
+    conversation_id="conv_abc",
+    low_memory=False,  # Set True to reduce memory usage
+    use_elysia_collections=True,  # Use Elysia-processed collections
+    settings=Settings()  # Optional: custom settings
+)
+
+# Create root branch (required - this is the starting point)
+tree.add_branch(
+    branch_id="root",
+    instruction="Choose an action based on the user's request",
+    root=True  # This is the root branch
+)
+
+# Create feature branches
+tree.add_branch(
+    branch_id="profile",
+    instruction="Manage user profile and calculate nutritional targets",
+    description="When user wants to create, update, or view their profile",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Managing profile..."
+)
+
+tree.add_branch(
+    branch_id="logging",
+    instruction="Log meals and view meal history",
+    description="When user wants to log what they ate or view meal history",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Logging meal..."
+)
+
+tree.add_branch(
+    branch_id="pantry",
+    instruction="Manage pantry items and generate shopping lists",
+    description="When user wants to manage pantry or view shopping list",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Managing pantry..."
+)
+
+tree.add_branch(
+    branch_id="cooking",
+    instruction="Show step-by-step cooking instructions",
+    description="When user wants cooking instructions for a recipe",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Preparing cooking instructions..."
+)
+
+tree.add_branch(
+    branch_id="explain",
+    instruction="Explain meal planning decisions",
+    description="When user wants to understand why certain meals were recommended",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Generating explanation..."
+)
+
+tree.add_branch(
+    branch_id="search",
+    instruction="Search and rank recipes based on user preferences",
+    description="When user wants to find recipes",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Searching recipes..."
+)
+
+tree.add_branch(
+    branch_id="planning",
+    instruction="Plan daily or weekly meals from ranked recipes",
+    description="When user wants daily or weekly meal plan",
+    from_branch_id="root",
+    from_tool_ids=[],
+    status="Planning meals..."
+)
+
+tree.add_branch(
+    branch_id="optimization",
+    instruction="Optimize meal plans: fill gaps, substitute ingredients, check micronutrients",
+    description="When user wants to optimize their meal plan",
+    from_branch_id="planning",
+    from_tool_ids=[],
+    status="Optimizing plan..."
+)
+
+# Register tools to branches
+tools = get_meal_agent_tools()
+
+# Add tools to profile branch
+tree.add_tool(tools["profile_crud_tool"], branch_id="profile")
+tree.add_tool(tools["macro_calc_tool"], branch_id="profile")
+
+# Add tools to search branch
+tree.add_tool(tools["search_and_rank_tool"], branch_id="search")
+
+# Add tools to planning branch (merged from plan_day + plan_week)
+tree.add_tool(tools["plan_day_e2e_tool"], branch_id="planning")
+tree.add_tool(tools["plan_week_e2e_tool"], branch_id="planning")
+
+# Alternative: Add tool to root branch
+# tree.add_tool(tools["some_tool"], root=True)
+```
+
+**Important Notes**:
+- The `@tool` decorator automatically converts functions to `Tool` instances, so they can be passed directly to `tree.add_tool()`
+- Tools must be async generators (`async def ... -> AsyncGenerator[...]`)
+- `branch_id=None` in `add_tool()` adds tool to root branch
+- `from_tool_ids=[]` adds tool after specified tools (creates new decision nodes if needed)
+- `root=True` in `add_tool()` adds tool to root branch (ignores `branch_id`)
+- Non-root branches require `description` and `from_branch_id` parameters
 
 ---
 
-**Status**: Living document - Update as implementation progresses
-**Last Updated**: 2025-10-28
-**Owner**: [Your Name/Team]
+**Status**: Living document - Updated with tool optimization (v0.5)
+**Last Updated**: 2025-01-27
+**Owner**: MealAgent Development Team
+
+**Changelog:**
+- v0.5: **Tool Optimization** - Updated directory structure and tool examples to reflect optimized tool list (15 MealAgent tools + 3 Elysia tools). Removed intermediate tools, consolidated into E2E tools. Updated branch structure to 8 branches.
 

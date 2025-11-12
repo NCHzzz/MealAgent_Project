@@ -28,7 +28,7 @@ export const SessionContext = createContext<{
   savingConfig: boolean;
   fetchCurrentConfig: () => void;
   configIDs: ConfigListEntry[];
-  updateConfig: (config: UserConfig, setDefault: boolean) => void;
+  updateConfig: (config: UserConfig, setDefault: boolean) => Promise<boolean>;
   handleCreateConfig: (user_id: string) => void;
   getConfigIDs: (user_id: string) => void;
   handleLoadConfig: (user_id: string, config_id: string) => void;
@@ -56,7 +56,7 @@ export const SessionContext = createContext<{
   savingConfig: false,
   fetchCurrentConfig: () => {},
   configIDs: [],
-  updateConfig: () => {},
+  updateConfig: async () => false,
   handleCreateConfig: () => {},
   getConfigIDs: () => {},
   handleLoadConfig: () => {},
@@ -229,6 +229,9 @@ export const SessionProvider = ({
     if (response.error) {
       console.error(response.error);
       showErrorToast("Failed to Save Configuration", response.error);
+      setLoadingConfig(false);
+      setSavingConfig(false);
+      return false;
     } else if (response.warnings.length > 0) {
       response.warnings.forEach((warning) => {
         showWarningToast("Configuration Saved with Warning", warning);
@@ -248,6 +251,7 @@ export const SessionProvider = ({
     triggerFetchCollection();
     triggerFetchConversation();
     setSavingConfig(false);
+    return true;
   };
 
   const handleLoadConfig = async (user_id: string, config_id: string) => {

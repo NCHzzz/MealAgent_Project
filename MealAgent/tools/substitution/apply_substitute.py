@@ -7,7 +7,7 @@ from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
-from elysia.MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 
 
 @tool

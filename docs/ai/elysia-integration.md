@@ -9,7 +9,7 @@ This document standardizes how MealAgent integrates with Elysia, aligning with t
 - Setting up the environment (Settings, Client, Managers)
 - Creating or attaching a MealAgent Tree
 - Registering tools to branches
-- Running via REST/WS and testing locally
+- Running via WebSocket and testing locally
 
 Reference (local and web):
 - Elysia docs (local): `elysia/docs/`
@@ -57,9 +57,9 @@ from elysia.config import Settings
 
 tree = build_meal_agent_tree(settings=Settings(), user_id="demo-user")
 ```
-- Initializes a Tree with MealAgent branches:
-  `profile, constraints, search, nutrition, plan_day, plan_week, pantry, shopping, gap_fill, substitution, micros, logging, cooking, explain`
-- Registers all MealAgent tools to the appropriate branch using `tree.add_tool(...)`.
+- Initializes a Tree with MealAgent branches (optimized - 8 branches):
+  `profile, planning, search, logging, pantry, optimization, cooking, explain`
+- Registers all MealAgent tools (15 tools) and Elysia built-in tools (`query`, `cited_summarize`) to the appropriate branch using `tree.add_tool(...)`.
 
 ### 2.2 Attach to an existing Tree/TreeManager
 File: `elysia/elysia/MealAgent/tree/config.py`
@@ -78,21 +78,11 @@ All tools follow Elysia’s standard:
 - Stream: plain strings → Text; yield Error objects for graceful failures
 
 Examples:
-- `plan_assemble_day_tool` writes `environment["plan_assemble_day_tool"]["plan"]`
+- `plan_day_e2e_tool` writes `environment["plan_day_e2e_tool"]["plan"]`
 - `cook_mode_tool` writes `environment["cook_mode_tool"]["steps"]`
-- `explain_tool` writes `environment["explain_tool"]["explanation"]`
+- `cited_summarize` (Elysia built-in) reads from entire Environment and generates summary with citations
 
-## 4) API Endpoints (FastAPI)
-- Cooking:
-  - `POST /api/v1/meal/cook` (non-stream) → returns steps
-  - `WS /ws/meal/cook/{user_id}` → streams steps and Result
-- Explain:
-  - `POST /api/v1/meal/explain` (non-stream) → returns explanation text
-Files:
-- `elysia/elysia/api/routes/cooking.py`
-- Included in `elysia/elysia/api/app.py`
-
-## 5) Run Backend
+## 4) Run Backend
 ```bash
 cd elysia
 venv\Scripts\activate
@@ -101,36 +91,43 @@ uvicorn elysia.api.app:app --host 0.0.0.0 --port 8000 --reload
 Health:
 - GET `http://localhost:8000/api/health` → {"status": "healthy"}
 
-## 6) Quick Test (cURL)
-```bash
-# Cook (non-stream)
-curl -X POST http://localhost:8000/api/v1/meal/cook ^
-  -H "Content-Type: application/json" ^
-  -d "{\"user_id\":\"demo\",\"food_id\":\"R123\"}"
+## 5) Quick Test (WebSocket)
+All MealAgent functionality is accessed through Elysia's standard `/ws/query` WebSocket endpoint. The Tree automatically selects and executes tools based on natural language queries.
 
-# Explain (non-stream)
-curl -X POST http://localhost:8000/api/v1/meal/explain ^
-  -H "Content-Type: application/json" ^
-  -d "{\"user_id\":\"demo\"}"
+Example WebSocket message:
+```json
+{
+  "user_id": "demo",
+  "conversation_id": "conv_123",
+  "query_id": "q_456",
+  "query": "Show me how to cook recipe R123",
+  "collection_names": ["Recipe"]
+}
 ```
 
-## 7) Workflows (Helpers)
-- Daily Planning: `process_daily_planning_workflow(...)`
-- Meal Logging: `process_meal_logging_workflow(...)`
-- Cooking: `process_cooking_workflow(...)`
-- Explain: `process_explanation_workflow(...)`
-File: `elysia/elysia/MealAgent/tree/meal_tree.py`
+The Tree will automatically select `cook_mode_tool` and stream the cooking steps.
 
-## 8) Testing
+## 6) Workflows (Optimized)
+All workflows are now handled by E2E tools:
+- Daily Planning: `plan_day_e2e_tool` (handles all steps internally)
+- Weekly Planning: `plan_week_e2e_tool` (handles all steps including variety)
+- Meal Logging: `log_meal_e2e_tool` (handles parse → calculate → update internally)
+- Cooking: `cook_mode_tool`
+- Explanations: `cited_summarize` (Elysia built-in)
+
+File: `elysia/elysia/MealAgent/tools/`
+
+## 7) Testing
 - Unit: `pytest --cov=MealAgent --cov-report=term`
 - Tree-based test snippet added to: `docs/ai/testing/feature-meal-planning-agent.md`
 
-## 9) Alignment Checklist (per Elysia docs)
+## 8) Alignment Checklist (per Elysia docs)
 - [x] Tools are async generators with `@tool`
 - [x] Use `TreeData` + `ClientManager` injection
 - [x] Environment key convention followed
 - [x] Registered tools to branches (Tree factory) or via helper registration
-- [x] REST/WS endpoints wrap streaming Text/Result/Error
+- [x] All functionality accessed via standard `/ws/query` WebSocket endpoint
+- [x] Tree automatically selects tools based on natural language queries
 
 
 

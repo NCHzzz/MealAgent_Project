@@ -14,6 +14,7 @@ import {
 import SettingInput from "../SettingInput";
 import WarningCard from "../WarningCard";
 import { BackendConfig, FrontendConfig } from "@/app/types/objects";
+import SettingCheckbox from "../SettingCheckbox";
 
 interface WeaviateSectionProps {
   currentUserConfig: BackendConfig | null;
@@ -21,6 +22,8 @@ interface WeaviateSectionProps {
   weaviateIssues: string[];
   wcdUrlValid: boolean;
   wcdApiKeyValid: boolean;
+  customWeaviateHttpHostValid: boolean;
+  customWeaviateGrpcHostValid: boolean;
   onUpdateSettings: (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     keyOrUpdates: string | Record<string, any>,
@@ -45,10 +48,13 @@ export default function WeaviateSection({
   weaviateIssues,
   wcdUrlValid,
   wcdApiKeyValid,
+  customWeaviateHttpHostValid,
+  customWeaviateGrpcHostValid,
   onUpdateSettings,
   onUpdateFrontend,
 }: WeaviateSectionProps) {
   const isLocal = currentUserConfig?.settings.WEAVIATE_IS_LOCAL as boolean;
+  const isCustom = currentUserConfig?.settings.WEAVIATE_IS_CUSTOM as boolean;
 
   return (
     <SettingCard>
@@ -75,14 +81,15 @@ export default function WeaviateSection({
         <SettingItem>
           <SettingTitle
             title="Cluster Type"
-            description="Choose between cloud-hosted or local Weaviate instance."
+            description="Choose between cloud-hosted, local, or custom Weaviate instance."
           />
           <SettingToggle
-            value={isLocal ? "Local" : "Cloud"}
+            value={isLocal ? "Local" : isCustom ? "Custom" : "Cloud"}
             onChange={(value) => {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const updates: Record<string, any> = {
                 WEAVIATE_IS_LOCAL: value === "Local",
+                WEAVIATE_IS_CUSTOM: value === "Custom",
               };
 
               // Auto-populate URL when switching to local if it's empty
@@ -96,27 +103,30 @@ export default function WeaviateSection({
 
               onUpdateSettings(updates);
             }}
-            labelA="Cloud"
-            labelB="Local"
-            iconA={<FaCloud />}
-            iconB={<FaServer />}
+            labels={["Cloud", "Local", "Custom"]}
+            icons={[
+              <FaCloud key="cloud" />,
+              <FaServer key="server" />,
+              <FaDatabase key="custom" />,
+            ]}
           />
         </SettingItem>
-        <SettingItem>
-          <SettingTitle
-            title="URL"
-            description="The URL of your Weaviate cluster."
-          />
-          <SettingInput
-            isProtected={false}
-            value={currentUserConfig?.settings.WCD_URL || ""}
-            onChange={(value) => {
-              onUpdateSettings("WCD_URL", value);
-            }}
-            isInvalid={!wcdUrlValid}
-          />
-        </SettingItem>
-
+        {!isCustom && (
+          <SettingItem>
+            <SettingTitle
+              title="URL"
+              description="The URL of your Weaviate cluster."
+            />
+            <SettingInput
+              isProtected={false}
+              value={currentUserConfig?.settings.WCD_URL || ""}
+              onChange={(value) => {
+                onUpdateSettings("WCD_URL", value);
+              }}
+              isInvalid={!wcdUrlValid}
+            />
+          </SettingItem>
+        )}
         {isLocal && (
           <>
             <SettingItem>
@@ -152,13 +162,117 @@ export default function WeaviateSection({
           </>
         )}
 
+        {isCustom && (
+          <>
+            <SettingItem>
+              <SettingTitle
+                title="HTTP Host"
+                description="The HTTP host of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  (currentUserConfig?.settings.CUSTOM_HTTP_HOST as string) || ""
+                }
+                onChange={(value) => {
+                  onUpdateSettings("CUSTOM_HTTP_HOST", value);
+                }}
+                disabled={!isCustom}
+                isInvalid={!customWeaviateHttpHostValid}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="HTTP Port"
+                description="The GRPC host of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  (currentUserConfig?.settings.CUSTOM_HTTP_PORT as number) || 80
+                }
+                onChange={(value) => {
+                  onUpdateSettings("CUSTOM_HTTP_PORT", value);
+                }}
+                disabled={!isCustom}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="HTTP Secure"
+                description="Whether the HTTP connection is secure."
+              />
+              <SettingCheckbox
+                value={
+                  (currentUserConfig?.settings.CUSTOM_HTTP_SECURE as boolean) ||
+                  false
+                }
+                onChange={(value) => {
+                  onUpdateSettings("CUSTOM_HTTP_SECURE", value);
+                }}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="GRPC Host"
+                description="The GRPC host of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  (currentUserConfig?.settings.CUSTOM_GRPC_HOST as string) || ""
+                }
+                onChange={(value) => {
+                  onUpdateSettings("CUSTOM_GRPC_HOST", value);
+                }}
+                disabled={!isCustom}
+                isInvalid={!customWeaviateGrpcHostValid}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="GRPC Port"
+                description="The GRPC port of your custom Weaviate instance."
+              />
+              <SettingInput
+                isProtected={false}
+                value={
+                  (currentUserConfig?.settings.CUSTOM_GRPC_PORT as number) ||
+                  50051
+                }
+                onChange={(value) => {
+                  onUpdateSettings("CUSTOM_GRPC_PORT", value);
+                }}
+                disabled={!isCustom}
+              />
+            </SettingItem>
+            <SettingItem>
+              <SettingTitle
+                title="GRPC Secure"
+                description="Whether the GRPC connection is secure."
+              />
+              <SettingCheckbox
+                value={
+                  (currentUserConfig?.settings.CUSTOM_GRPC_SECURE as boolean) ||
+                  false
+                }
+                onChange={(value) => {
+                  onUpdateSettings("CUSTOM_GRPC_SECURE", value);
+                }}
+              />
+            </SettingItem>
+          </>
+        )}
+
         <SettingItem>
           <SettingTitle
             title="API Key"
             description={
               isLocal
                 ? "The API key of your local Weaviate cluster. Needs to be configured in the local Weaviate cluster."
-                : "The API key of your Weaviate cluster."
+                : isCustom
+                  ? "The API key of your custom Weaviate instance."
+                  : "The API key of your Weaviate cluster."
             }
           />
           <SettingInput
@@ -167,7 +281,7 @@ export default function WeaviateSection({
             onChange={(value) => {
               onUpdateSettings("WCD_API_KEY", value);
             }}
-            isInvalid={!isLocal && !wcdApiKeyValid}
+            isInvalid={!isLocal && !isCustom && !wcdApiKeyValid}
           />
         </SettingItem>
 

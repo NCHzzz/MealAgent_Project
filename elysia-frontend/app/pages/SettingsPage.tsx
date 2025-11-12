@@ -141,17 +141,19 @@ export default function Home() {
   }, []);
 
   // Helper function to handle saving configuration
-  const handleSaveConfig = (setDefault: boolean = false) => {
+  const handleSaveConfig = async (setDefault: boolean = false) => {
     if (currentUserConfig && currentFrontendConfig) {
-      updateConfig(
+      const success = await updateConfig(
         {
           backend: currentUserConfig,
           frontend: currentFrontendConfig,
         },
         setDefault
       );
-      setChangedConfig(false);
-      setEditName(false);
+      if (success) {
+        setChangedConfig(false);
+        setEditName(false);
+      }
     }
   };
 
@@ -334,6 +336,12 @@ export default function Home() {
                     weaviateIssues={getWeaviateIssues()}
                     wcdUrlValid={currentValidation.wcd_url}
                     wcdApiKeyValid={currentValidation.wcd_api_key}
+                    customWeaviateHttpHostValid={
+                      currentValidation.custom_weaviate_http_host
+                    }
+                    customWeaviateGrpcHostValid={
+                      currentValidation.custom_weaviate_grpc_host
+                    }
                     onUpdateSettings={updateSettingsFields}
                     onUpdateFrontend={updateFrontendFields}
                   />
@@ -345,6 +353,12 @@ export default function Home() {
                     shouldHighlightUseSameCluster={shouldHighlight}
                     onUpdateFrontend={updateFrontendFields}
                     onCopyWeaviateValues={copyWeaviateValuesToConfigStorage}
+                    customStorageHttpHostValid={
+                      currentValidation.custom_storage_http_host
+                    }
+                    customStorageGrpcHostValid={
+                      currentValidation.custom_storage_grpc_host
+                    }
                   />
 
                   {/* Agent Configuration */}

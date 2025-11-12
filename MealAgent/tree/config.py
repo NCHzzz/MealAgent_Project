@@ -5,61 +5,61 @@ This module registers all MealAgent tools for use in the decision tree.
 """
 
 # Profile tools
-from elysia.MealAgent.tools.profile.profile_crud import profile_crud_tool
-from elysia.MealAgent.tools.profile.macro_calc import macro_calc_tool
+from MealAgent.tools.profile.profile_crud import profile_crud_tool
+from MealAgent.tools.profile.macro_calc import macro_calc_tool
 
 # Constraint tools (consolidated)
-from elysia.MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
+from MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
 
 # Search tools
-from elysia.MealAgent.tools.search.query import query_tool
-from elysia.MealAgent.tools.search.query_postprocessing import query_postprocessing_tool
-from elysia.MealAgent.tools.search.score_and_rank import score_and_rank_tool
-from elysia.MealAgent.tools.search.search_and_rank import search_and_rank_tool
+from MealAgent.tools.search.query import query_tool
+from MealAgent.tools.search.query_postprocessing import query_postprocessing_tool
+from MealAgent.tools.search.score_and_rank import score_and_rank_tool
+from MealAgent.tools.search.search_and_rank import search_and_rank_tool
 
 # Nutrition tools
-from elysia.MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 
 # Plan Day tools
-from elysia.MealAgent.tools.plan_day.target_resolver import target_resolver_tool
-from elysia.MealAgent.tools.plan_day.plan_assemble import plan_assemble_day_tool
-from elysia.MealAgent.tools.plan_day.plan_validate import plan_validate_tool
-from elysia.MealAgent.tools.plan_day.build_shopping import build_shopping_tool
-from elysia.MealAgent.tools.plan_day.plan_day_e2e import plan_day_e2e_tool
+from MealAgent.tools.plan_day.target_resolver import target_resolver_tool
+from MealAgent.tools.plan_day.plan_assemble import plan_assemble_day_tool
+from MealAgent.tools.plan_day.plan_validate import plan_validate_tool
+from MealAgent.tools.plan_day.build_shopping import build_shopping_tool
+from MealAgent.tools.plan_day.plan_day_e2e import plan_day_e2e_tool
 
 # Meal Logging tools
-from elysia.MealAgent.tools.meal_logging.meal_parser import meal_parser_tool
-from elysia.MealAgent.tools.meal_logging.nutrition_calc import nutrition_calc_tool
-from elysia.MealAgent.tools.meal_logging.profile_update import profile_update_tool
-from elysia.MealAgent.tools.meal_logging.meal_history import meal_history_tool
-from elysia.MealAgent.tools.meal_logging.log_meal_e2e import log_meal_e2e_tool
+from MealAgent.tools.meal_logging.meal_parser import meal_parser_tool
+from MealAgent.tools.meal_logging.nutrition_calc import nutrition_calc_tool
+from MealAgent.tools.meal_logging.profile_update import profile_update_tool
+from MealAgent.tools.meal_logging.meal_history import meal_history_tool
+from MealAgent.tools.meal_logging.log_meal_e2e import log_meal_e2e_tool
 
 # Plan Week tools
-from elysia.MealAgent.tools.plan_week.plan_assemble_weekly import plan_assemble_weekly_tool
-from elysia.MealAgent.tools.plan_week.variety_guard import variety_guard_tool
+from MealAgent.tools.plan_week.plan_assemble_weekly import plan_assemble_weekly_tool
+from MealAgent.tools.plan_week.variety_guard import variety_guard_tool
 
 # Pantry tools
-from elysia.MealAgent.tools.pantry.pantry_crud import pantry_crud_tool
+from MealAgent.tools.pantry.pantry_crud import pantry_crud_tool
 
 # Shopping tools
-from elysia.MealAgent.tools.shopping.pantry_diff import pantry_diff_tool
+from MealAgent.tools.shopping.pantry_diff import pantry_diff_tool
 
 # Gap Fill tools
-from elysia.MealAgent.tools.gap_fill.gap_calc import gap_calc_tool
-from elysia.MealAgent.tools.gap_fill.suggest_snack import suggest_snack_tool
-from elysia.MealAgent.tools.gap_fill.apply_snack import apply_snack_tool
+from MealAgent.tools.gap_fill.gap_calc import gap_calc_tool
+from MealAgent.tools.gap_fill.suggest_snack import suggest_snack_tool
+from MealAgent.tools.gap_fill.apply_snack import apply_snack_tool
 
 # Substitution tools
-from elysia.MealAgent.tools.substitution.suggest_substitutes import suggest_substitutes_tool
-from elysia.MealAgent.tools.substitution.apply_substitute import apply_substitute_tool
+from MealAgent.tools.substitution.suggest_substitutes import suggest_substitutes_tool
+from MealAgent.tools.substitution.apply_substitute import apply_substitute_tool
 
 # Micronutrient tools
-from elysia.MealAgent.tools.micros.micronutrient_check import micronutrient_check_tool
-from elysia.MealAgent.tools.micros.suggest_micros_foods import suggest_micros_foods_tool
+from MealAgent.tools.micros.micronutrient_check import micronutrient_check_tool
+from MealAgent.tools.micros.suggest_micros_foods import suggest_micros_foods_tool
 
 # Cooking & Explanation tools
-from elysia.MealAgent.tools.cook_mode.cook_mode import cook_mode_tool
-from elysia.MealAgent.tools.explain.explain import explain_tool
+from MealAgent.tools.cook_mode.cook_mode import cook_mode_tool
+from MealAgent.tools.explain.explain import explain_tool
 
 # Tool registry: maps tool names to tool functions
 # Tools are registered by their function name (used by Elysia's @tool decorator)

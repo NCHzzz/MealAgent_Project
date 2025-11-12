@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { IoText } from "react-icons/io5";
 import { PiListNumbers } from "react-icons/pi";
 import { PiIdentificationBadge } from "react-icons/pi";
+import { TbToggleLeft } from "react-icons/tb";
 import DataCell from "./components/DataCell";
 import { FaBoxArchive } from "react-icons/fa6";
 
@@ -94,6 +95,8 @@ const DataTable: React.FC<DataTableProps> = ({
                         <IoText className="w-4 h-4" />
                       ) : header[key] === "number" ? (
                         <PiListNumbers className="w-4 h-4" />
+                      ) : header[key] === "boolean" ? (
+                        <TbToggleLeft className="w-4 h-4" />
                       ) : header[key] === "uuid" ? (
                         <PiIdentificationBadge className="w-4 h-4" />
                       ) : header[key] === "object" ||
@@ -118,19 +121,40 @@ const DataTable: React.FC<DataTableProps> = ({
                   <td className="px-2 py-2 text-sm text-secondary">
                     {rowIndex + 1}
                   </td>
-                  {Object.keys(header).map((key, colIndex) => (
-                    <td
-                      key={`${rowIndex}-${colIndex}`}
-                      onClick={() => setSelectedRow(rowIndex)}
-                      className="truncate px-2 py-2 text-sm text-primary cursor-pointer max-w-[250px]"
-                    >
-                      {item[key] !== undefined
-                        ? typeof item[key] === "object"
-                          ? JSON.stringify(item[key], null, 0)
-                          : item[key]
-                        : ""}
-                    </td>
-                  ))}
+                  {Object.keys(header).map((key, colIndex) => {
+                    const value = item[key];
+                    const isBoolean = typeof value === "boolean";
+
+                    return (
+                      <td
+                        key={`${rowIndex}-${colIndex}`}
+                        onClick={() => setSelectedRow(rowIndex)}
+                        className="truncate px-2 py-2 text-sm cursor-pointer max-w-[250px]"
+                      >
+                        {value !== undefined && value !== null ? (
+                          typeof value === "object" ? (
+                            <span className="text-primary">
+                              {JSON.stringify(value, null, 0)}
+                            </span>
+                          ) : isBoolean ? (
+                            <span
+                              className={`font-mono text-xs ${
+                                value ? "text-green-400 " : "text-red-400 "
+                              }`}
+                            >
+                              {String(value)}
+                            </span>
+                          ) : (
+                            <span className="text-primary">{value}</span>
+                          )
+                        ) : value === null ? (
+                          <span className="text-secondary italic">null</span>
+                        ) : (
+                          ""
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>

@@ -106,12 +106,13 @@ export const SettingSwitch: React.FC<{
 export const SettingToggle: React.FC<{
   onChange: (value: string) => void;
   value: string;
-  labelA: string;
-  labelB: string;
-  iconA?: React.ReactNode;
-  iconB?: React.ReactNode;
+  labels: string[];
+  icons?: React.ReactNode[];
   disabled?: boolean;
-}> = ({ onChange, value, labelA, labelB, iconA, iconB, disabled = false }) => {
+}> = ({ onChange, value, labels, icons = [], disabled = false }) => {
+  const selectedIndex = labels.indexOf(value);
+  const numOptions = labels.length;
+
   return (
     <div className="flex flex-1 items-center justify-start">
       <motion.div
@@ -127,71 +128,55 @@ export const SettingToggle: React.FC<{
         <motion.div
           className={`absolute top-1 bottom-1 rounded-md transition-all duration-300`}
           animate={{
-            left: value ? "4px" : "50%",
-            right: value ? "50%" : "4px",
+            left:
+              selectedIndex >= 0
+                ? `calc(${(selectedIndex / numOptions) * 100}% + 4px)`
+                : "4px",
+            right:
+              selectedIndex >= 0
+                ? `calc(${((numOptions - selectedIndex - 1) / numOptions) * 100}% + 4px)`
+                : "4px",
           }}
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
         />
 
-        {/* Option A */}
-        <motion.button
-          type="button"
-          className={`relative z-10 flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-300 ${
-            value === labelA
-              ? disabled
-                ? "text-muted-foreground bg-muted/10 border border-muted"
-                : "text-highlight bg-highlight/10 border border-highlight"
-              : disabled
-                ? "text-muted-foreground"
-                : "text-secondary hover:text-highlight"
-          }`}
-          onClick={() => !disabled && onChange(labelA)}
-          disabled={disabled}
-          whileHover={!disabled && value === labelA ? { scale: 1.05 } : {}}
-        >
-          {iconA && (
-            <motion.div
-              animate={{
-                rotate: value === labelA ? 0 : 180,
-                scale: value === labelA ? 1 : 0.8,
-              }}
-              transition={{ duration: 0.3 }}
-            >
-              {iconA}
-            </motion.div>
-          )}
-          <span>{labelA}</span>
-        </motion.button>
+        {/* Dynamic Options */}
+        {labels.map((label, index) => {
+          const icon = icons[index];
+          const isSelected = value === label;
 
-        {/* Option B */}
-        <motion.button
-          type="button"
-          className={`relative z-10 flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-300 ${
-            value === labelB
-              ? disabled
-                ? "text-muted-foreground bg-muted/10 border border-muted"
-                : "text-highlight bg-highlight/10 border border-highlight"
-              : disabled
-                ? "text-muted-foreground"
-                : "text-secondary hover:text-highlight"
-          }`}
-          onClick={() => !disabled && onChange(labelB)}
-          disabled={disabled}
-          whileHover={!disabled && value === labelB ? { scale: 1.05 } : {}}
-        >
-          {iconB && (
-            <motion.div
-              animate={{
-                rotate: value === labelB ? 0 : 180,
-                scale: value === labelB ? 1 : 0.8,
-              }}
-              transition={{ duration: 0.3 }}
+          return (
+            <motion.button
+              key={label}
+              type="button"
+              className={`relative z-10 flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-300 ${
+                isSelected
+                  ? disabled
+                    ? "text-muted-foreground bg-muted/10 border border-muted"
+                    : "text-highlight bg-highlight/10 border border-highlight"
+                  : disabled
+                    ? "text-muted-foreground"
+                    : "text-secondary hover:text-highlight"
+              }`}
+              onClick={() => !disabled && onChange(label)}
+              disabled={disabled}
+              whileHover={!disabled && isSelected ? { scale: 1.05 } : {}}
             >
-              {iconB}
-            </motion.div>
-          )}
-          <span>{labelB}</span>
-        </motion.button>
+              {icon && (
+                <motion.div
+                  animate={{
+                    rotate: isSelected ? 0 : 180,
+                    scale: isSelected ? 1 : 0.8,
+                  }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {icon}
+                </motion.div>
+              )}
+              <span>{label}</span>
+            </motion.button>
+          );
+        })}
       </motion.div>
     </div>
   );

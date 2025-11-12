@@ -128,6 +128,15 @@ export type FrontendConfig = {
   save_location_wcd_api_key: string;
   save_location_local_weaviate_grpc_port: number;
   save_location_local_weaviate_port: number;
+
+  // Support for Custom Weaviate Connections added in 0.2.5
+  save_location_weaviate_is_custom: boolean;
+  save_location_custom_http_host: string;
+  save_location_custom_http_port: number;
+  save_location_custom_http_secure: boolean;
+  save_location_custom_grpc_host: string;
+  save_location_custom_grpc_port: number;
+  save_location_custom_grpc_secure: boolean;
 };
 
 export type Settings = {
@@ -148,6 +157,15 @@ export type Settings = {
   WEAVIATE_IS_LOCAL: boolean;
   LOCAL_WEAVIATE_GRPC_PORT: number;
   LOCAL_WEAVIATE_PORT: number;
+
+  // Support for Custom Weaviate Connections added in 0.2.5
+  WEAVIATE_IS_CUSTOM: boolean;
+  CUSTOM_HTTP_HOST: string;
+  CUSTOM_HTTP_PORT: number;
+  CUSTOM_HTTP_SECURE: boolean;
+  CUSTOM_GRPC_HOST: string;
+  CUSTOM_GRPC_PORT: number;
+  CUSTOM_GRPC_SECURE: boolean;
 };
 
 // For PATCHing collection metadata (matches backend schema)

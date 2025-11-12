@@ -19,7 +19,7 @@ except ImportError:
     print("❌ Error: weaviate-client not installed. Install with: pip install weaviate-client")
     sys.exit(1)
 
-from elysia.MealAgent.schemas import (
+from MealAgent.schemas import (
     RECIPE_SCHEMA,
     FDC_FOOD_SCHEMA,
     FDC_NUTRIENT_SCHEMA,
@@ -33,7 +33,7 @@ from elysia.MealAgent.schemas import (
     SHOPPING_LIST_SCHEMA,
     SHOPPING_ITEM_SCHEMA,
 )
-from elysia.MealAgent.schemas.helpers import create_all_collections_from_schemas
+from MealAgent.schemas.helpers import create_all_collections_from_schemas
 
 
 def connect(host="localhost", port=8078, grpc_port=50051):
