@@ -43,6 +43,157 @@ def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) ->
     return quantity
 
 
+def _extract_ingredients_from_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extract and aggregate ingredients from plan (daily or weekly).
+    Returns list of shopping items with ingredient_name, quantity, unit, fdc_id.
+    """
+    ingredient_map: Dict[str, Dict[str, Any]] = {}
+    
+    plan_type = plan.get("plan_type", "day")
+    
+    if plan_type == "day":
+        # Daily plan: iterate through meals
+        for meal_key, meal_data in plan.get("meals", {}).items():
+            recipe = meal_data.get("recipe", {})
+            servings = meal_data.get("servings", 1.0)
+            
+            # Get ingredients_with_qty or ingredients
+            ingredients_with_qty = recipe.get("ingredients_with_qty", [])
+            ingredients = recipe.get("ingredients", [])
+            ingredient_fdc_map = recipe.get("ingredient_fdc_map", [])
+            
+            # Build FDC lookup
+            fdc_lookup = {}
+            if ingredient_fdc_map:
+                for mapping in ingredient_fdc_map:
+                    if isinstance(mapping, dict):
+                        ing_vn = mapping.get("ingredient_vn", "").lower().strip()
+                        fdc_id = mapping.get("fdc_id")
+                        if ing_vn and fdc_id:
+                            fdc_lookup[ing_vn] = fdc_id
+            
+            # Process ingredients_with_qty (preferred)
+            if ingredients_with_qty:
+                for ing_str in ingredients_with_qty:
+                    if not isinstance(ing_str, str):
+                        continue
+                    # Parse ingredient string (simplified - e.g., "200g thịt gà")
+                    ing_lower = ing_str.lower().strip()
+                    ing_key = ing_lower
+                    
+                    if ing_key not in ingredient_map:
+                        ingredient_map[ing_key] = {
+                            "ingredient_name": ing_str,  # Keep original format
+                            "quantity": 0.0,
+                            "unit": "g",  # Default
+                            "fdc_id": fdc_lookup.get(ing_lower),
+                            "recipes": [],
+                        }
+                    ingredient_map[ing_key]["quantity"] += servings
+                    ingredient_map[ing_key]["recipes"].append({
+                        "meal": meal_key,
+                        "recipe_id": recipe.get("food_id"),
+                    })
+            elif ingredients:
+                # Fallback: use simple ingredient names
+                for ing in ingredients:
+                    if not isinstance(ing, str):
+                        continue
+                    ing_lower = str(ing).lower().strip()
+                    ing_key = ing_lower
+                    
+                    if ing_key not in ingredient_map:
+                        ingredient_map[ing_key] = {
+                            "ingredient_name": str(ing),
+                            "quantity": 0.0,
+                            "unit": "g",
+                            "fdc_id": fdc_lookup.get(ing_lower),
+                            "recipes": [],
+                        }
+                    ingredient_map[ing_key]["quantity"] += servings
+                    ingredient_map[ing_key]["recipes"].append({
+                        "meal": meal_key,
+                        "recipe_id": recipe.get("food_id"),
+                    })
+    
+    elif plan_type == "week":
+        # Weekly plan: iterate through all days and meals
+        for day_key, day_data in plan.get("days", {}).items():
+            for meal_key, meal_data in day_data.get("meals", {}).items():
+                recipe = meal_data.get("recipe", {})
+                servings = meal_data.get("servings", 1.0)
+                
+                ingredients_with_qty = recipe.get("ingredients_with_qty", [])
+                ingredients = recipe.get("ingredients", [])
+                ingredient_fdc_map = recipe.get("ingredient_fdc_map", [])
+                
+                # Build FDC lookup
+                fdc_lookup = {}
+                if ingredient_fdc_map:
+                    for mapping in ingredient_fdc_map:
+                        if isinstance(mapping, dict):
+                            ing_vn = mapping.get("ingredient_vn", "").lower().strip()
+                            fdc_id = mapping.get("fdc_id")
+                            if ing_vn and fdc_id:
+                                fdc_lookup[ing_vn] = fdc_id
+                
+                if ingredients_with_qty:
+                    for ing_str in ingredients_with_qty:
+                        if not isinstance(ing_str, str):
+                            continue
+                        ing_lower = ing_str.lower().strip()
+                        ing_key = ing_lower
+                        
+                        if ing_key not in ingredient_map:
+                            ingredient_map[ing_key] = {
+                                "ingredient_name": ing_str,
+                                "quantity": 0.0,
+                                "unit": "g",
+                                "fdc_id": fdc_lookup.get(ing_lower),
+                                "recipes": [],
+                            }
+                        ingredient_map[ing_key]["quantity"] += servings
+                        ingredient_map[ing_key]["recipes"].append({
+                            "day": day_key,
+                            "meal": meal_key,
+                            "recipe_id": recipe.get("food_id"),
+                        })
+                elif ingredients:
+                    for ing in ingredients:
+                        if not isinstance(ing, str):
+                            continue
+                        ing_lower = str(ing).lower().strip()
+                        ing_key = ing_lower
+                        
+                        if ing_key not in ingredient_map:
+                            ingredient_map[ing_key] = {
+                                "ingredient_name": str(ing),
+                                "quantity": 0.0,
+                                "unit": "g",
+                                "fdc_id": fdc_lookup.get(ing_lower),
+                                "recipes": [],
+                            }
+                        ingredient_map[ing_key]["quantity"] += servings
+                        ingredient_map[ing_key]["recipes"].append({
+                            "day": day_key,
+                            "meal": meal_key,
+                            "recipe_id": recipe.get("food_id"),
+                        })
+    
+    # Convert to list and clean up
+    items = []
+    for item in ingredient_map.values():
+        items.append({
+            "ingredient_name": item["ingredient_name"],
+            "quantity": item["quantity"],
+            "unit": item["unit"],
+            "fdc_id": item.get("fdc_id"),
+        })
+    
+    return items
+
+
 def _normalize_ingredient_name(name: str) -> str:
     """
     Normalize ingredient name for matching.
@@ -67,12 +218,15 @@ async def pantry_diff_tool(
     client_manager: ClientManager,
     user_id: str = "",
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Subtract pantry items from shopping list to get final shopping list.
+    
+    Reads from E2E plan outputs (plan_day_e2e_tool.plan or plan_week_e2e_tool.plan),
+    extracts shopping list items, and subtracts pantry stock.
 
     Environment reads:
-      - environment["build_shopping_tool"]["items"]
+      - environment["plan_day_e2e_tool"]["plan"] or environment["plan_week_e2e_tool"]["plan"]
       - environment["pantry_crud_tool"]["state"]
     Environment writes:
       - environment["pantry_diff_tool"]["diff"]
@@ -83,13 +237,26 @@ async def pantry_diff_tool(
         yield Error("user_id is required")
         return
 
-    # Read shopping list
-    shopping_results = tree_data.environment.find("build_shopping_tool", "items")
-    if not shopping_results or not shopping_results[0].objects:
-        yield Error("Shopping list not found. Run build_shopping_tool first.")
-        return
-
-    shopping_items = shopping_results[0].objects[0].get("items", [])
+    # Read plan from E2E tools (prefer daily, fallback to weekly)
+    plan = None
+    plan_source = None
+    
+    day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+    if day_plan_results and day_plan_results[0]["objects"]:
+        plan = day_plan_results[0]["objects"][0]
+        plan_source = "plan_day_e2e_tool"
+    else:
+        week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+        if week_plan_results and week_plan_results[0]["objects"]:
+            plan = week_plan_results[0]["objects"][0]
+            plan_source = "plan_week_e2e_tool"
+        else:
+            yield Error("No plan found. Run plan_day_e2e_tool or plan_week_e2e_tool first.")
+            return
+    
+    # Extract shopping items from plan
+    shopping_items = _extract_ingredients_from_plan(plan)
+    yield Response(f"Extracted {len(shopping_items)} items from {plan_source} plan")
 
     # Read pantry state
     pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
@@ -177,8 +344,10 @@ async def pantry_diff_tool(
                 "original_count": len(shopping_items),
                 "final_count": len(final_items),
                 "removed_count": len(shopping_items) - len(final_items),
+                "plan_source": plan_source,
             },
             payload_type="generic",
+            display=True,
         )
         # Table view of final items (rows) for display
         yield Result(
@@ -189,6 +358,7 @@ async def pantry_diff_tool(
                 "final_count": len(final_items),
             },
             payload_type="table",
+            display=True,
         )
 
         warning_msg = ""

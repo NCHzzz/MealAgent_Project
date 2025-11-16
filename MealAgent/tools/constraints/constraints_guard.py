@@ -30,7 +30,7 @@ async def constraints_guard_tool(
     required_device: str | None = None,
     exclude_devices: list[str] | None = None,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Merge diet/allergen and time/device filters into a single where-clause.
 
@@ -39,11 +39,10 @@ async def constraints_guard_tool(
       - profile_crud_tool.profile (optional defaults for diet/allergens/equipment)
     - Writes:
       - constraints_guard_tool.filters: [{ where: <Filter JSON> }]
-      - constraints_guard_tool.report: [{ ...inputs used..., has_constraints }]
 
     Decision hints:
     - If constraints_guard_tool.filters exists, search tools should use it.
-    - The report indicates whether any constraint was actually applied.
+    - Metadata includes constraint details (diet_types, exclude_allergens, etc.) for debugging.
     """
     yield Response("Generating combined constraints (diet/allergen + time/device)...")
 
@@ -91,28 +90,20 @@ async def constraints_guard_tool(
 
     where_clause = _combine_operands(operands)
 
-    # Emit filters
+    # Emit filters (per design: only filters output, no report)
     yield Result(
         name="filters",
         objects=[{"where": where_clause or {}}],
-        metadata={"has_filters": bool(operands)},
+        metadata={
+            "has_filters": bool(operands),
+            "diet_types": diet_types,
+            "exclude_allergens": exclude_allergens,
+            "max_cooking_time": max_cooking_time if isinstance(max_cooking_time, int) else None,
+            "required_device": required_device,
+            "exclude_devices": exclude_devices,
+        },
         payload_type="generic",
-    )
-
-    # Emit a compact report
-    report: Dict[str, Any] = {
-        "diet_types": diet_types,
-        "exclude_allergens": exclude_allergens,
-        "max_cooking_time": max_cooking_time if isinstance(max_cooking_time, int) else None,
-        "required_device": required_device,
-        "exclude_devices": exclude_devices,
-        "has_constraints": bool(diet_types or exclude_allergens or max_cooking_time or required_device or exclude_devices),
-    }
-    yield Result(
-        name="report",
-        objects=[report],
-        metadata={"has_constraints": report["has_constraints"]},
-        payload_type="generic",
+        display=True,
     )
     yield Response("Combined constraints generated")
 

@@ -144,6 +144,196 @@ export type SingleMessagePayload = DefaultResultPayload & {
   timestamp: string;
 };
 
+// MealAgent-specific payload types
+export type MealPlanPayload = DefaultResultPayload & {
+  plan_type: "day" | "week";
+  meals?: {
+    [mealKey: string]: {
+      meal_type: string;
+      recipe: {
+        food_id: string;
+        dish_name: string;
+        macros_per_serving?: {
+          kcal: number;
+          protein_g: number;
+          fat_g: number;
+          carb_g: number;
+        };
+        allergens?: string[];
+        cooking_time?: number;
+        image_link?: string;
+      };
+      servings: number;
+      macros: {
+        kcal: number;
+        protein_g: number;
+        fat_g: number;
+        carb_g: number;
+      };
+    };
+  };
+  days?: {
+    [dayKey: string]: {
+      date: string;
+      meals: {
+        [mealKey: string]: {
+          meal_type: string;
+          recipe: {
+            food_id: string;
+            dish_name: string;
+            macros_per_serving?: {
+              kcal: number;
+              protein_g: number;
+              fat_g: number;
+              carb_g: number;
+            };
+            allergens?: string[];
+            cooking_time?: number;
+            image_link?: string;
+          };
+          servings: number;
+          macros: {
+            kcal: number;
+            protein_g: number;
+            fat_g: number;
+            carb_g: number;
+          };
+        };
+      };
+      total_macros: {
+        kcal: number;
+        protein_g: number;
+        fat_g: number;
+        carb_g: number;
+      };
+    };
+  };
+  total_macros: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  average_daily_macros?: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  validation: {
+    valid: boolean;
+    macro_validation?: {
+      valid: boolean;
+      violations: any[];
+      warnings: any[];
+    };
+    constraint_validation?: {
+      valid: boolean;
+      violations: any[];
+    };
+    variety_validation?: {
+      valid: boolean;
+      score: number;
+    };
+  };
+  variety_score?: number;
+  start_date?: string;
+  created_at?: string | null;
+};
+
+export type RecipeCardPayload = DefaultResultPayload & {
+  food_id: string;
+  dish_name: string;
+  dish_type?: string;
+  serving_size?: number;
+  cooking_time?: number;
+  macros_per_serving?: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  allergens?: string[];
+  diet_type?: string[];
+  image_link?: string;
+  ingredients?: string[];
+  ingredients_with_qty?: string[];
+};
+
+export type NutritionSummaryPayload = DefaultResultPayload & {
+  total_macros: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  targets?: {
+    tdee_kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  micronutrients?: {
+    [nutrient: string]: {
+      total: number;
+      target?: number;
+      unit: string;
+    };
+  };
+  validation?: {
+    valid: boolean;
+    violations: any[];
+    warnings: any[];
+  };
+};
+
+export type ShoppingListPayload = DefaultResultPayload & {
+  items: {
+    ingredient_name: string;
+    quantity: number;
+    unit: string;
+    category?: string;
+    fdc_id?: number;
+  }[];
+  original_count?: number;
+  removed_count?: number;
+  categories?: {
+    [category: string]: {
+      ingredient_name: string;
+      quantity: number;
+      unit: string;
+    }[];
+  };
+};
+
+export type CookingStepsPayload = DefaultResultPayload & {
+  food_id: string;
+  dish_name: string;
+  steps: {
+    index: number;
+    instruction: string;
+    estimated_seconds: number;
+  }[];
+  total_time_seconds?: number;
+};
+
+export type MealHistoryPayload = DefaultResultPayload & {
+  log_id: string;
+  logged_at: string;
+  meal_description: string;
+  parsed_dish?: string;
+  calculated_macros: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  calculated_micros?: {
+    [nutrient: string]: number;
+  };
+  portion_size?: number;
+};
+
 export type CitationPreview = {
   type:
     | "text"
@@ -156,7 +346,13 @@ export type CitationPreview = {
     | "table"
     | "aggregation"
     | "mapped"
-    | "document";
+    | "document"
+    | "meal_plan"
+    | "recipe_card"
+    | "nutrition_summary"
+    | "shopping_list"
+    | "cooking_steps"
+    | "meal_history";
   title: string;
   text: string;
   index: number;

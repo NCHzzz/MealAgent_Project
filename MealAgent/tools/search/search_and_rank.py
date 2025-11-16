@@ -2,9 +2,17 @@ from typing import AsyncGenerator, Dict, Any, List
 import logging
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error, Response
+from elysia.objects import Result, Error, Response, Retrieval
 from elysia.util.client import ClientManager
 from elysia import tool
+
+# Try to import Elysia Query tool
+try:
+    from elysia.tools.retrieval.query import Query as ElysiaQuery
+    ELYSIA_QUERY_AVAILABLE = True
+except ImportError:
+    ELYSIA_QUERY_AVAILABLE = False
+    ElysiaQuery = None
 
 # Defaults
 DEFAULT_SEARCH_LIMIT = 50
@@ -60,81 +68,106 @@ def _deduplicate_items(items: List[Dict[str, Any]], collection_name: str) -> Lis
     return deduped
 
 
-def _calculate_macro_fit_score(recipe_macros: Dict[str, float], target_per_meal: Dict[str, float]) -> float:
-    if not recipe_macros:
-        return 0.0
-    deviations = []
-    for key in ["kcal", "protein_g", "fat_g", "carb_g"]:
-        recipe_val = recipe_macros.get(key, 0.0)
-        target_val = target_per_meal.get(key, 1.0)
-        if target_val > 0:
-            dev = abs(recipe_val - target_val) / target_val
-            deviations.append(dev)
-        else:
-            deviations.append(1.0)
-    avg_dev = sum(deviations) / len(deviations) if deviations else 1.0
-    return max(0.0, 100.0 - (avg_dev * 100.0))
-
-
-@tool
-async def search_and_rank_tool(
+async def _search_with_elysia_query(
     tree_data: TreeData,
     client_manager: ClientManager,
-    query_text: str = "",
-    collection_name: str = "Recipe",
-    limit: int = DEFAULT_SEARCH_LIMIT,
-    alpha: float = DEFAULT_HYBRID_ALPHA,
-    top_k: int = DEFAULT_TOP_K,
-    **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+    query_text: str,
+    collection_name: str,
+    limit: int,
+    alpha: float,
+    kwargs: dict,
+) -> List[Dict[str, Any]] | None:
     """
-    End-to-end search → normalize/deduplicate → rank.
-    Applies combined constraints if available. Returns top_k in one Result.
-
-    Environment interface:
-    - Reads:
-      - constraints_guard_tool.filters (preferred combined where)
-      - macro_calc_tool.targets (optional for macro-aware ranking)
-      - legacy: diet_allergen_guard_tool.filters, time_device_guard_tool.filters
-    - Writes:
-      - search_and_rank_tool.topk: ranked candidate items
-
-    Decision hints:
-    - Presence of search_and_rank_tool.topk means downstream tools can proceed
-      (e.g., cook_mode_tool will select a recipe_id from here if none provided).
+    Use Elysia Query tool for LLM-driven query optimization.
+    Returns list of item properties or None if failed.
+    
+    Note: 
+    - Elysia Query tool uses LLM to decide query strategy based on user_prompt.
+    - It automatically reads from environment (including constraints_guard_tool.filters if available).
+    - It yields Retrieval objects and stores results in environment["query"][collection_name].
+    - Constraints from constraints_guard_tool.filters are available in environment for LLM to consider.
     """
-    logging.info("search_and_rank_tool: start")
-    yield Response(f"Searching and ranking {collection_name}...")
+    try:
+        elysia_query = ElysiaQuery()
+        
+        # Ensure tree_data has user_prompt for Elysia Query tool
+        # If not set, use query_text as fallback
+        original_prompt = tree_data.user_prompt
+        if not tree_data.user_prompt and query_text:
+            # Temporarily set user_prompt for Elysia Query tool
+            tree_data.user_prompt = query_text
+        
+        # Call Elysia Query tool
+        retrieval_objects = []
+        error_occurred = False
+        async for result in elysia_query(
+            tree_data=tree_data,
+            base_lm=kwargs.get("base_lm"),
+            complex_lm=kwargs.get("complex_lm"),
+            client_manager=client_manager,
+            inputs={"collection_names": [collection_name]},
+        ):
+            if isinstance(result, Error):
+                logging.warning(f"Elysia Query tool returned error: {result.feedback}")
+                error_occurred = True
+                break
+            if isinstance(result, Retrieval):
+                # Extract objects from Retrieval
+                if result.objects:
+                    retrieval_objects.extend(result.objects)
+            # Also handle Response/Status objects (ignore them, they're just progress updates)
+        
+        # Restore original user_prompt
+        if original_prompt != tree_data.user_prompt:
+            tree_data.user_prompt = original_prompt
+        
+        # If we got results from yielded Retrieval objects, return them
+        if retrieval_objects:
+            # Limit to requested limit
+            return retrieval_objects[:limit]
+        
+        # Check environment for results (Elysia Query stores in environment["query"][collection_name])
+        # Elysia Query tool stores results with name=collection_name
+        query_results = tree_data.environment.find("query", collection_name)
+        if query_results and query_results[0]["objects"]:
+            items = query_results[0]["objects"]
+            return items[:limit] if items else None
+        
+        # If error occurred or no results, return None (will trigger fallback)
+        if error_occurred:
+            logging.warning("Elysia Query tool encountered errors, will fallback to custom search")
+        
+        return None
+    except Exception as e:
+        logging.warning(f"Elysia Query tool failed: {str(e)}")
+        return None
 
-    if limit <= 0 or limit > 1000:
-        yield Error("limit must be between 1 and 1000")
-        return
-    if not 0.0 <= alpha <= 1.0:
-        yield Error("alpha must be between 0.0 and 1.0")
-        return
 
+async def _search_with_custom_logic(
+    tree_data: TreeData,
+    client_manager: ClientManager,
+    query_text: str,
+    collection_name: str,
+    limit: int,
+    alpha: float,
+) -> List[Dict[str, Any]] | None:
+    """
+    Use custom search logic (direct Weaviate queries).
+    Returns list of item properties or None if failed.
+    """
     try:
         client = client_manager.get_client()
         try:
             collection = client.collections.get(collection_name)
         except Exception as e:
-            yield Error(f"Collection '{collection_name}' not found: {str(e)}")
-            return
+            logging.error(f"Collection '{collection_name}' not found: {str(e)}")
+            return None
 
-        # Collect constraints (combined preferred)
-        where_clauses: list[Dict | None] = []
-        combined_results = tree_data.environment.find("constraints_guard_tool", "filters")
-        if combined_results and combined_results[0]["objects"]:
-            where_clauses.append(combined_results[0]["objects"][0].get("where"))
-        else:
-            diet_results = tree_data.environment.find("diet_allergen_guard_tool", "filters")
-            if diet_results and diet_results[0]["objects"]:
-                where_clauses.append(diet_results[0]["objects"][0].get("where"))
-            time_results = tree_data.environment.find("time_device_guard_tool", "filters")
-            if time_results and time_results[0]["objects"]:
-                where_clauses.append(time_results[0]["objects"][0].get("where"))
-
-        where = _merge_where_clauses(where_clauses)
+        # Collect constraints from environment (per design: only constraints_guard_tool)
+        where = None
+        constraints_results = tree_data.environment.find("constraints_guard_tool", "filters")
+        if constraints_results and constraints_results[0]["objects"]:
+            where = constraints_results[0]["objects"][0].get("where")
 
         # Execute search with fallback
         def _hybrid():
@@ -162,10 +195,93 @@ async def search_and_rank_tool(
                 results = None
 
         if results is None or not results.objects:
+            return None
+
+        return [obj.properties for obj in results.objects]
+    except Exception as e:
+        logging.error(f"Custom search logic failed: {str(e)}")
+        return None
+
+
+def _calculate_macro_fit_score(recipe_macros: Dict[str, float], target_per_meal: Dict[str, float]) -> float:
+    if not recipe_macros:
+        return 0.0
+    deviations = []
+    for key in ["kcal", "protein_g", "fat_g", "carb_g"]:
+        recipe_val = recipe_macros.get(key, 0.0)
+        target_val = target_per_meal.get(key, 1.0)
+        if target_val > 0:
+            dev = abs(recipe_val - target_val) / target_val
+            deviations.append(dev)
+        else:
+            deviations.append(1.0)
+    avg_dev = sum(deviations) / len(deviations) if deviations else 1.0
+    return max(0.0, 100.0 - (avg_dev * 100.0))
+
+
+@tool
+async def search_and_rank_tool(
+    tree_data: TreeData,
+    client_manager: ClientManager,
+    query_text: str = "",
+    collection_name: str = "Recipe",
+    limit: int = DEFAULT_SEARCH_LIMIT,
+    alpha: float = DEFAULT_HYBRID_ALPHA,
+    top_k: int = DEFAULT_TOP_K,
+    use_elysia_query: bool = False,  # Option to use Elysia Query tool for LLM-driven optimization
+    **kwargs,
+) -> AsyncGenerator[Result | Response | Error, None]:
+    """
+    End-to-end search → normalize/deduplicate → rank.
+    Applies combined constraints if available. Returns top_k in one Result.
+
+    This tool can use either:
+    1. Elysia Query tool (if use_elysia_query=True and base_lm available) - LLM-driven query optimization
+    2. Custom search logic (default) - Direct Weaviate queries with deterministic behavior
+
+    Environment interface:
+    - Reads:
+      - constraints_guard_tool.filters (combined where clause for filtering)
+      - macro_calc_tool.targets (optional for macro-aware ranking)
+    - Writes:
+      - search_and_rank_tool.topk: ranked candidate items
+
+    Decision hints:
+    - Presence of search_and_rank_tool.topk means downstream tools can proceed
+      (e.g., plan_day_e2e_tool can select recipes from topk).
+    """
+    logging.info(f"search_and_rank_tool: start (use_elysia_query={use_elysia_query})")
+    yield Response(f"Searching and ranking {collection_name}...")
+
+    if limit <= 0 or limit > 1000:
+        yield Error("limit must be between 1 and 1000")
+        return
+    if not 0.0 <= alpha <= 1.0:
+        yield Error("alpha must be between 0.0 and 1.0")
+        return
+
+    try:
+        # Option 1: Use Elysia Query tool for LLM-driven query optimization
+        if use_elysia_query and ELYSIA_QUERY_AVAILABLE and kwargs.get("base_lm"):
+            yield Response("Using Elysia Query tool for LLM-driven search optimization...")
+            items = await _search_with_elysia_query(
+                tree_data, client_manager, query_text, collection_name, limit, alpha, kwargs
+            )
+            if items is None:
+                # Fallback to custom search if Elysia Query fails
+                yield Response("Elysia Query failed, falling back to custom search...")
+                items = await _search_with_custom_logic(
+                    tree_data, client_manager, query_text, collection_name, limit, alpha
+                )
+        else:
+            # Option 2: Use custom search logic (default, deterministic)
+            items = await _search_with_custom_logic(
+                tree_data, client_manager, query_text, collection_name, limit, alpha
+            )
+
+        if not items:
             yield Error("No results found")
             return
-
-        items = [obj.properties for obj in results.objects]
 
         # Normalize and deduplicate
         normalized = [_normalize_item(item, collection_name) for item in items]
@@ -184,7 +300,10 @@ async def search_and_rank_tool(
                 "carb_g": targets.get("carb_g", 200) / 3.0,
             }
 
-        # Score
+        # Score and rank
+        # Note: Recipes missing macros_per_serving will have lower macro_score (0.0)
+        # The calculate_recipe_macros_tool can be called separately to backfill macros
+        # before ranking, or plan_day_e2e_tool can handle macro calculation as needed
         scored_items = []
         seen_ingredients: set[str] = set()
         missing_macros_count = 0
@@ -196,6 +315,8 @@ async def search_and_rank_tool(
                     macro_score = _calculate_macro_fit_score(macros, target_per_meal)
                 else:
                     missing_macros_count += 1
+                    # Note: Could call calculate_recipe_macros_tool here, but that would
+                    # require base_lm and add complexity. Better to handle at plan_day_e2e_tool level.
 
             semantic_score = 50.0
             if "_additional" in item:
@@ -244,29 +365,11 @@ async def search_and_rank_tool(
                 "total_scored": len(scored_items),
                 "has_targets": has_targets,
                 "collection": collection_name,
+                "query": query_text,
             },
-            payload_type="table",
+            payload_type="generic",
+            display=True,
         )
-        # Suggest a sensible next action for the decision agent
-        # Only suggest cook_mode if cooking hasn't been completed yet
-        try:
-            # Check if cooking is already completed
-            completed_check = tree_data.environment.find("cook_mode_tool", "completed")
-            cooking_completed = completed_check and completed_check[0].get("objects")
-            
-            if collection_name.lower() == "recipe" and not cooking_completed:
-                suggested = "cook_mode"
-            else:
-                suggested = "inspect_results"
-            
-            yield Result(
-                name="next_action_hint",
-                objects=[{"suggested_action": suggested, "reason": "ranked results available"}],
-                metadata={"suggested_action": suggested},
-                payload_type="generic",
-            )
-        except Exception:
-            pass
 
     except Exception as e:
         yield Error(f"search_and_rank_tool failed: {str(e)}")

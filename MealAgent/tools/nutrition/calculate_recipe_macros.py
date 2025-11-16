@@ -1,5 +1,6 @@
 from typing import AsyncGenerator, Dict, Any, List, Optional
 import json
+import logging
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -7,6 +8,8 @@ from elysia.util.client import ClientManager
 from elysia import tool
 import dspy
 from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
+
+logger = logging.getLogger(__name__)
 
 
 async def _translate_ingredients_vn_to_en(
@@ -107,7 +110,7 @@ async def calculate_recipe_macros_tool(
     recipe_id: Optional[str] = None,
     recipe: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Calculate macros_per_serving for Recipe (VN→EN translation + FDC lookup + cache).
 
@@ -164,6 +167,7 @@ async def calculate_recipe_macros_tool(
                 objects=[macros],
                 metadata={"source": "cached", "recipe_id": recipe_obj.get("food_id")},
                 payload_type="generic",
+                display=True,
             )
             yield Response("Macros retrieved from cache")
             return
@@ -205,18 +209,44 @@ async def calculate_recipe_macros_tool(
         else:
             macros_per_serving = total_macros
 
-        # Update Recipe in Weaviate
+        # Update Recipe in Weaviate with deduplicated ingredient_fdc_map
         if recipe_uuid:
-            # Merge with existing ingredient_fdc_map
+            # Merge with existing ingredient_fdc_map, deduplicate by ingredient_vn
             existing_map = recipe_obj.get("ingredient_fdc_map", []) or []
-            existing_map.extend(ingredient_map)
-
+            existing_by_vn = {item.get("ingredient_vn"): item for item in existing_map if isinstance(item, dict)}
+            
+            # Update or add new mappings
+            for new_item in ingredient_map:
+                vn = new_item.get("ingredient_vn", "")
+                if vn in existing_by_vn:
+                    # Check for mismatches (different fdc_id for same ingredient)
+                    existing_fdc = existing_by_vn[vn].get("fdc_id")
+                    new_fdc = new_item.get("fdc_id")
+                    if existing_fdc != new_fdc:
+                        logger.warning(
+                            f"Recipe {recipe_obj.get('food_id')}: ingredient '{vn}' has FDC mismatch "
+                            f"(existing: {existing_fdc}, new: {new_fdc}). Using new mapping."
+                        )
+                    # Update with new mapping (higher confidence or more recent)
+                    existing_by_vn[vn] = new_item
+                else:
+                    existing_by_vn[vn] = new_item
+            
+            # Convert back to list
+            deduplicated_map = list(existing_by_vn.values())
+            
+            # Persist to Weaviate
             collection.data.update(
                 uuid=recipe_uuid,
                 properties={
                     "macros_per_serving": macros_per_serving,
-                    "ingredient_fdc_map": existing_map,
+                    "ingredient_fdc_map": deduplicated_map,
                 },
+            )
+            
+            logger.info(
+                f"Updated Recipe {recipe_obj.get('food_id')}: "
+                f"macros_per_serving cached, {len(deduplicated_map)} ingredient mappings persisted"
             )
 
         yield Result(
@@ -228,6 +258,7 @@ async def calculate_recipe_macros_tool(
                 "ingredients_mapped": len(ingredient_map),
             },
             payload_type="generic",
+            display=True,
         )
         yield Response(f"Calculated macros: {macros_per_serving['kcal']:.0f} kcal per serving")
 

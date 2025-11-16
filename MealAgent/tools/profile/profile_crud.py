@@ -66,7 +66,7 @@ async def profile_crud_tool(
     action: str = "create",
     profile_data: dict | None = None,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Create, read, or update a UserProfile in Weaviate.
 
@@ -82,15 +82,6 @@ async def profile_crud_tool(
     """
     logging.info(f"profile_crud_tool: start (action={action})")
     yield Response(f"Processing profile {action}...")
-
-    # If the primary user goal appears completed (e.g., cooking done), avoid any DB calls
-    try:
-        completed = tree_data.environment.find("cook_mode_tool", "completed")
-        if completed and completed[0]["objects"]:
-            yield Response("Skipping profile action: current user goal already completed")
-            return
-    except Exception:
-        pass
 
     # Ensure valid action
     allowed = {"create", "update", "read"}
@@ -138,6 +129,7 @@ async def profile_crud_tool(
                 objects=[profile_data],
                 metadata={"action": action, "user_id": user_id},
                 payload_type="generic",
+                display=True,
             )
             yield Response(f"Profile {action}d successfully for user {user_id}")
 
@@ -172,6 +164,7 @@ async def profile_crud_tool(
                 objects=[profile],
                 metadata={"action": "read", "user_id": user_id},
                 payload_type="generic",
+                display=True,
             )
             yield Response(f"Profile read successfully for user {user_id}")
 

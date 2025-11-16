@@ -16,7 +16,7 @@ Usage:
        - They handle error propagation and tool sequencing automatically
        - Example:
          ```python
-         from elysia.MealAgent.tree.meal_tree import process_daily_planning_workflow
+         from MealAgent.tree.meal_tree import process_daily_planning_workflow
          
          async def my_tree_node(tree_data, client_manager, base_lm, **kwargs):
              async for result in process_daily_planning_workflow(
@@ -128,7 +128,7 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    # Step 6-8: Assemble plan in one step
+    # Step 6-8: Assemble plan in one step (plan_day_e2e_tool handles everything)
     yield Status("Assembling daily plan and validating against targets...")
     e2e_plan_tool = MEAL_AGENT_TOOLS["plan_day_e2e_tool"]
     async for result in e2e_plan_tool(
@@ -141,18 +141,7 @@ async def process_daily_planning_workflow(
             return
         yield result
 
-    # Step 7: Build shopping list
-    yield Status("Building shopping list from plan and pantry...")
-    shopping_tool = MEAL_AGENT_TOOLS["build_shopping_tool"]
-    async for result in shopping_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
+    # Note: Shopping list can be generated via pantry_diff_tool which reads from plan_day_e2e_tool.plan or plan_week_e2e_tool.plan
 
     yield Status("Daily planning workflow completed successfully")
 
@@ -210,7 +199,7 @@ async def process_cooking_workflow(
     Workflow:
     1. Ensure a plan/search result exists (caller should run planning or search).
     2. Run cook_mode_tool to extract steps.
-    3. (Optional) Run explain_tool to provide a short rationale.
+    3. (Optional) Use Elysia's cited_summarize tool to provide a short rationale.
 
     Notes:
     - The tool will try to pick a recipe from daily/weekly plan or search topk.
@@ -228,24 +217,22 @@ async def process_cooking_workflow(
 
         # 2) fallback to first item from search topk
         if food_id is None:
-            for tool_name in ("search_and_rank_tool", "score_and_rank_tool"):
-                res = tree_data.environment.find(tool_name, "topk")
-                if res and res[0]["objects"]:
-                    first = res[0]["objects"][0]
-                    fid = str(first.get("food_id") or "").strip()
-                    if fid:
-                        # persist selection for future steps following environment_keys.md (cook_mode_tool.recipe_id)
-                        try:
-                            tree_data.environment.add_objects(
-                                "cook_mode_tool",
-                                "recipe_id",
-                                [{"food_id": fid}],
-                                metadata={"source": tool_name},
-                            )
-                        except Exception:
-                            pass
-                        food_id = fid
-                        break
+            res = tree_data.environment.find("search_and_rank_tool", "topk")
+            if res and res[0]["objects"]:
+                first = res[0]["objects"][0]
+                fid = str(first.get("food_id") or first.get("recipe_id") or "").strip()
+                if fid:
+                    # persist selection for future steps following environment_keys.md (cook_mode_tool.recipe_id)
+                    try:
+                        tree_data.environment.add_objects(
+                            "cook_mode_tool",
+                            "recipe_id",
+                            [{"food_id": fid}],
+                            metadata={"source": "search_and_rank_tool"},
+                        )
+                    except Exception:
+                        pass
+                    food_id = fid
 
     # Step 1 & 2: Cooking steps
     yield Status("Preparing step-by-step cooking guidance...")
@@ -262,24 +249,9 @@ async def process_cooking_workflow(
         yield result
 
     # Step 3: Optional explanation
-    try:
-        explain_tool = MEAL_AGENT_TOOLS.get("explain_tool")
-        if explain_tool:
-            yield Status("Generating explanation (optional)...")
-            async for result in explain_tool(
-                tree_data=tree_data,
-                client_manager=client_manager,
-                base_lm=base_lm,
-                **kwargs,
-            ):
-                if isinstance(result, Error):
-                    # Explanation is optional; warn and continue
-                    yield Status(f"Warning: explanation failed: {result.message}")
-                    break
-                yield result
-    except Exception:
-        # Explanation optional; ignore hard failures
-        pass
+    # Note: Use Elysia's cited_summarize tool for explanations (not a MealAgent tool)
+    # This is handled by the Tree's decision agent, not manually here
+    # If explanation is needed, the Tree will automatically select cited_summarize tool
 
     yield Status("Cooking workflow completed successfully")
 
@@ -294,28 +266,25 @@ async def process_explanation_workflow(
     Orchestrate explanation workflow (summarize decisions made so far).
 
     Assumes previous tools (profile/targets/constraints/search/plan) have populated
-    the environment. Uses explain_tool to compose a user-facing summary.
+    the environment. Uses Elysia's cited_summarize tool to compose a user-facing summary.
+    
+    Note: This workflow is handled by Elysia's built-in cited_summarize tool.
+    The Tree's decision agent will automatically select cited_summarize when user requests explanation.
     """
     yield Status("Starting explanation workflow...")
-
-    explain_tool = MEAL_AGENT_TOOLS["explain_tool"]
-    async for result in explain_tool(
-        tree_data=tree_data,
-        client_manager=client_manager,
-        base_lm=base_lm,
-        **kwargs,
-    ):
-        if isinstance(result, Error):
-            yield result
-            return
-        yield result
-
+    yield Status("Note: Use Elysia's cited_summarize tool for explanations. The Tree will automatically select it when needed.")
     yield Status("Explanation workflow completed successfully")
 
 
 def build_meal_agent_tree(
     settings: Settings | None = None,
     user_id: str | None = None,
+    conversation_id: str | None = None,
+    style: str = "Friendly and helpful meal planning assistant",
+    agent_description: str = "Meal planning agent that helps users create personalized meal plans",
+    end_goal: str = "Generate meal plans that meet user's nutritional targets and preferences",
+    low_memory: bool = False,
+    use_elysia_collections: bool = True,
     user_prompt: str | None = None,
     conversation_history: List[Dict] | None = None,
     optimize_tools: bool = True,
@@ -327,90 +296,135 @@ def build_meal_agent_tree(
     Args:
         settings: Elysia settings
         user_id: User ID
+        conversation_id: Conversation ID for tracking conversations
+        style: Style of agent responses
+        agent_description: Description of agent's role and capabilities
+        end_goal: Criteria for when the decision tree should end
+        low_memory: If True, reduce memory usage
+        use_elysia_collections: If True, use Elysia-processed collections
         user_prompt: Optional user prompt for intent-based tool optimization
         conversation_history: Optional conversation history for context
         optimize_tools: If True, only load tools relevant to user intent (default: True)
 
-    Branch layout (ids):
-      - profile
-      - constraints
-      - search
-      - nutrition
-      - plan_day
-      - plan_week
-      - pantry
-      - shopping
-      - gap_fill
-      - substitution
-      - micros
-      - logging
-      - cooking
-      - explain
+    Branch layout (optimized - 8 branches per design doc):
+      - profile: Profile management and macro calculation
+      - planning: Daily/weekly meal planning (merged from plan_day + plan_week)
+      - search: Recipe/food search and ranking
+      - logging: Meal logging and history
+      - pantry: Pantry and shopping list management (merged from pantry + shopping)
+      - optimization: Gap fill, substitution, micros (merged from 3 branches)
+      - cooking: Cooking mode
+      - explain: Explanations (using Elysia cited_summarize)
 
     Note: This sets up branches and registers tools for each branch. You can still
     orchestrate execution order via workflows or tree node logic.
     """
-    tree = Tree(branch_initialisation="empty", settings=settings, user_id=user_id)
+    tree = Tree(
+        branch_initialisation="empty",
+        settings=settings,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        style=style,
+        agent_description=agent_description,
+        end_goal=end_goal,
+        low_memory=low_memory,
+        use_elysia_collections=use_elysia_collections,
+    )
     
     # Optimize tool loading based on user intent
     tools_to_load = None
     if optimize_tools and user_prompt:
         try:
-            from elysia.MealAgent.tree.tool_optimizer import get_optimized_tool_set
-            optimized = get_optimized_tool_set(
-                user_prompt=user_prompt,
-                conversation_history=conversation_history,
-                max_tools=12,  # Reduce from 27 to 12
-            )
-            tools_to_load = set(optimized.keys())
-            logging.info(f"MealAgent: Optimized tool loading - {len(tools_to_load)} tools (from 27 total)")
+            # Note: tool_optimizer module not yet implemented
+            # When available, uncomment:
+            # from MealAgent.tree.tool_optimizer import get_optimized_tool_set
+            # optimized = get_optimized_tool_set(
+            #     user_prompt=user_prompt,
+            #     conversation_history=conversation_history,
+            #     max_tools=12,  # Reduce from 27 to 12
+            # )
+            # tools_to_load = set(optimized.keys())
+            # logging.info(f"MealAgent: Optimized tool loading - {len(tools_to_load)} tools (from 27 total)")
+            pass
         except Exception as e:
-            logging.warning(f"MealAgent: Tool optimization failed, loading all tools: {e}")
+            logging.warning(f"MealAgent: Tool optimization not available, loading all tools: {e}")
             tools_to_load = None
 
     # Note: Do NOT hardcode intent keywords here. The decision agent should
     # infer completion based on environment signals written by tools (see
     # tool docstrings for reads/writes and completion hints).
 
-    # Create branches (stem from root)
-    # Ensure root branch exists (empty_init creates "base" branch)
-    root_id = tree.root if tree.root else "base"
+    # Create root branch first (required - this is the starting point)
+    root_id = "root"
     if root_id not in tree.decision_nodes:
-        # This should not happen if empty_init ran correctly, but ensure it
-        logging.warning(f"MealAgent: root branch '{root_id}' not found, tree may be malformed")
+        tree.add_branch(
+            branch_id=root_id,
+            instruction="Choose an action based on the user's request",
+            root=True,
+        )
+        logging.debug(f"MealAgent: successfully created root branch '{root_id}'")
     
-    branch_ids = [
-        "profile",
-        "constraints",
-        "search",
-        "nutrition",
-        "plan_day",
-        "plan_week",
-        "pantry",
-        "shopping",
-        "gap_fill",
-        "substitution",
-        "micros",
-        "logging",
-        "cooking",
-        "explain",
-    ]
-    for bid in branch_ids:
+    # Branch configurations (optimized - 8 branches per design doc)
+    BRANCH_CONFIGS = {
+        "profile": {
+            "instruction": "Manage user profile and calculate nutritional targets",
+            "description": "When user wants to create, update, or view their profile",
+            "status": "Managing profile...",
+        },
+        "planning": {
+            "instruction": "Plan daily or weekly meals from ranked recipes",
+            "description": "When user wants daily or weekly meal plan",
+            "status": "Planning meals...",
+        },
+        "search": {
+            "instruction": "Search and rank recipes based on user preferences",
+            "description": "When user wants to find recipes",
+            "status": "Searching recipes...",
+        },
+        "logging": {
+            "instruction": "Log meals and view meal history",
+            "description": "When user wants to log what they ate or view meal history",
+            "status": "Logging meal...",
+        },
+        "pantry": {
+            "instruction": "Manage pantry items and generate shopping lists",
+            "description": "When user wants to manage pantry or view shopping list",
+            "status": "Managing pantry...",
+        },
+        "optimization": {
+            "instruction": "Optimize meal plans: fill gaps, substitute ingredients, check micronutrients",
+            "description": "When user wants to optimize their meal plan",
+            "status": "Optimizing plan...",
+        },
+        "cooking": {
+            "instruction": "Show step-by-step cooking instructions",
+            "description": "When user wants cooking instructions for a recipe",
+            "status": "Preparing cooking instructions...",
+        },
+        "explain": {
+            "instruction": "Explain meal planning decisions",
+            "description": "When user wants to understand why certain meals were recommended",
+            "status": "Generating explanation...",
+        },
+    }
+    
+    # Create branches (optimized - 8 branches)
+    for branch_id, config in BRANCH_CONFIGS.items():
         try:
             # Check if branch already exists
-            if bid in tree.decision_nodes:
-                logging.debug(f"MealAgent: branch '{bid}' already exists, skipping")
+            if branch_id in tree.decision_nodes:
+                logging.debug(f"MealAgent: branch '{branch_id}' already exists, skipping")
                 continue
             tree.add_branch(
-                branch_id=bid,
-                instruction=f"MealAgent {bid} branch: Choose appropriate {bid} tool based on user request.",
-                description=f"MealAgent {bid} tools for handling {bid}-related tasks.",
+                branch_id=branch_id,
+                instruction=config["instruction"],
+                description=config["description"],
                 from_branch_id=root_id,
-                status=f"Processing {bid} request...",
+                status=config["status"],
             )
-            logging.debug(f"MealAgent: successfully added branch '{bid}'")
+            logging.debug(f"MealAgent: successfully added branch '{branch_id}'")
         except Exception as e:
-            logging.warning(f"MealAgent: failed to add branch '{bid}': {e}")
+            logging.warning(f"MealAgent: failed to add branch '{branch_id}': {e}")
             # Continue with other branches
             pass
 
@@ -464,69 +478,41 @@ def build_meal_agent_tree(
                 logging.error(f"MealAgent: failed to add tool '{name}' to branch '{branch_id}': {e}")
                 raise
 
-    # Register tools to branches with successive chains where appropriate
+    # Register tools to branches (optimized - 8 branches per design doc)
 
-    # profile
+    # profile branch
     add_tool("profile", "profile_crud_tool")
     add_tool("profile", "macro_calc_tool", chain=["profile_crud_tool"])
 
-    # constraints (combined)
-    add_tool("constraints", "constraints_guard_tool")
+    # planning branch (merged from plan_day + plan_week)
+    add_tool("planning", "plan_day_e2e_tool")
+    add_tool("planning", "plan_week_e2e_tool")
+    # constraints_guard_tool is used by planning and search, add to planning
+    add_tool("planning", "constraints_guard_tool")
 
-    # search + nutrition
+    # search branch (includes nutrition tool)
     add_tool("search", "search_and_rank_tool")
-    add_tool("nutrition", "calculate_recipe_macros_tool")
+    add_tool("search", "calculate_recipe_macros_tool")
+    # constraints_guard_tool also used by search
+    add_tool("search", "constraints_guard_tool")
 
-    # plan_day
-    add_tool("plan_day", "plan_day_e2e_tool")
-    add_tool("shopping", "build_shopping_tool")
-
-    # plan_week
-    add_tool("plan_week", "plan_assemble_weekly_tool")
-    add_tool(
-        "plan_week",
-        "variety_guard_tool",
-        chain=["plan_assemble_weekly_tool"],
-    )
-
-    # pantry + shopping
-    add_tool("pantry", "pantry_crud_tool")
-    add_tool("shopping", "pantry_diff_tool")
-
-    # gap fill
-    add_tool("gap_fill", "gap_calc_tool")
-    add_tool("gap_fill", "suggest_snack_tool", chain=["gap_calc_tool"])
-    add_tool(
-        "gap_fill",
-        "apply_snack_tool",
-        chain=["gap_calc_tool", "suggest_snack_tool"],
-    )
-
-    # substitution
-    add_tool("substitution", "suggest_substitutes_tool")
-    add_tool(
-        "substitution",
-        "apply_substitute_tool",
-        chain=["suggest_substitutes_tool"],
-    )
-
-    # micros
-    add_tool("micros", "micronutrient_check_tool")
-    add_tool(
-        "micros",
-        "suggest_micros_foods_tool",
-        chain=["micronutrient_check_tool"],
-    )
-
-    # logging
+    # logging branch
     add_tool("logging", "log_meal_e2e_tool")
-    add_tool(
-        "logging",
-        "meal_history_tool",
-    )
+    add_tool("logging", "meal_history_tool")
 
-    # cooking & explain
+    # pantry branch (merged from pantry + shopping)
+    add_tool("pantry", "pantry_crud_tool")
+    add_tool("pantry", "pantry_diff_tool")
+
+    # optimization branch (merged from gap_fill + substitution + micros)
+    add_tool("optimization", "gap_fill_tool")
+    add_tool("optimization", "substitute_tool")
+    add_tool("optimization", "micros_tool")
+
+    # cooking branch
     add_tool("cooking", "cook_mode_tool")
-    add_tool("explain", "explain_tool")
+    
+    # explain branch: Use Elysia's cited_summarize tool (not a MealAgent tool)
+    # The Tree's decision agent will automatically select cited_summarize when needed
 
     return tree

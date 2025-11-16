@@ -17,7 +17,7 @@ async def meal_history_tool(
     end_date: str | None = None,
     limit: int = 50,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Retrieve meal log history for a user with optional date filtering.
 
@@ -103,6 +103,7 @@ async def meal_history_tool(
             objects=[history],
             metadata={"user_id": user_id, "logs_count": len(logs), "days_count": len(daily_totals)},
             payload_type="generic",
+            display=True,
         )
         # Table view of logs for display
         yield Result(
@@ -110,6 +111,7 @@ async def meal_history_tool(
             objects=logs,
             metadata={"user_id": user_id, "logs_count": len(logs)},
             payload_type="table",
+            display=True,
         )
         yield Response(f"Retrieved {len(logs)} meal logs across {len(daily_totals)} days")
 

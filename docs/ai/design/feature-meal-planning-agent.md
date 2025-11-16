@@ -48,9 +48,9 @@ graph TD
 ### Component Responsibilities
 
 - **elysia-frontend (Next.js)**: User interface for profile management, meal browsing, plan viewing, cooking mode
-- **Elysia API**: FastAPI service that mounts Elysia's built-in routers (see `elysia/api/routes/`) and primarily serves `/ws/query`, `/ws/processor`, `/ws/init` WebSocket endpoints for Tree execution
+- **Elysia API**: FastAPI service that mounts Elysia's built-in routers (see `elysia/api/routes/`) and primarily serves `/ws/query` WebSocket endpoint for Tree execution
 - **Decision Tree**: Orchestrates tool execution based on Environment state and user prompts
-- **Tools (async generators)**: Implement specific functionality (search, plan, validate, etc.); yield Result/Text objects
+- **Tools (async functions/generators)**: Implement specific functionality (search, plan, validate, etc.). Tools can be simple async functions that return values, or async generators that yield Result/Text objects. See [Creating a Tool](https://weaviate.github.io/elysia/creating_tools/) for details.
 - **Environment**: Shared state container (accessed via `tree_data.environment`) where all Result objects are automatically stored when yielded. Structure: `environment[tool_name][name]` where `tool_name` is the tool's function/class name and `name` is the Result's `name` parameter. Each object automatically gets a `_REF_ID` for unique identification. Tools can read via `environment.find(tool_name, name)` and manually manipulate via `.add()`, `.replace()`, `.remove()` if needed.
 - **Managers** (see [User and Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/)): 
   - **UserManager**: Manages multiple users, each with their own TreeManager and ClientManager. Key methods:
@@ -105,7 +105,7 @@ Registration rules (align with [Elysia Tree Reference](https://weaviate.github.i
   - `root=True`: Add to root branch (ignores `branch_id`)
   - **kwargs**: Additional arguments for tool initialization
 - **Environment Key Convention**: `environment[tool_name][result_name]` where `tool_name` is the tool's `name` attribute
-- **Tool Requirements**: Tools must be async generators that yield `Result`, `Response`, `Status`, `Error`, or other `Return` objects
+- **Tool Requirements**: Tools can be simple async functions (return values) or async generators (yield values). MealAgent tools use async generators for better control. Tools can yield `Result`, `Response`, `Status`, `Error` objects, or plain strings/dictionaries (automatically converted). See [Creating a Tool](https://weaviate.github.io/elysia/creating_tools/) for details.
 - **Automatic Tool Selection**: The Tree's decision agent (LLM) automatically selects which tools to run based on the user's natural language query - no explicit routing or action parameters needed
 
 ### Technology Stack
@@ -615,9 +615,9 @@ All MealAgent functionality is accessed through Elysia's existing WebSocket infr
 
 ```
 WS     /ws/query                           # Main Tree execution stream (all MealAgent queries)
-WS     /ws/processor                       # Alternative processing endpoint
-WS     /ws/init                            # Initialize user/tree configuration
 ```
+
+**Note**: MealAgent uses only the `/ws/query` endpoint. Other endpoints (`/ws/processor`, `/ws/init`) are Elysia infrastructure endpoints but not used by MealAgent's standard workflow.
 
 **Key Architecture Points:**
 - **No custom REST endpoints**: All functionality is handled by tools registered to the MealAgent Tree
@@ -956,16 +956,27 @@ app = FastAPI(lifespan=lifespan)
 
 ### Frontend Components (elysia-frontend)
 
-1. **ProfilePage**: User profile creation/editing form with TDEE calculation preview
-2. **RecipeExplorer**: Browse/search recipes with filters (diet, allergens, time, tags)
-3. **PlannerPage**: Daily/weekly plan generation with live streaming of tool results
-4. **PlanView**: Display generated plan with macros per meal/day/week
-5. **MealLoggingChat**: Chat interface for natural language meal input with real-time nutrition preview and confirmation
-6. **MealHistoryView**: Display logged meals with nutrition breakdown and daily progress tracking
-7. **CookingMode**: Step-by-step instructions with timer and progress tracking
-8. **PantryManager**: CRUD interface for pantry items with expiry tracking
-9. **ShoppingListView**: Checklist interface with category grouping and print/export
-10. **ExplainDialog**: Modal showing decision explanation with data references
+**Note**: Elysia frontend already provides a generic chat interface (`ChatPage`) that handles all interactions through natural language queries via WebSocket `/ws/query`. MealAgent will work through this existing interface. Custom display components are needed for MealAgent-specific data types.
+
+**Existing Elysia Frontend Pages** (reused for MealAgent):
+- **ChatPage**: Main chat interface for natural language queries (handles all MealAgent interactions)
+- **CollectionPage**: Collection management UI (for enabling/disabling MealAgent collections)
+- **SettingsPage**: Configuration UI (for Elysia settings)
+- **DisplayPage**: Generic display components for various result types
+
+**Custom MealAgent Display Components** (to be created):
+1. **MealPlanDisplay**: Display daily/weekly meal plans with macro breakdown per meal/day/week
+2. **RecipeCard**: Recipe card component showing dish name, macros, allergens, cooking time, image
+3. **NutritionSummary**: Macro/micro nutrition summary with charts (bar charts for macros, tables for micros)
+4. **ShoppingListDisplay**: Shopping list with category grouping and print/export functionality
+5. **CookingStepsDisplay**: Step-by-step cooking instructions with timer and progress tracking
+6. **MealHistoryDisplay**: Display logged meals with nutrition breakdown and daily progress tracking
+
+**Integration Points**:
+- All MealAgent features accessible through natural language queries in `ChatPage`
+- Custom display components integrate with existing `RenderChat` component
+- WebSocket communication handled by existing `SocketContext` (connects to `/ws/query`)
+- Result payloads must match Elysia payload format spec (see [Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/))
 
 ### Backend Services (Elysia Python)
 
@@ -1156,6 +1167,10 @@ app = FastAPI(lifespan=lifespan)
 **Owner**: MealAgent Development Team
 
 **Changelog:**
+- v0.9: **Phase 4.1.2 & 4.1.3 - Custom Display Components** - Created 6 custom display components for MealAgent data types in `elysia-frontend/app/components/chat/displays/meal_agent/`. Added MealAgent payload types (`MealPlanPayload`, `RecipeCardPayload`, `NutritionSummaryPayload`, `ShoppingListPayload`, `CookingStepsPayload`, `MealHistoryPayload`) to frontend type definitions. Updated `RenderDisplay.tsx` to route explicit MealAgent payload types and auto-detect MealAgent data from metadata/object structure. Components integrate with existing Elysia UI components and follow Elysia design patterns.
+- v0.8: **Phase 4.1.1 - Payload Verification** - Verified all MealAgent tools output compatible payloads for Elysia frontend. Fixed frontend to handle `"generic"` payload type. All tools verified to use valid payload types and proper structure. Branch structure refactored to 8 branches as per design. Tree initialization updated with all required parameters (conversation_id, style, agent_description, end_goal). Root branch creation added. All tools use `display=True` on Result objects.
+- v0.7: **Code Structure Update** - Updated architecture to reflect MealAgent as separate package from elysia framework. MealAgent is now at root level (`MealAgent/`) rather than nested in `elysia/elysia/MealAgent/`. Updated Tree creation and tool registration paths. MealAgent tools import from `MealAgent.*` instead of `elysia.MealAgent.*`.
+- v0.6: **Elysia Documentation Alignment** - Updated tool patterns to clarify both simple async functions and async generators are supported. Clarified WebSocket endpoints (only `/ws/query` used by MealAgent). Added references to official Elysia documentation. Updated tool requirements to reflect Elysia's flexible tool creation patterns.
 - v0.5: **Tool Optimization** - Reduced from 28 to 15 MealAgent tools + 3 Elysia tools (36% reduction), reduced branches from 14 to 8 (43% reduction). Replaced `query_tool`/`query_postprocessing_tool` with Elysia `query`, replaced `explain_tool` with Elysia `cited_summarize`. Consolidated intermediate tools into E2E tools (`plan_day_e2e_tool`, `log_meal_e2e_tool`). Merged related tools (gap_fill, substitution, micros). Integrated environment_keys.md into design document.
 - v0.4: Removed REST API references, updated to WebSocket-only architecture, added Settings/Objects/Tree/Managers documentation
 - v0.3: Embedded NutrientTarget in UserProfile, updated architecture diagrams, improved tool contracts, added WebSocket message formats

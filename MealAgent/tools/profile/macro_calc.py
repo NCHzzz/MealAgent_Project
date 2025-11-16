@@ -17,7 +17,7 @@ async def macro_calc_tool(
     fat_share: float = 0.30,
     carb_share: float = 0.40,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Calculate TDEE and macro targets (default 30/30/40 split).
 
@@ -35,15 +35,6 @@ async def macro_calc_tool(
     yield Response("Calculating nutritional targets...")
 
     try:
-        # If main goal (e.g., cooking) already completed for this prompt, skip entirely
-        try:
-            completed = tree_data.environment.find("cook_mode_tool", "completed")
-            if completed and completed[0]["objects"]:
-                yield Response("Skipping macro calculation: current user goal already completed")
-                return
-        except Exception:
-            pass
-
         results = tree_data.environment.find("profile_crud_tool", "profile")
         if not results or not results[0]["objects"]:
             logging.info("macro_calc_tool: no profile in environment; skipping macro calc")
@@ -82,7 +73,13 @@ async def macro_calc_tool(
             f"fat={fat_g:.0f}g, carb={carb_g:.0f}g)"
         )
         
-        yield Result(name="targets", objects=[targets], metadata={"calculated_from": profile.get("user_id")}, payload_type="generic")
+        yield Result(
+            name="targets",
+            objects=[targets],
+            metadata={"calculated_from": profile.get("user_id")},
+            payload_type="generic",
+            display=True,
+        )
         yield Response(f"Target: {tdee:.0f} kcal | {protein_g:.0f}g P | {fat_g:.0f}g F | {carb_g:.0f}g C")
     except ValueError as e:
         error_msg = f"Invalid input: {str(e)}"

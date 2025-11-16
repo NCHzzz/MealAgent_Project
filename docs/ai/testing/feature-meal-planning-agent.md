@@ -514,7 +514,7 @@ def test_tree_based_daily_plan():
 
 ### User Journey 1: First-Time User Onboarding
 - [ ] **Scenario**: New user creates profile and generates first daily plan
-  - Step 1: User navigates to ProfilePage, enters data (age, weight, diet, allergens)
+  - Step 1: User navigates to ChatPage, sends query "Create my profile: age 30, weight 75kg, vegetarian, no peanuts"
   - Step 2: TDEE displayed on form (preview)
   - Step 3: User clicks "Generate Daily Plan"
   - Step 4: Streaming progress displayed (searching, ranking, assembling)
@@ -643,9 +643,9 @@ npm run test -- --coverage
 ## Manual Testing
 
 ### UI/UX Testing Checklist
-- [ ] **ProfilePage**: Form validation works (invalid age shows error)
-- [ ] **RecipeExplorer**: Filters (diet, allergen, time) update results
-- [ ] **PlannerPage**: Streaming progress visible (not frozen)
+- [ ] **ChatPage - Profile Creation**: Form validation works (invalid age shows error via Error object)
+- [ ] **ChatPage - Recipe Search**: Filters (diet, allergen, time) update results via natural language queries
+- [ ] **ChatPage - Meal Planning**: Streaming progress visible (not frozen) - tool yields Response/Status objects
 - [ ] **PlanView**: Macro charts render correctly
 - [ ] **CookingMode**: Step transitions smooth; timers accurate
 - [ ] **PantryManager**: CRUD operations update immediately
@@ -720,7 +720,46 @@ npm run test -- --coverage
 
 ---
 
-**Status**: Draft - Update with test results as implementation progresses
-**Last Updated**: 2025-10-28
-**Owner**: [Your Name/Team]
+**Status**: ✅ **In Progress** - Test structure created, initial unit and integration tests implemented
+**Last Updated**: 2025-01-27
+**Owner**: MealAgent Development Team
+
+## Test Implementation Status
+
+### Unit Tests Created ✅
+- **test_profile_tools.py**: Tests for `profile_crud_tool` (create, update, read, error cases) and `macro_calc_tool` (TDEE calculation, macro distribution, missing profile). Includes tests for `calculate_harris_benedict_tdee` utility function.
+- **test_constraints_tools.py**: Tests for `constraints_guard_tool` (vegetarian + allergy, no allergens, max cooking time, missing profile).
+- **test_planning_helpers.py**: Tests for `_get_meal_macros`, `_validate_macro_targets`, `_validate_constraints` helper functions.
+
+### Integration Tests Created ✅
+- **test_daily_planning_workflow.py**: Complete daily planning workflow test (profile → macros → constraints → search → plan). Includes test for allergen filtering workflow.
+
+### Test Coverage Status
+- **Profile Tools**: ✅ Unit tests created (create, update, read, error cases)
+- **Macro Calculation**: ✅ Unit tests created (TDEE, macro distribution, missing profile)
+- **Constraints Guard**: ✅ Unit tests created (diet, allergens, time constraints)
+- **Planning Helpers**: ✅ Unit tests created (macros extraction, validation)
+- **Search Tools**: ✅ Unit tests created (basic search, filters, ranking, empty results)
+- **Recipe Macros**: ✅ Unit tests created (cached macros, FDC lookup, VN→EN translation)
+- **Planning E2E**: ✅ Unit tests created (daily/weekly planning, variety enforcement)
+- **Meal Logging**: ✅ Unit tests created (log meal, meal history, date filtering)
+- **Pantry Tools**: ✅ Unit tests created (CRUD operations, shopping list calculation)
+- **Daily Planning Workflow**: ✅ Integration test created
+- **Optimization Tools**: ⏳ Pending (gap_fill, substitute, micros)
+- **Cook Mode**: ⏳ Pending
+
+### Running Tests
+```bash
+# Run all MealAgent tests
+pytest tests/meal_agent/ -v
+
+# Run unit tests only
+pytest tests/meal_agent/unit/ -v
+
+# Run integration tests only
+pytest tests/meal_agent/integration/ -v
+
+# Run with coverage
+pytest tests/meal_agent/ --cov=MealAgent --cov-report=html --cov-report=term
+```
 

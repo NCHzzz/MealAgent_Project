@@ -9,6 +9,12 @@ import {
   BarPayload,
   ScatterOrLinePayload,
   HistogramPayload,
+  MealPlanPayload,
+  RecipeCardPayload,
+  NutritionSummaryPayload,
+  ShoppingListPayload,
+  CookingStepsPayload,
+  MealHistoryPayload,
 } from "@/app/types/displays";
 
 export type Message = {
@@ -117,7 +123,13 @@ export type ResultPayload = {
     | "document"
     | "bar_chart"
     | "histogram_chart"
-    | "scatter_or_line_chart";
+    | "scatter_or_line_chart"
+    | "meal_plan"
+    | "recipe_card"
+    | "nutrition_summary"
+    | "shopping_list"
+    | "cooking_steps"
+    | "meal_history";
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   metadata: any;
@@ -133,7 +145,13 @@ export type ResultPayload = {
     | DocumentPayload[]
     | BarPayload[]
     | ScatterOrLinePayload[]
-    | HistogramPayload[];
+    | HistogramPayload[]
+    | MealPlanPayload[]
+    | RecipeCardPayload[]
+    | NutritionSummaryPayload[]
+    | ShoppingListPayload[]
+    | CookingStepsPayload[]
+    | MealHistoryPayload[];
 };
 
 export type TextWithCitationsPayload = {

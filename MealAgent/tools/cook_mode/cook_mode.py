@@ -3,8 +3,8 @@ CookMode tool: parse a recipe into cooking steps and stream them.
 
 Environment interface (per docs/ai/design/environment_keys.md):
 - Reads:
-  - plan_assemble_day_tool.plan / plan_assemble_weekly_tool.plan (nested recipes)
-  - search_and_rank_tool.topk (or legacy score_and_rank_tool.topk)
+  - plan_day_e2e_tool.plan / plan_week_e2e_tool.plan (nested recipes)
+  - search_and_rank_tool.topk
   - cook_mode_tool.recipe_id (preferred selection if present)
 - Writes:
   - cook_mode_tool.steps: [{ food_id, dish_name, steps: [...] }]
@@ -124,8 +124,8 @@ def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> D
                 food_id = str(selected_id)
     except Exception:
         pass
-    # 1) From weekly or daily plan
-    for tool_name, name in [("plan_assemble_weekly_tool", "plan"), ("plan_assemble_day_tool", "plan")]:
+    # 1) From weekly or daily plan (E2E tools)
+    for tool_name, name in [("plan_week_e2e_tool", "plan"), ("plan_day_e2e_tool", "plan")]:
         res = tree_data.environment.find(tool_name, name)
         if res and res[0]["objects"]:
             plan = res[0]["objects"][0]
@@ -145,15 +145,14 @@ def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> D
                             if r_norm and (food_id is None or str(r_norm.get("food_id")) == str(food_id)):
                                 return r_norm
 
-    # 2) From search/topk (support both legacy and e2e writer tool names)
-    for tool_name in ("search_and_rank_tool", "score_and_rank_tool"):
-        res = tree_data.environment.find(tool_name, "topk")
-        if res and res[0]["objects"]:
-            for r in res[0]["objects"]:
-                if not isinstance(r, dict):
-                    continue
-                if food_id is None or str(r.get("food_id")) == str(food_id):
-                    return _normalise_recipe_object(r) or r
+    # 2) From search/topk
+    res = tree_data.environment.find("search_and_rank_tool", "topk")
+    if res and res[0]["objects"]:
+        for r in res[0]["objects"]:
+            if not isinstance(r, dict):
+                continue
+            if food_id is None or str(r.get("food_id")) == str(food_id):
+                return _normalise_recipe_object(r) or r
 
     return None
 
@@ -166,7 +165,7 @@ async def cook_mode_tool(
     base_lm=None,
     polish: bool = False,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Produce step-by-step cooking guidance for a recipe and stream steps.
 
@@ -181,8 +180,8 @@ async def cook_mode_tool(
 
     Environment reads:
       - cook_mode_tool.completed (checks if already completed to avoid re-execution)
-      - plan_assemble_day_tool.plan or plan_assemble_weekly_tool.plan (recipes inside)
-      - search_and_rank_tool.topk (or legacy score_and_rank_tool.topk)
+      - plan_day_e2e_tool.plan or plan_week_e2e_tool.plan (recipes inside)
+      - search_and_rank_tool.topk
     Environment writes:
       - cook_mode_tool.steps: [{ food_id, dish_name, steps: [...] }]
       - cook_mode_tool.completed: [{ food_id, timestamp }] - **SIGNALS TASK COMPLETION**
@@ -223,7 +222,8 @@ async def cook_mode_tool(
                         "should_end": True,
                         "already_completed": True,
                     },
-                    payload_type="document",
+                    payload_type="generic",
+                    display=True,
                 )
                 yield Result(
                     name="next_action_hint",
@@ -239,6 +239,7 @@ async def cook_mode_tool(
                         "already_completed": True,
                     },
                     payload_type="generic",
+                    display=True,
                 )
         except Exception:
             pass
@@ -324,6 +325,7 @@ async def cook_mode_tool(
         objects=[{"food_id": recipe.get("food_id"), "dish_name": recipe.get("dish_name"), "steps": steps}],
         metadata={"steps_count": len(steps), "tool": "cook_mode_tool"},
         payload_type="generic",
+        display=True,
     )
     # Provide a concise document-style summary to help the decision agent conclude
     # CRITICAL: These signals tell the decision agent that the task is COMPLETE
@@ -342,7 +344,8 @@ async def cook_mode_tool(
                 "task_complete": True,
                 "should_end": True,
             },
-            payload_type="document",
+            payload_type="generic",
+            display=True,
         )
         # Explicit hint to decision agent: END THE SESSION
         yield Result(
@@ -358,6 +361,7 @@ async def cook_mode_tool(
                 "must_end": True,
             },
             payload_type="generic",
+            display=True,
         )
     except Exception:
         pass

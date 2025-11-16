@@ -25,10 +25,15 @@ description: Technical implementation notes, patterns, and code guidelines for M
 
 2. **Backend Setup**
    ```bash
+   # Install Elysia framework
    cd elysia
    python -m venv venv
    source venv/bin/activate  # Windows: venv\Scripts\activate
    pip install -e .  # Installs elysia package in editable mode
+   
+   # Install MealAgent (from project root)
+   cd ..
+   pip install -e MealAgent  # Installs MealAgent package in editable mode
    ```
 
 3. **Frontend Setup**
@@ -100,8 +105,8 @@ BASE_USE_REASONING=True                    # Use reasoning output for base model
 COMPLEX_USE_REASONING=True                 # Use reasoning output for complex model
 
 # MealAgent Specific
-FDC_DATA_PATH=data/fdc/raw
-RECIPE_DATA_PATH=data/recipes/raw
+FDC_DATA_PATH=MealAgent/data/fdc/FDC_data
+RECIPE_DATA_PATH=MealAgent/data/recipe
 DEFAULT_TDEE_MULTIPLIER=1.2  # Sedentary activity level
 ```
 
@@ -110,83 +115,99 @@ DEFAULT_TDEE_MULTIPLIER=1.2  # Sedentary activity level
 
 ### Directory Structure (complete)
 ```
+MealAgent/
+├── __init__.py
+├── preprocessing/
+│   └── preprocessor.py                     # Phase 1 warmup/verification
+├── schemas/                                # Weaviate collections
+│   ├── recipe.py                           # + macros_per_serving, ingredient_fdc_map
+│   ├── fdc_food.py
+│   ├── fdc_nutrient.py
+│   ├── fdc_portion.py
+│   ├── user_profile.py
+│   ├── meal_plan.py
+│   ├── meal_log_entry.py
+│   ├── pantry.py
+│   └── shopping.py
+├── etl/
+│   ├── ingest_fdc.py                       # Load FdcFood/FdcNutrient/FdcPortion
+│   └── ingest_recipes.py                   # Load Recipe CSV-aligned fields
+├── tools/                                  # Async generator tools
+│   ├── profile/
+    │   │   ├── __init__.py
+│   │   ├── profile_crud.py                 # Task 2.1.1
+│   │   └── macro_calc.py                   # Task 2.1.2
+│   ├── constraints/
+    │   │   ├── __init__.py
+│   │   └── constraints_guard.py           # Consolidated constraint filtering
+│   ├── search/
+    │   │   ├── __init__.py
+│   │   └── search_and_rank.py              # Uses Elysia `query` internally
+│   ├── nutrition/
+│   │   ├── __init__.py
+│   │   └── calculate_recipe_macros.py      # VN→EN on-demand + cache
+│   ├── plan_day/
+│   │   ├── __init__.py
+│   │   └── plan_day_e2e.py                # End-to-end daily planning
+│   ├── plan_week/
+│   │   ├── __init__.py
+│   │   └── plan_week_e2e.py                # End-to-end weekly planning (includes variety)
+│   ├── pantry/
+│   │   ├── __init__.py
+│   │   └── pantry_crud.py                  # Pantry management
+│   ├── shopping/
+│   │   ├── __init__.py
+│   │   └── pantry_diff.py                  # Shopping list with pantry subtraction
+│   ├── gap_fill/
+│   │   ├── __init__.py
+│   │   └── gap_fill.py                     # Merged: calc + suggest + apply
+│   ├── substitution/
+│   │   ├── __init__.py
+│   │   └── substitute.py                   # Merged: suggest + apply
+│   ├── micros/
+│   │   ├── __init__.py
+│   │   └── micros.py                       # Merged: check + suggest
+│   ├── meal_logging/
+│   │   ├── __init__.py
+│   │   ├── log_meal_e2e.py                 # End-to-end meal logging
+│   │   └── meal_history.py                # View meal history
+│   └── cook_mode/
+│       ├── __init__.py
+│       └── cook_mode.py                    # Cooking instructions
+├── tree/
+│   ├── __init__.py
+│   ├── meal_tree.py                        # Task 2.5.1
+│   └── config.py                           # Task 2.5.2 tool registration
+├── migrations/
+│   └── create_collections.py                # + --drop-only/--create-only
+└── utils/
+    └── nutrition.py                         # Nutrition calculation utilities
+
 elysia/
 └── elysia/
-    ├── MealAgent/
-    │   ├── __init__.py
-    │   ├── config.py                       # MealAgent-specific settings (optional)
-    │   ├── preprocessing/
-    │   │   └── preprocessor.py             # Phase 1 warmup/verification
-    │   ├── schemas/                        # Weaviate collections
-    │   │   ├── recipe.py                   # + macros_per_serving, ingredient_fdc_map
-    │   │   ├── fdc_food.py
-    │   │   ├── fdc_nutrient.py
-    │   │   └── fdc_portion.py
-    │   ├── etl/
-    │   │   ├── ingest_fdc.py               # Load FdcFood/FdcNutrient/FdcPortion
-    │   │   └── ingest_recipes.py           # Load Recipe CSV-aligned fields
-    │   ├── tools/                          # Async generator tools
-    │   │   ├── profile/
-    │   │   │   ├── __init__.py
-    │   │   │   ├── profile_crud.py         # Task 2.1.1
-    │   │   │   └── macro_calc.py           # Task 2.1.2
-    │   │   ├── constraints/
-    │   │   │   ├── __init__.py
-    │   │   │   └── constraints_guard.py    # Consolidated constraint filtering
-    │   │   ├── search/
-    │   │   │   ├── __init__.py
-    │   │   │   └── search_and_rank.py      # Uses Elysia `query` internally
-    │   │   ├── nutrition/
-    │   │   │   ├── __init__.py
-    │   │   │   └── calculate_recipe_macros.py # VN→EN on-demand + cache
-    │   │   ├── plan_day/
-    │   │   │   ├── __init__.py
-    │   │   │   └── plan_day_e2e.py         # End-to-end daily planning
-    │   │   ├── plan_week/
-    │   │   │   ├── __init__.py
-    │   │   │   └── plan_week_e2e.py        # End-to-end weekly planning (includes variety)
-    │   │   ├── pantry/
-    │   │   │   ├── __init__.py
-    │   │   │   └── pantry_crud.py          # Pantry management
-    │   │   ├── shopping/
-    │   │   │   ├── __init__.py
-    │   │   │   └── pantry_diff.py          # Shopping list with pantry subtraction
-    │   │   ├── gap_fill/
-    │   │   │   ├── __init__.py
-    │   │   │   └── gap_fill.py             # Merged: calc + suggest + apply
-    │   │   ├── substitution/
-    │   │   │   ├── __init__.py
-    │   │   │   └── substitute.py           # Merged: suggest + apply
-    │   │   ├── micros/
-    │   │   │   ├── __init__.py
-    │   │   │   └── micros.py               # Merged: check + suggest
-    │   │   ├── meal_logging/
-    │   │   │   ├── __init__.py
-    │   │   │   ├── log_meal_e2e.py         # End-to-end meal logging
-    │   │   │   └── meal_history.py         # View meal history
-    │   │   └── cook_mode/
-    │   │       ├── __init__.py
-    │   │       └── cook_mode.py            # Cooking instructions
-    │   ├── tree/
-    │   │   ├── __init__.py
-    │   │   ├── meal_tree.py                # Task 2.5.1
-    │   │   └── config.py                   # Task 2.5.2 tool registration
-    │   └── migrations/
-    │       └── create_collections.py       # + --drop-only/--create-only
-    │
     ├── api/
-    │   └── services/                       # UserManager, TreeManager (Elysia built-in)
-    │       ├── user.py                     # UserManager
+    │   └── services/                        # UserManager, TreeManager (Elysia built-in)
+    │       ├── user.py                      # UserManager
     │       └── tree.py                     # TreeManager
     │
     └── util/
-        └── client.py                       # ClientManager
+        └── client.py                        # ClientManager
 
 elysia-frontend/
 └── app/
-    ├── pages/                              # ProfilePage, RecipeExplorer, PlannerPage, etc.
-    ├── components/                         # PlanView, ShoppingListView, dialogs
-    └── api/                                # Frontend API layer
+    ├── pages/                              # Existing Elysia pages: ChatPage, CollectionPage, SettingsPage, etc.
+    ├── components/                         # Existing components + custom MealAgent display components
+    │   ├── chat/                           # Chat interface components (existing)
+    │   ├── display/                        # Display components (existing + meal_agent/)
+    │   │   └── meal_agent/                 # Custom MealAgent display components (to be created)
+    │   │       ├── MealPlanDisplay.tsx
+    │   │       ├── RecipeCard.tsx
+    │   │       ├── NutritionSummary.tsx
+    │   │       ├── ShoppingListDisplay.tsx
+    │   │       ├── CookingStepsDisplay.tsx
+    │   │       └── MealHistoryDisplay.tsx
+    │   └── contexts/                       # React contexts (SocketContext, ConversationContext, etc.)
+    └── types/                              # TypeScript types (chat.ts, payloads.ts, displays.ts)
 ```
 
 ### Module Organization
@@ -199,7 +220,7 @@ elysia-frontend/
 
 ### Cooking & Explanation (Phase 4.3)
 
-- `cook_mode_tool` (`elysia/MealAgent/tools/cook_mode/cook_mode.py`)
+- `cook_mode_tool` (`MealAgent/tools/cook_mode/cook_mode.py`)
   - Inputs: optional `food_id`; otherwise reads from `plan_day_e2e_tool.plan` / `plan_week_e2e_tool.plan` / `search_and_rank_tool.topk`
   - Outputs (Environment): `environment["cook_mode_tool"]["steps"]` with fields `index`, `instruction`, `estimated_seconds`
   - Streaming: yields text per step
@@ -212,9 +233,10 @@ elysia-frontend/
 
 API Integration:
 - **No custom endpoints needed**: All functionality flows through Elysia's standard `/ws/query` WebSocket endpoint.
+- **Frontend Integration**: Elysia frontend (`ChatPage`) already handles WebSocket communication. MealAgent tools must output payloads compatible with Elysia's payload format spec (see [Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/)). Custom display components are created for MealAgent-specific data types (see Phase 4.1 in planning doc).
 - **Natural language queries**: Frontend sends natural language queries like "Show me how to cook recipe_001" or "Why did you choose these recipes?" through the standard WebSocket message format.
 - **Tree orchestration**: The Elysia decision tree automatically selects and executes `cook_mode_tool` or `cited_summarize` based on the user's query. No explicit action parameters are needed.
-- **WebSocket format**: Use standard Elysia WebSocket message format: `{user_id, conversation_id, query_id, query, collection_names, ...}` (see design doc for full format).
+- **WebSocket format**: Use standard Elysia WebSocket message format: `{user_id, conversation_id, query_id, query, collection_names, route, mimick}` (see `elysia-frontend/app/components/contexts/SocketContext.tsx` and design doc for full format).
 
 ### Naming Conventions
 
@@ -477,81 +499,61 @@ def calculate_harris_benedict_tdee(
 
 #### 2. Hybrid Search (search_and_rank_tool)
 
-**search_and_rank_tool Implementation** (`tools/search/search_and_rank.py`) — uses Elysia `query` internally:
-```python
-from typing import AsyncGenerator
-from elysia.tree.objects import TreeData, Result, Error, Response
-from elysia.util.client import ClientManager
-from elysia.tools.retrieval.query import Query  # Elysia built-in
-from elysia import tool
+**search_and_rank_tool Implementation** (`MealAgent/tools/search/search_and_rank.py`) — supports both Elysia Query tool and custom search:
 
-@tool
-async def search_and_rank_tool(
-    tree_data: TreeData,
-    client_manager: ClientManager,
-    query_text: str = "",
-    collection_name: str = "Recipe",
-    limit: int = 100,
-    top_k: int = 20,
+The tool supports two search modes:
+
+1. **Custom Search Logic (default)**: Direct Weaviate queries with deterministic behavior
+   - Fast and predictable
+   - Applies constraints from `constraints_guard_tool.filters` directly
+   - No LLM dependency
+
+2. **Elysia Query Tool (optional)**: LLM-driven query optimization
+   - Use `use_elysia_query=True` parameter
+   - Requires `base_lm` to be available
+   - Automatically optimizes query strategy based on user intent
+   - Falls back to custom search if Elysia Query fails
+
+**Key Features**:
+- Reads constraints from `constraints_guard_tool.filters`
+- Reads targets from `macro_calc_tool.targets` for macro-aware ranking
+- Normalizes and deduplicates results
+- Scores recipes by macro fit, semantic similarity, and diversity
+- Returns top_k ranked items in `search_and_rank_tool.topk`
+
+**Usage**:
+```python
+# Default: custom search (deterministic, fast)
+async for result in search_and_rank_tool(
+    tree_data=tree_data,
+    client_manager=client_manager,
+    query_text="vegetarian pasta",
+    collection_name="Recipe",
+    limit=50,
+    top_k=20,
     **kwargs
-) -> AsyncGenerator[Result | Response | Error, None]:
-    """
-    End-to-end search → postprocess → rank using Elysia query internally.
-    
-    Environment:
-        Reads: constraints_guard_tool.filters, macro_calc_tool.targets
-        Writes: search_and_rank_tool.topk
-    """
-    yield Response("Searching and ranking recipes...")
-    
-    # Use Elysia Query tool internally
-    elysia_query = Query()
-    
-    # Get constraints from environment
-    constraints_results = tree_data.environment.find("constraints_guard_tool", "filters")
-    where_clause = None
-    if constraints_results and constraints_results[0].objects:
-        where_clause = constraints_results[0].objects[0].get("where")
-    
-    # Execute Elysia query
-    async for result in elysia_query(
-        tree_data=tree_data,
-        base_lm=kwargs.get("base_lm"),
-        complex_lm=kwargs.get("complex_lm"),
-        client_manager=client_manager,
-        inputs={"collection_names": [collection_name]},
+):
+    yield result
+
+# With Elysia Query tool (LLM-driven optimization)
+async for result in search_and_rank_tool(
+    tree_data=tree_data,
+    client_manager=client_manager,
+    query_text="vegetarian pasta",
+    collection_name="Recipe",
+    limit=50,
+    top_k=20,
+    use_elysia_query=True,  # Enable Elysia Query tool
     **kwargs
-    ):
-        if isinstance(result, Error):
-            yield result
-        return
-        # Elysia query yields Retrieval objects - extract results
-        if hasattr(result, "objects"):
-            recipes = [obj.properties for obj in result.objects]
-    
-            # Rank by macro fit (read targets from environment)
-            targets_results = tree_data.environment.find("macro_calc_tool", "targets")
-            if targets_results and targets_results[0].objects:
-    targets = targets_results[0].objects[0]
-                # Score and rank recipes...
-                ranked = rank_recipes(recipes, targets, top_k)
-    
-    yield Result(
-                    objects=ranked,
-                    metadata={"query": query_text, "top_k": top_k},
-                    payload_type="generic",
-        name="topk",
-                    display=True
-    )
-                yield Response(f"Top {len(ranked)} recipes ranked by fit")
-                return
+):
+    yield result
 ```
 
-**Note**: This is a simplified example. The actual `search_and_rank_tool` should handle Elysia Query's output format properly and include ranking logic internally.
+**Note**: The tool automatically falls back to custom search if Elysia Query tool is unavailable or fails.
 
 #### 3. Plan Assembly (plan_day_e2e_tool)
 
-**Implementation** (`tools/plan_day/plan_day_e2e.py`) — end-to-end daily planning:
+**Implementation** (`MealAgent/tools/plan_day/plan_day_e2e.py`) — end-to-end daily planning:
 ```python
 from typing import AsyncGenerator
 from elysia.tree.objects import TreeData, Result, Error, Response
@@ -611,7 +613,7 @@ async def plan_day_e2e_tool(
 
 #### 4. Meal Logging (log_meal_e2e_tool)
 
-**log_meal_e2e_tool Implementation** (`tools/meal_logging/log_meal_e2e.py`) — end-to-end meal logging:
+**log_meal_e2e_tool Implementation** (`MealAgent/tools/meal_logging/log_meal_e2e.py`) — end-to-end meal logging:
 ```python
 from typing import AsyncGenerator
 from elysia.tree.objects import TreeData, Result, Error, Response
@@ -670,7 +672,13 @@ async def log_meal_e2e_tool(
 
 ### Patterns & Best Practices
 
-#### Async Generator Pattern (All Tools)
+#### Async Generator Pattern (Recommended for MealAgent Tools)
+**Note**: According to [Creating a Tool](https://weaviate.github.io/elysia/creating_tools/), tools can be:
+- Simple async functions that return values (automatically converted to Result objects)
+- Async generators that yield values (more control over what gets added to environment)
+
+MealAgent tools use async generators for better control over streaming and environment management.
+
 ```python
 from typing import AsyncGenerator
 from elysia.tree.objects import TreeData
@@ -688,9 +696,12 @@ async def tool_function(
     param2: dict = None,
     **kwargs
 ) -> AsyncGenerator[Result | Response | Status | Error, None]:
-    # 1. Yield Response/Status for progress updates (not plain strings)
+    # 1. Yield strings or Response/Status for progress updates
+    # Plain strings are automatically converted to responses
+    yield "Starting operation..."
+    # Or use Response() for more control
     yield Response("Starting operation...")
-    # or
+    # Or use Status() for status updates
     yield Status("Processing...")
     
     # 2. Read from environment (upstream tool outputs)
@@ -720,7 +731,31 @@ async def tool_function(
         return
     
     # 6. Final Response for completion
-    yield Response("Operation completed successfully")
+    yield "Operation completed successfully"  # Plain string is fine, or use Response()
+```
+
+**Alternative: Simple Async Function Pattern** (for simple tools):
+```python
+@tool
+async def simple_tool(x: int, y: int) -> int:
+    """
+    Return the sum of two numbers.
+    """
+    return x + y  # Automatically converted to Result object
+```
+
+**Note**: According to [Creating a Tool](https://weaviate.github.io/elysia/creating_tools/), when you yield a dictionary, it automatically becomes a Result object. When you yield a string, it becomes a response. MealAgent tools use explicit `Result()` and `Response()` objects for clarity and control.
+
+**@tool Decorator Parameters** (see [Creating a Tool](https://weaviate.github.io/elysia/creating_tools/)):
+```python
+@tool(
+    tree=tree,              # Optional: automatically add tool to this tree
+    branch_id="profile",    # Optional: branch to add tool to
+    status="Processing...", # Optional: custom message while tool runs
+    end=False               # Optional: if True, tool can end conversation
+)
+async def my_tool(...):
+    ...
 ```
 
 #### Environment Key Conventions
@@ -861,9 +896,18 @@ All payloads have consistent outer structure:
 
 **Key Points**:
 - `Result` objects automatically call `.to_frontend()` to generate payload format
+  - **Important**: All MealAgent tools must set `display=True` on Result objects to ensure proper frontend rendering
+  - Result objects with `display=True` are automatically included in WebSocket payloads
+  - Payload format: `{type: "result", id, user_id, conversation_id, query_id, payload: {type, metadata, objects}}`
 - `Update` classes (`Status`, `Error`) do NOT add to Environment but still stream via `.to_frontend()`
 - All objects in `payload.objects` automatically include `_REF_ID` for environment tracking
 - UserManager automatically handles timeout checks and sends error payloads if timed out
+
+**WebSocket Payload Verification** (Task 2.6.5R):
+- All reworked tools now use `Result(..., display=True)` to ensure proper WebSocket payload generation
+- Payloads match Elysia payload-format spec: required fields `type`, `id`, `user_id`, `conversation_id`, `query_id`, `payload` with `type`, `metadata`, `objects`
+- No legacy fields remain; all tools use standard Elysia Result/Response/Error objects
+- Tools tested to ensure `.to_frontend()` generates correct payload structure
 
 ### Database Connections
 
@@ -1051,10 +1095,10 @@ logger.info("OpenAI API key loaded")  # ✅ DO
 Use targeted flags to drop/create specific collections without touching others:
 ```bash
 # Drop only Recipe
-python -m elysia.MealAgent.migrations.create_collections --drop-only Recipe
+python -m MealAgent.migrations.create_collections --drop-only Recipe
 
 # Create only Recipe
-python -m elysia.MealAgent.migrations.create_collections --create-only Recipe
+python -m MealAgent.migrations.create_collections --create-only Recipe
 ```
 
 ### Weaviate schema gotcha (OBJECT types)
@@ -1076,7 +1120,7 @@ pip install -U pip
 pip install -e .
 
 # Run preprocessor over target collections (defaults: Recipe,FdcFood,FdcNutrient,FdcPortion)
-python -m elysia.MealAgent.preprocessing.preprocessor
+python -m MealAgent.preprocessing.preprocessor
 
 # Override target collections (comma-separated)
 $env:MEAL_AGENT_PREPROCESS_COLLECTIONS="Recipe,FdcFood"   # Windows PowerShell
@@ -1115,7 +1159,7 @@ def get_meal_agent_tools() -> dict[str, callable]:
 
 **Adding Tools to Tree** (see [Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)):
 ```python
-# In meal_tree.py or tree initialization
+# In MealAgent/tree/meal_tree.py or tree initialization
 from MealAgent.tree.config import get_meal_agent_tools
 from elysia.tree.tree import Tree
 from elysia.config import Settings
@@ -1141,7 +1185,7 @@ tree.add_branch(
 )
 
 # Create feature branches
-tree.add_branch(
+    tree.add_branch(
     branch_id="profile",
     instruction="Manage user profile and calculate nutritional targets",
     description="When user wants to create, update, or view their profile",
@@ -1233,7 +1277,7 @@ tree.add_tool(tools["plan_week_e2e_tool"], branch_id="planning")
 
 **Important Notes**:
 - The `@tool` decorator automatically converts functions to `Tool` instances, so they can be passed directly to `tree.add_tool()`
-- Tools must be async generators (`async def ... -> AsyncGenerator[...]`)
+- Tools can be simple async functions (return values) or async generators (yield values). MealAgent tools use async generators for better control over streaming and environment management.
 - `branch_id=None` in `add_tool()` adds tool to root branch
 - `from_tool_ids=[]` adds tool after specified tools (creates new decision nodes if needed)
 - `root=True` in `add_tool()` adds tool to root branch (ignores `branch_id`)
@@ -1241,10 +1285,89 @@ tree.add_tool(tools["plan_week_e2e_tool"], branch_id="planning")
 
 ---
 
-**Status**: Living document - Updated with tool optimization (v0.5)
+**Status**: Living document - Updated and aligned with Elysia documentation
 **Last Updated**: 2025-01-27
 **Owner**: MealAgent Development Team
 
+## Phase 4 Implementation Notes
+
+### Task 4.1.1: Payload Verification ✅ COMPLETED
+
+**Verification Results**:
+- ✅ All 15 tools use valid payload types (`generic`, `table`)
+- ✅ All tools use `display=True` on Result objects
+- ✅ All tools follow Elysia payload format specification
+- ✅ Frontend updated to handle `"generic"` payload type
+
+**Fixes Applied**:
+1. **Frontend Fix**: Added `"generic"` case to `RenderDisplay.tsx` switch statement to use `BoringGenericDisplay` component
+2. **Backend Fix**: Changed `cook_mode_tool` final_summary from `payload_type="document"` to `payload_type="generic"` to match structure (DocumentPayload requires fields like `collection_name`, `author`, `date`, `chunk_spans` which cook_mode_tool doesn't provide)
+
+**Verification Report**: See `docs/ai/implementation/phase4-payload-verification.md` for detailed audit results.
+
+### Payload Type Usage Summary
+
+| Tool | Payload Types Used | Count |
+|------|-------------------|-------|
+| All tools | `generic` | 28 instances |
+| pantry_crud_tool, pantry_diff_tool, meal_history_tool, substitute_tool, micros_tool | `table` | 6 instances |
+| cook_mode_tool | `generic` (changed from `document`) | 2 instances |
+
+**All payload types are valid and properly handled by frontend.**
+
+### Custom Display Components (Phase 4.1.2 & 4.1.3) ✅ COMPLETED
+
+**Created Components**:
+1. **MealPlanDisplay** (`elysia-frontend/app/components/chat/displays/meal_agent/MealPlanDisplay.tsx`)
+   - Displays daily/weekly meal plans with macro breakdown
+   - Shows meals, total macros, validation status
+   - Auto-detected from `metadata.plan_type` or `object.plan_type`
+
+2. **RecipeCard** (`elysia-frontend/app/components/chat/displays/meal_agent/RecipeCard.tsx`)
+   - Recipe card with image, macros, allergens, cooking time
+   - Auto-detected from object structure (has `food_id`, `dish_name`, `macros_per_serving`)
+
+3. **NutritionSummary** (`elysia-frontend/app/components/chat/displays/meal_agent/NutritionSummary.tsx`)
+   - Macro/micro nutrition summary with bar charts
+   - Shows totals vs targets, micronutrient table
+   - Auto-detected from object structure (has `total_macros.kcal`)
+
+4. **ShoppingListDisplay** (`elysia-frontend/app/components/chat/displays/meal_agent/ShoppingListDisplay.tsx`)
+   - Shopping list with category grouping
+   - Shows items, quantities, pantry deductions
+   - Auto-detected from object structure (has `items[]` with `ingredient_name`)
+
+5. **CookingStepsDisplay** (`elysia-frontend/app/components/chat/displays/meal_agent/CookingStepsDisplay.tsx`)
+   - Step-by-step cooking instructions with timer
+   - Play/pause/reset controls, progress tracking
+   - Auto-detected from `metadata.tool === "cook_mode_tool"` or `object.steps[]`
+
+6. **MealHistoryDisplay** (`elysia-frontend/app/components/chat/displays/meal_agent/MealHistoryDisplay.tsx`)
+   - Display logged meals with nutrition breakdown
+   - Shows meal description, macros, date
+   - Auto-detected from object structure (has `log_id`, `logged_at`, `calculated_macros`)
+
+**Auto-Detection Logic**:
+- `RenderDisplay.tsx` automatically detects MealAgent data from:
+  - **Metadata**: `metadata.plan_type`, `metadata.tool`, `metadata.steps_count`
+  - **Object Structure**: `object.plan_type`, `object.steps[]`, `object.food_id`, `object.items[]`, etc.
+- Falls back to `BoringGenericDisplay` if no match found
+- Allows existing tools to work without backend changes
+
+**Payload Types Added**:
+- `MealPlanPayload`, `RecipeCardPayload`, `NutritionSummaryPayload`, `ShoppingListPayload`, `CookingStepsPayload`, `MealHistoryPayload` in `types/displays.ts`
+- Updated `ResultPayload` type in `types/chat.ts` to include MealAgent types
+- Updated `CitationPreview` type to include MealAgent types
+
 **Changelog:**
+- v0.14: **Phase 4.4.1 & 4.4.2 - Test Suite Foundation** - Created test structure and initial unit/integration tests. Unit tests: `test_profile_tools.py` (profile_crud_tool, macro_calc_tool, Harris-Benedict), `test_constraints_tools.py` (constraints_guard_tool), `test_planning_helpers.py` (helper functions), `test_search_tools.py` (search_and_rank_tool with filters and ranking), `test_recipe_macros_tools.py` (calculate_recipe_macros_tool with caching and FDC lookup), `test_planning_e2e_tools.py` (plan_day_e2e_tool and plan_week_e2e_tool), `test_meal_logging_tools.py` (log_meal_e2e_tool and meal_history_tool), `test_pantry_tools.py` (pantry_crud_tool and pantry_diff_tool). Integration tests: `test_daily_planning_workflow.py` (complete daily planning workflow). Tests use async/await patterns, mock fixtures from `conftest.py` (with fallback for missing Elysia imports), and verify Result objects, environment keys, and `display=True` flags. Test structure follows Elysia patterns and testing doc requirements.
+- v0.13: **Phase 4.1.2 & 4.1.3 - Custom Display Components** - Created 6 custom display components for MealAgent data types: `MealPlanDisplay`, `RecipeCard`, `NutritionSummary`, `ShoppingListDisplay`, `CookingStepsDisplay`, `MealHistoryDisplay`. Added MealAgent payload types to `types/displays.ts` and `types/chat.ts`. Updated `RenderDisplay.tsx` to route explicit MealAgent payload types and auto-detect MealAgent data from metadata/object structure when `payload_type="generic"`. Components use existing Elysia UI components and follow Elysia design patterns. Auto-detection allows existing tools to work without backend changes.
+- v0.12: **Phase 4.1.1 - Payload Verification** - Verified all MealAgent tools output compatible payloads for Elysia frontend. Fixed frontend `RenderDisplay.tsx` to handle `"generic"` payload type. Changed `cook_mode_tool` final_summary from `"document"` to `"generic"` to match structure. All 15 tools verified to use valid payload types (`generic`, `table`) and `display=True` flags. Created verification report at `docs/ai/implementation/phase4-payload-verification.md`.
+- v0.11: **Legacy Tools Removal** - Removed all legacy tool files and code. Extracted helper functions (`_get_meal_macros`, `_validate_macro_targets`, `_validate_constraints`) to `MealAgent/tools/utils/planning_helpers.py` for shared use. Deleted 20 legacy tool files: `query.py`, `query_postprocessing.py`, `score_and_rank.py`, `target_resolver.py`, `plan_assemble.py`, `plan_validate.py`, `build_shopping.py`, `meal_parser.py`, `nutrition_calc.py`, `profile_update.py`, `plan_assemble_weekly.py`, `variety_guard.py`, `gap_calc.py`, `suggest_snack.py`, `apply_snack.py`, `suggest_substitutes.py`, `apply_substitute.py`, `micronutrient_check.py`, `suggest_micros_foods.py`, `explain.py`. Removed all legacy imports and registrations from `config.py` and `__init__.py` files. Removed fallback logic to legacy environment keys in E2E tools. Codebase now contains only 15 core tools as per design doc.
+- v0.10: **Code Cleanup & Legacy Tool Deprecation** - Cleaned up `config.py` to clearly separate 15 core tools from legacy deprecated tools. Updated `meal_tree.py` to prioritize E2E tools (`search_and_rank_tool` over `score_and_rank_tool`). All legacy tools are marked as DEPRECATED in `MEAL_AGENT_TOOLS` registry but kept for backward compatibility. E2E tools (`plan_day_e2e_tool`, `plan_week_e2e_tool`, `log_meal_e2e_tool`, `gap_fill_tool`, `substitute_tool`, `micros_tool`) now prioritize reading from E2E environment keys, with legacy keys as fallback. `explain_tool` is deprecated in favor of Elysia's `cited_summarize` tool per design doc.
+- v0.9: **Elysia Query Integration** - Integrated Elysia Query tool into `search_and_rank_tool` with optional `use_elysia_query` parameter. Tool now supports both LLM-driven query optimization (via Elysia Query) and deterministic custom search logic. Falls back gracefully to custom search if Elysia Query fails or is unavailable.
+- v0.8: **Phase 2R Core Planning Rework** - Refactored all tools to align with design contracts. Fixed return type annotations (`AsyncGenerator[Result | Response | Error, None]`), added `display=True` to all Result objects for proper WebSocket payload formatting. Updated `plan_day_e2e_tool` to read from environment (targets, filters, topk) and validate macro balance and constraints. Updated `log_meal_e2e_tool` to read profile from environment when available. Fixed `meal_tree.py` imports and tool registration. All tools now properly use Elysia's `.to_frontend()` method for WebSocket payload generation.
+- v0.7: **Code Structure Update** - Updated directory structure to reflect MealAgent as separate package from elysia framework. Changed all paths from `elysia/MealAgent/` to `MealAgent/`. Updated import statements and command examples. MealAgent is now installed as separate package (`pip install -e MealAgent`).
+- v0.6: **Elysia Documentation Alignment** - Updated async generator pattern documentation to clarify both simple async functions and async generators are supported. Added @tool decorator parameters documentation. Clarified that plain strings and dictionaries can be yielded (automatically converted). Added references to official Elysia documentation.
 - v0.5: **Tool Optimization** - Updated directory structure and tool examples to reflect optimized tool list (15 MealAgent tools + 3 Elysia tools). Removed intermediate tools, consolidated into E2E tools. Updated branch structure to 8 branches.
 

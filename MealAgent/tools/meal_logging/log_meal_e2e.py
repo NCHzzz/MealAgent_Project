@@ -16,7 +16,7 @@ async def log_meal_e2e_tool(
     user_id: str,
     meal_description: str,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     End-to-end: parse → nutrition_calc → update profile → emit final result.
 
@@ -138,14 +138,31 @@ Return JSON with:
             total_macros["carb_g"] += float(fdc_food.get("carbohydrate_g_100g", 0.0)) * scale
 
         # Update profile + create log
-        profile_results = profile_collection.query.fetch_objects(
-            where={"path": ["user_id"], "operator": "Equal", "valueString": user_id}, limit=1
-        )
-        if not profile_results.objects:
-            yield Error(f"Profile not found for user {user_id}")
-            return
-        profile = profile_results.objects[0].properties
-        profile_uuid = profile_results.objects[0].uuid
+        # Try to read from environment first
+        profile = None
+        profile_uuid = None
+        env_profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+        if env_profile_results and env_profile_results[0]["objects"]:
+            profile = env_profile_results[0]["objects"][0]
+            # Note: profile_uuid not available from environment, will need to fetch for update
+        
+        # If not in environment, fetch from Weaviate
+        if not profile:
+            profile_results = profile_collection.query.fetch_objects(
+                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id}, limit=1
+            )
+            if not profile_results.objects:
+                yield Error(f"Profile not found for user {user_id}")
+                return
+            profile = profile_results.objects[0].properties
+            profile_uuid = profile_results.objects[0].uuid
+        else:
+            # Still need UUID for update, fetch it
+            profile_results = profile_collection.query.fetch_objects(
+                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id}, limit=1
+            )
+            if profile_results.objects:
+                profile_uuid = profile_results.objects[0].uuid
 
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
@@ -228,6 +245,7 @@ Return JSON with:
             objects=[updated],
             metadata={"user_id": user_id, "logged_at": log_entry["logged_at"]},
             payload_type="generic",
+            display=True,
         )
 
     except Exception as e:

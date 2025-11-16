@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Dict, Any, List, Optional
 from datetime import datetime
 
 from elysia.tree.objects import TreeData
-from elysia.objects import Result, Error
+from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
@@ -66,7 +66,7 @@ async def pantry_crud_tool(
     user_id: str = "",
     pantry_items: List[Dict[str, Any]] | None = None,
     **kwargs,
-) -> AsyncGenerator[Result | str | Error, None]:
+) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Create, read, update, or delete pantry items for a user.
 
@@ -79,7 +79,7 @@ async def pantry_crud_tool(
     Environment writes:
       - environment["pantry_crud_tool"]["state"]
     """
-    yield f"Processing pantry {action}..."
+    yield Response(f"Processing pantry {action}...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -128,6 +128,7 @@ async def pantry_crud_tool(
                 objects=[state],
                 metadata={"action": "read", "user_id": user_id, "item_count": len(items)},
                 payload_type="generic",
+                display=True,
             )
             # Table rows of items for display
             yield Result(
@@ -135,8 +136,9 @@ async def pantry_crud_tool(
                 objects=items,
                 metadata={"action": "read", "user_id": user_id, "item_count": len(items)},
                 payload_type="table",
+                display=True,
             )
-            yield f"Retrieved {len(items)} pantry items"
+            yield Response(f"Retrieved {len(items)} pantry items")
 
         elif action == "create":
             if not pantry_items:
@@ -191,14 +193,16 @@ async def pantry_crud_tool(
                 objects=[state],
                 metadata={"action": "create", "user_id": user_id, "created_count": len(created_items)},
                 payload_type="generic",
+                display=True,
             )
             yield Result(
                 name="items",
                 objects=created_items,
                 metadata={"action": "create", "user_id": user_id, "created_count": len(created_items)},
                 payload_type="table",
+                display=True,
             )
-            yield f"Created {len(created_items)} pantry items"
+            yield Response(f"Created {len(created_items)} pantry items")
 
         elif action == "update":
             if not pantry_items:
@@ -262,9 +266,10 @@ async def pantry_crud_tool(
                 objects=[state],
                 metadata={"action": "update", "user_id": user_id, "updated_count": updated_count},
                 payload_type="generic",
+                display=True,
             )
             # For update, fetch latest items for table view (optional minimal change: skip fetch; no rows emitted)
-            yield f"Updated {updated_count} pantry items"
+            yield Response(f"Updated {updated_count} pantry items")
 
         elif action == "delete":
             if not pantry_items:
@@ -318,9 +323,10 @@ async def pantry_crud_tool(
                 objects=[state],
                 metadata={"action": "delete", "user_id": user_id, "deleted_count": deleted_count},
                 payload_type="generic",
+                display=True,
             )
             # For delete, we can also emit remaining items table on demand (skipped here to avoid extra fetch)
-            yield f"Deleted {deleted_count} pantry items"
+            yield Response(f"Deleted {deleted_count} pantry items")
 
     except Exception as e:
         yield Error(f"Pantry operation {action} failed for user {user_id}: {str(e)}")
