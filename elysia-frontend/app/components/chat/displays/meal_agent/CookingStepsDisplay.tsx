@@ -27,7 +27,7 @@ const CookingStepsDisplay: React.FC<CookingStepsDisplayProps> = ({
     <DisplayPagination>
       {steps.map((stepData, idx) => (
         <CookingStepsCard
-          key={`${stepData.food_id}-${idx}`}
+          key={`${stepData.food_id ?? "meal"}-${idx}`}
           stepData={stepData}
           index={idx}
         />
@@ -45,20 +45,24 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
   stepData,
   index,
 }) => {
+  const stepList = Array.isArray(stepData.steps) ? stepData.steps : [];
   const [currentStep, setCurrentStep] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
 
-  const totalTime = stepData.steps.reduce(
-    (sum, step) => sum + step.estimated_seconds,
-    0
-  );
+  const totalTime =
+    stepList.length > 0
+      ? stepList.reduce(
+          (sum, step) => sum + (step.estimated_seconds ?? 0),
+          0
+        )
+      : 0;
 
   useEffect(() => {
     if (!isPlaying || timeRemaining === null || timeRemaining <= 0) {
-      if (timeRemaining === 0 && currentStep < stepData.steps.length - 1) {
+      if (timeRemaining === 0 && currentStep < stepList.length - 1) {
         setCurrentStep((prev) => prev + 1);
-        setTimeRemaining(stepData.steps[currentStep + 1]?.estimated_seconds || 0);
+        setTimeRemaining(stepList[currentStep + 1]?.estimated_seconds || 0);
       }
       return;
     }
@@ -75,7 +79,7 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
 
   const handlePlay = () => {
     if (timeRemaining === null) {
-      setTimeRemaining(stepData.steps[currentStep]?.estimated_seconds || 0);
+      setTimeRemaining(stepList[currentStep]?.estimated_seconds || 0);
     }
     setIsPlaying(true);
   };
@@ -87,7 +91,7 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
   const handleReset = () => {
     setCurrentStep(0);
     setIsPlaying(false);
-    setTimeRemaining(stepData.steps[0]?.estimated_seconds || null);
+    setTimeRemaining(stepList[0]?.estimated_seconds || null);
   };
 
   const formatTime = (seconds: number) => {
@@ -106,8 +110,8 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
         <CardHeader>
           <div className="flex justify-between items-center">
             <CardTitle className="text-lg">{stepData.dish_name}</CardTitle>
-            <Badge variant="outline" className="text-xs">
-              {stepData.steps.length} steps
+            <Badge className="text-xs">
+              {stepList.length} steps
             </Badge>
           </div>
         </CardHeader>
@@ -155,7 +159,7 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
 
           {/* Steps */}
           <div className="space-y-2">
-            {stepData.steps.map((step, stepIdx) => (
+            {stepList.map((step, stepIdx) => (
               <motion.div
                 key={stepIdx}
                 initial={{ opacity: 0, x: -20 }}

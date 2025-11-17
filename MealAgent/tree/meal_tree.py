@@ -41,6 +41,7 @@ from elysia.objects import Result, Error, Status, Response
 from elysia.util.client import ClientManager
 from elysia.tree.tree import Tree
 from elysia.config import Settings
+from elysia.tools.text.text import CitedSummarizer
 
 # Import all tools
 from MealAgent.tree.config import MEAL_AGENT_TOOLS
@@ -332,23 +333,22 @@ def build_meal_agent_tree(
     )
     
     # Optimize tool loading based on user intent
+    # Note: Tool optimization feature is planned for future enhancement.
+    # Currently, all tools are loaded. When tool_optimizer module is implemented,
+    # uncomment the code below to enable intent-based tool loading.
     tools_to_load = None
     if optimize_tools and user_prompt:
-        try:
-            # Note: tool_optimizer module not yet implemented
-            # When available, uncomment:
-            # from MealAgent.tree.tool_optimizer import get_optimized_tool_set
-            # optimized = get_optimized_tool_set(
-            #     user_prompt=user_prompt,
-            #     conversation_history=conversation_history,
-            #     max_tools=12,  # Reduce from 27 to 12
-            # )
-            # tools_to_load = set(optimized.keys())
-            # logging.info(f"MealAgent: Optimized tool loading - {len(tools_to_load)} tools (from 27 total)")
-            pass
-        except Exception as e:
-            logging.warning(f"MealAgent: Tool optimization not available, loading all tools: {e}")
-            tools_to_load = None
+        # Future enhancement: Intent-based tool optimization
+        # from MealAgent.tree.tool_optimizer import get_optimized_tool_set
+        # optimized = get_optimized_tool_set(
+        #     user_prompt=user_prompt,
+        #     conversation_history=conversation_history,
+        #     max_tools=12,
+        # )
+        # tools_to_load = set(optimized.keys())
+        # logging.info(f"MealAgent: Optimized tool loading - {len(tools_to_load)} tools")
+        logging.debug("MealAgent: Tool optimization not yet implemented, loading all tools")
+        tools_to_load = None
 
     # Note: Do NOT hardcode intent keywords here. The decision agent should
     # infer completion based on environment signals written by tools (see
@@ -475,8 +475,12 @@ def build_meal_agent_tree(
                     added_tool_names[name] = tool_name
                     logging.debug(f"MealAgent: tool '{name}' registered as '{tool_name}'")
             except Exception as e:
-                logging.error(f"MealAgent: failed to add tool '{name}' to branch '{branch_id}': {e}")
-                raise
+                # Log error but continue with other tools to ensure maximum tool registration
+                logging.error(
+                    f"MealAgent: failed to add tool '{name}' to branch '{branch_id}': {e}. "
+                    f"Continuing with other tools..."
+                )
+                # Don't raise - allow other tools to register even if one fails
 
     # Register tools to branches (optimized - 8 branches per design doc)
 
@@ -512,7 +516,16 @@ def build_meal_agent_tree(
     # cooking branch
     add_tool("cooking", "cook_mode_tool")
     
-    # explain branch: Use Elysia's cited_summarize tool (not a MealAgent tool)
-    # The Tree's decision agent will automatically select cited_summarize when needed
+    # explain branch: Register Elysia's built-in cited_summarize tool
+    # This tool reads from the entire environment and provides explanations with citations
+    # Per design doc: "cited_summarize (Elysia built-in) - Explanations with citations"
+    try:
+        if "explain" in tree.decision_nodes:
+            tree.add_tool(CitedSummarizer(), branch_id="explain")
+            logging.debug("MealAgent: successfully added cited_summarize tool to 'explain' branch")
+        else:
+            logging.warning("MealAgent: 'explain' branch does not exist, cannot register cited_summarize")
+    except Exception as e:
+        logging.error(f"MealAgent: failed to register cited_summarize to 'explain' branch: {e}")
 
     return tree

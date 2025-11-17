@@ -1,7 +1,7 @@
 from logging import Logger
 import datetime
 import os
-from typing import Literal, Optional
+from typing import Literal, Optional, Callable, Any
 from uuid import uuid4
 
 from elysia.config import Settings
@@ -22,6 +22,7 @@ class Config:
         end_goal: str | None = None,
         branch_initialisation: BranchInitType = "one_branch",
         use_elysia_collections: bool = True,
+        tree_builder: Callable[..., Any] | None = None,
     ):
 
         if id is None:
@@ -38,6 +39,10 @@ class Config:
             self.settings = Settings().from_smart_setup()
         else:
             self.settings = settings
+
+        style_was_none = style is None
+        agent_description_was_none = agent_description is None
+        end_goal_was_none = end_goal is None
 
         if style is None:
             self.style = "Informative, polite and friendly."
@@ -59,6 +64,32 @@ class Config:
 
         self.branch_initialisation: BranchInitType = branch_initialisation
         self.use_elysia_collections: bool = use_elysia_collections
+        self.tree_builder = tree_builder
+
+        use_meal_agent_default = (
+            os.getenv("USE_MEAL_AGENT_TREE", "true").lower() == "true"
+        )
+
+        if self.tree_builder is None and use_meal_agent_default:
+            try:
+                from MealAgent.tree.meal_tree import build_meal_agent_tree
+
+                self.tree_builder = build_meal_agent_tree
+
+                if style_was_none:
+                    self.style = "Friendly and helpful meal planning assistant"
+                if agent_description_was_none:
+                    self.agent_description = (
+                        "Meal planning agent that helps users create personalized meal plans"
+                    )
+                if end_goal_was_none:
+                    self.end_goal = (
+                        "Generate meal plans that meet user's nutritional targets and preferences"
+                    )
+                self.branch_initialisation = "empty"
+            except ImportError:
+                # MealAgent package not available; fall back to default Elysia tree
+                self.tree_builder = None
 
     def to_json(self):
         return {

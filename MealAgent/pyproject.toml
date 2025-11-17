@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MealAgent"
+version = "0.1.0"
+description = "Meal planning agent tools for Elysia"
+authors = [{ name = "MealAgent Dev Team" }]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"MealAgent" = "."}
+packages = ["MealAgent"]

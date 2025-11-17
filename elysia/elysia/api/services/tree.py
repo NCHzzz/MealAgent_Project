@@ -113,8 +113,21 @@ class TreeManager:
         """
 
         if not self.tree_exists(conversation_id):
-            self.trees[conversation_id] = {
-                "tree": Tree(
+            tree_builder = getattr(self.config, "tree_builder", None)
+
+            if callable(tree_builder):
+                tree_instance = tree_builder(
+                    settings=self.settings,
+                    user_id=self.user_id,
+                    conversation_id=conversation_id,
+                    style=self.config.style,
+                    agent_description=self.config.agent_description,
+                    end_goal=self.config.end_goal,
+                    low_memory=low_memory,
+                    use_elysia_collections=self.config.use_elysia_collections,
+                )
+            else:
+                tree_instance = Tree(
                     conversation_id=conversation_id,
                     user_id=self.user_id,
                     settings=self.settings,
@@ -124,7 +137,10 @@ class TreeManager:
                     branch_initialisation=self.config.branch_initialisation,
                     low_memory=low_memory,
                     use_elysia_collections=self.config.use_elysia_collections,
-                ),
+                )
+
+            self.trees[conversation_id] = {
+                "tree": tree_instance,
                 "last_request": datetime.datetime.now(),
                 "event": asyncio.Event(),
             }
