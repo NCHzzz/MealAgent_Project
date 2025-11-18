@@ -7,6 +7,8 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 
 @tool
 async def log_meal_e2e_tool(
@@ -108,17 +110,19 @@ Return JSON with:
                 continue
             amount = float(ing.get("amount", 0))
             unit = ing.get("unit", "g")
-            fdc_results = fdc_collection.query.fetch_objects(
-                where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}, limit=1
+            fdc_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
             )
+            fdc_results = fdc_collection.query.fetch_objects(filters=fdc_filter, limit=1)
             if not fdc_results.objects:
                 continue
             fdc_food = fdc_results.objects[0].properties
             grams = amount
             if unit != "g":
-                pr = portion_collection.query.fetch_objects(
-                    where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}, limit=10
+                portion_filter = build_filters_from_where(
+                    {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
                 )
+                pr = portion_collection.query.fetch_objects(filters=portion_filter, limit=10)
                 converted = False
                 for po in pr.objects:
                     p = po.properties
@@ -148,9 +152,10 @@ Return JSON with:
         
         # If not in environment, fetch from Weaviate
         if not profile:
-            profile_results = profile_collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id}, limit=1
+            profile_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            profile_results = profile_collection.query.fetch_objects(filters=profile_filter, limit=1)
             if not profile_results.objects:
                 yield Error(f"Profile not found for user {user_id}")
                 return
@@ -158,24 +163,26 @@ Return JSON with:
             profile_uuid = profile_results.objects[0].uuid
         else:
             # Still need UUID for update, fetch it
-            profile_results = profile_collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id}, limit=1
+            profile_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            profile_results = profile_collection.query.fetch_objects(filters=profile_filter, limit=1)
             if profile_results.objects:
                 profile_uuid = profile_results.objects[0].uuid
 
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
-        today_logs = log_collection.query.fetch_objects(
-            where={
+        today_filter = build_filters_from_where(
+            {
                 "operator": "And",
                 "operands": [
                     {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
                     {"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": today_start.isoformat()},
                     {"path": ["logged_at"], "operator": "LessThan", "valueDate": today_end.isoformat()},
                 ],
-            },
+            }
         )
+        today_logs = log_collection.query.fetch_objects(filters=today_filter)
         today_consumed = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
         for obj in today_logs.objects:
             macros_str = obj.properties.get("calculated_macros", "{}")

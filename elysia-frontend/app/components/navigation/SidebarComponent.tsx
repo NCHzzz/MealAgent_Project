@@ -24,6 +24,7 @@ import { FaLinkedin } from "react-icons/fa";
 import { FaYoutube } from "react-icons/fa";
 
 import { RiRobot2Line } from "react-icons/ri";
+import { FiUser } from "react-icons/fi";
 
 import { public_path } from "@/app/components/host";
 
@@ -95,6 +96,12 @@ const SidebarComponent: React.FC = () => {
         mode: ["settings", "elysia"],
         icon: <MdOutlineSettingsInputComponent />,
         onClick: () => changePage("settings", {}, true, unsavedChanges),
+      },
+      {
+        title: "Profile",
+        mode: ["profile"],
+        icon: <FiUser />,
+        onClick: () => changePage("profile", {}, true, unsavedChanges),
       },
       {
         title: "Evaluation",

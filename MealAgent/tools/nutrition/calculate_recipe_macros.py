@@ -9,6 +9,8 @@ from elysia import tool
 import dspy
 from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 logger = logging.getLogger(__name__)
 
 
@@ -139,10 +141,10 @@ async def calculate_recipe_macros_tool(
         # Get recipe
         recipe_obj = recipe
         if not recipe_obj and recipe_id:
-            results = collection.query.fetch_objects(
-                where={"path": ["food_id"], "operator": "Equal", "valueString": recipe_id},
-                limit=1,
+            recipe_filter = build_filters_from_where(
+                {"path": ["food_id"], "operator": "Equal", "valueString": recipe_id}
             )
+            results = collection.query.fetch_objects(filters=recipe_filter, limit=1)
             if not results.objects:
                 yield Error(f"Recipe not found: {recipe_id}")
                 return
@@ -150,10 +152,10 @@ async def calculate_recipe_macros_tool(
             recipe_uuid = results.objects[0].uuid
         elif recipe_obj:
             # If recipe passed in, fetch UUID for update
-            results = collection.query.fetch_objects(
-                where={"path": ["food_id"], "operator": "Equal", "valueString": recipe_obj.get("food_id")},
-                limit=1,
+            recipe_filter = build_filters_from_where(
+                {"path": ["food_id"], "operator": "Equal", "valueString": recipe_obj.get("food_id")}
             )
+            results = collection.query.fetch_objects(filters=recipe_filter, limit=1)
             recipe_uuid = results.objects[0].uuid if results.objects else None
         else:
             yield Error("Either recipe_id or recipe must be provided")

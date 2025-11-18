@@ -25,6 +25,7 @@ from MealAgent.schemas import (
     FDC_NUTRIENT_SCHEMA,
     FDC_PORTION_SCHEMA,
     USER_PROFILE_SCHEMA,
+    USER_ACCOUNT_SCHEMA,
     MEAL_PLAN_SCHEMA,
     MEAL_PLAN_ITEM_SCHEMA,
     MEAL_LOG_ENTRY_SCHEMA,
@@ -90,6 +91,7 @@ def create_all_collections(client, drop_existing=False):
         FDC_PORTION_SCHEMA,
         FDC_FOOD_SCHEMA,
         USER_PROFILE_SCHEMA,
+        USER_ACCOUNT_SCHEMA,
         MEAL_PLAN_SCHEMA,
         MEAL_PLAN_ITEM_SCHEMA,
         MEAL_LOG_ENTRY_SCHEMA,
@@ -118,6 +120,7 @@ def create_specific_collections(client, names: list[str]):
         FDC_NUTRIENT_SCHEMA["name"]: FDC_NUTRIENT_SCHEMA,
         FDC_PORTION_SCHEMA["name"]: FDC_PORTION_SCHEMA,
         USER_PROFILE_SCHEMA["name"]: USER_PROFILE_SCHEMA,
+        USER_ACCOUNT_SCHEMA["name"]: USER_ACCOUNT_SCHEMA,
         MEAL_PLAN_SCHEMA["name"]: MEAL_PLAN_SCHEMA,
         MEAL_PLAN_ITEM_SCHEMA["name"]: MEAL_PLAN_ITEM_SCHEMA,
         MEAL_LOG_ENTRY_SCHEMA["name"]: MEAL_LOG_ENTRY_SCHEMA,
@@ -182,7 +185,7 @@ def main():
                     RECIPE_SCHEMA,
                     # Drop order not critical, but keep consistent with create
                     FDC_NUTRIENT_SCHEMA, FDC_PORTION_SCHEMA, FDC_FOOD_SCHEMA,
-                    USER_PROFILE_SCHEMA, MEAL_PLAN_SCHEMA, MEAL_PLAN_ITEM_SCHEMA,
+                    USER_PROFILE_SCHEMA, USER_ACCOUNT_SCHEMA, MEAL_PLAN_SCHEMA, MEAL_PLAN_ITEM_SCHEMA,
                     MEAL_LOG_ENTRY_SCHEMA, PANTRY_SCHEMA, PANTRY_ITEM_SCHEMA,
                     SHOPPING_LIST_SCHEMA, SHOPPING_ITEM_SCHEMA,
                 ]

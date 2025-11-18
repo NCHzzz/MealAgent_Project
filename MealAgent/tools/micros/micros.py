@@ -9,6 +9,8 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 
 # RDA (Recommended Daily Allowance) values for common micronutrients
 # Source: USDA Dietary Guidelines
@@ -29,14 +31,10 @@ def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) ->
     if fdc_id:
         try:
             portion_collection = client.collections.get("FdcPortion")
-            portion_results = portion_collection.query.fetch_objects(
-                where={
-                    "path": ["fdc_id"],
-                    "operator": "Equal",
-                    "valueInt": int(fdc_id),
-                },
-                limit=10,
+            portion_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
             )
+            portion_results = portion_collection.query.fetch_objects(filters=portion_filter, limit=10)
 
             for portion_obj in portion_results.objects:
                 portion = portion_obj.properties
@@ -140,10 +138,10 @@ async def micros_tool(
                         quantity_g = float(ing_entry.get("quantity_g", 0.0))
                         
                         if fdc_id:
-                            fdc_results = fdc_collection.query.fetch_objects(
-                                where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)},
-                                limit=1,
+                            fdc_filter = build_filters_from_where(
+                                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
                             )
+                            fdc_results = fdc_collection.query.fetch_objects(filters=fdc_filter, limit=1)
                             if fdc_results.objects:
                                 fdc_food = fdc_results.objects[0].properties
                                 scale = (quantity_g * servings) / 100.0
@@ -173,10 +171,10 @@ async def micros_tool(
                             quantity_g = float(ing_entry.get("quantity_g", 0.0))
                             
                             if fdc_id:
-                                fdc_results = fdc_collection.query.fetch_objects(
-                                    where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)},
-                                    limit=1,
+                                fdc_filter = build_filters_from_where(
+                                    {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
                                 )
+                                fdc_results = fdc_collection.query.fetch_objects(filters=fdc_filter, limit=1)
                                 if fdc_results.objects:
                                     fdc_food = fdc_results.objects[0].properties
                                     scale = (quantity_g * servings) / 100.0

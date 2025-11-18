@@ -7,6 +7,8 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 
 @tool
 async def meal_history_tool(
@@ -44,9 +46,9 @@ async def meal_history_tool(
 
         where_clause = where_conditions[0] if len(where_conditions) == 1 else {"operator": "And", "operands": where_conditions}
 
-        # Fetch logs
+        filters = build_filters_from_where(where_clause)
         results = log_collection.query.fetch_objects(
-            where=where_clause,
+            filters=filters,
             limit=limit,
             sort={"path": ["logged_at"], "order": "desc"},
         )

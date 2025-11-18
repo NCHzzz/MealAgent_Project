@@ -65,7 +65,9 @@ graph TD
 
 ### Tree Integration (Elysia)
 
-**Critical Architecture Point**: MealAgent does NOT use custom REST API endpoints. All functionality is implemented as tools registered to an Elysia Tree, accessed through standard WebSocket endpoints (`/ws/query`).
+**Critical Architecture Point**: All business workflows still run through the Elysia tree on `/ws/query`, but a **narrow REST surface** now exists for user onboarding:
+1. `/auth/signup` + `/auth/login` (FastAPI) provision `UserAccount` documents and hydrate `UserManager`.
+2. `/mealagent/profile/{user_id}` lets the frontend collect the initial `UserProfile` via REST; once the profile exists, every follow-up change flows through the tree tools (per [Creating Tools](https://weaviate.github.io/elysia/creating_tools/) and [Advanced Tool Construction](https://weaviate.github.io/elysia/Advanced/advanced_tool_construction/)).
 
 - A dedicated MealAgent Tree is created and populated with branches matching feature areas.
 - Tools are registered into branches so Elysia's decision agent (LLM) can automatically select and orchestrate execution based on natural language queries.
@@ -282,7 +284,29 @@ Note: We intentionally keep only the CSV fields to reduce redundancy and simplif
 }
 ```
 
+#### UserAccount (Auth Credentials)
+```python
+{
+    "class": "UserAccount",
+    "properties": [
+        {"name": "user_id", "dataType": ["text"], "indexFilterable": True},
+        {"name": "email", "dataType": ["text"], "indexFilterable": True},
+        {"name": "password_hash", "dataType": ["text"]},
+        {"name": "created_at", "dataType": ["date"]},
+        {"name": "last_login_at", "dataType": ["date"]}
+    ],
+    "vectorizer": "none"
+}
+```
+
+Stores account-level credentials so that signup/login can happen over REST (hashed passwords with bcrypt). `user_id` links to `UserProfile`/MealAgent data.
+
 **Note**: NutrientTarget properties are embedded directly in UserProfile for simplicity. This avoids the need for separate collection queries and maintains data locality.
+
+#### Data Availability & Tool Ownership
+- **Source CSV coverage**: Only `Recipe`, `FdcFood`, `FdcNutrient`, and `FdcPortion` are populated during ETL (ingests `recipe.csv` + `FDC_data.csv`). These collections are immutable except for cached fields (`macros_per_serving`, `ingredient_fdc_map`).
+- **Runtime-owned collections**: `UserProfile`, `UserAccount`, `MealPlan`, `MealPlanItem`, `MealLogEntry`, `Pantry`, `PantryItem`, `ShoppingList`, `ShoppingItem` start empty and are **entirely created/updated/deleted by tools or REST onboarding**. This keeps the schema lean while letting tools persist state as prescribed in [Environment](https://weaviate.github.io/elysia/Advanced/environment/) and [Custom Objects](https://weaviate.github.io/elysia/Advanced/custom_objects/).
+- **CRUD responsibilities**: Every tool that mutates a collection is documented below. All property names listed here are validated against the corresponding schema modules under `MealAgent/schemas/*.py`, ensuring parity between documentation and code.
 
 ### Data Relationships
 
@@ -519,6 +543,49 @@ Notes:
 
 Note: `ingredients`, `calculated_macros`, and `calculated_micros` are stored as TEXT (JSON strings) in Weaviate. Tools must serialize/deserialize these fields when reading/writing.
 
+### Collection Usage & Tool Integration
+**Làm rõ mỗi collection được dùng như thế nào và tool nào tương tác với chúng**
+
+| Collection | Primary Purpose In System | Key Tools / Services | Notes |
+|------------|--------------------------|-----------------------|-------|
+| `Recipe` | Source of dish metadata, cached macros, ingredient → FDC mappings used for planning, search, cooking | `search_and_rank_tool`, `plan_day_e2e_tool`, `plan_week_e2e_tool`, `calculate_recipe_macros_tool`, `cook_mode_tool`, `substitute_tool`, `micros_tool` | Planning tools ensure every recipe in a plan has `macros_per_serving`; when missing they invoke `calculate_recipe_macros_tool` which updates the same recipe record. Cooking and substitution tools read `ingredients_with_qty`, `cooking_method_array`, and cached macros for rendering step-by-step instructions or validating swaps. |
+| `FdcFood` | Canonical macro/micro values per ingredient (per 100g) | `calculate_recipe_macros_tool`, `log_meal_e2e_tool`, `micros_tool`, `gap_fill_tool` | `calculate_recipe_macros_tool` and meal logging read `energy_kcal_100g`, macro/micro columns to compute totals. Optimization tools query FdcFood to recommend deficit-filling ingredients with factual nutrient profiles. |
+| `FdcNutrient` | Fine-grained nutrient entries keyed by `(fdc_id, nutrient_id)` | `log_meal_e2e_tool`, `micros_tool`, `gap_fill_tool` | Used when micronutrient-level accuracy is required (e.g., vitamin C deficit). Tools deserialize the rows into structured micronutrient objects before writing back to the environment. |
+| `FdcPortion` | Portion → gram conversions to translate user-friendly units into gram weights | `calculate_recipe_macros_tool`, `log_meal_e2e_tool`, `plan_day_e2e_tool` | Whenever a user says “1 cup spinach” or a recipe ingredient specifies household measures, tools query this collection to normalize into grams before combining with FdcFood nutrient densities. |
+| `UserProfile` | Single source of truth for demographics, constraints, macro targets, preferences, remaining nutrients | `profile_crud_tool`, `macro_calc_tool`, `plan_day_e2e_tool`, `plan_week_e2e_tool`, `log_meal_e2e_tool`, `constraints_guard_tool`, `gap_fill_tool` | Profile CRUD populates/updates records. Macro calc writes derived targets back to the same object. Planning/logging tools read constraints and write remaining target deltas (`updated_profile`). All queries filter by `user_id` to ensure isolation. |
+| `MealPlan` / `MealPlanItem` | Persisted plans and meal slots per day/week | `plan_day_e2e_tool`, `plan_week_e2e_tool`, `gap_fill_tool`, `substitute_tool`, `micros_tool`, `pantry_diff_tool` | Daily/weekly tools optionally insert finalized plans. Optimization tools read plan items to apply substitutions or compute deficits. `pantry_diff_tool` references plan items to determine aggregate ingredient demand before subtracting pantry inventory. |
+| `MealLogEntry` | Audit trail of consumed meals with parsed ingredients and computed nutrition | `log_meal_e2e_tool`, `meal_history_tool`, `gap_fill_tool` | Meal logging inserts one record per entry (with serialized `ingredients` / `calculated_macros`). Meal history queries this collection for UI display. Gap fill reads accumulated consumption to understand remaining targets. |
+| `Pantry` / `PantryItem` | Track user inventory for pantry-aware planning/shopping | `pantry_crud_tool`, `pantry_diff_tool`, `plan_day_e2e_tool`, `plan_week_e2e_tool` | Pantry CRUD manages inventory. Planning tools optionally consult pantry to prioritize recipes that leverage existing items. `pantry_diff_tool` compares plan demand vs pantry quantities to emit a precise shopping list. |
+| `ShoppingList` / `ShoppingItem` | Persist generated shopping lists (per plan) | `pantry_diff_tool`, `plan_day_e2e_tool`, `plan_week_e2e_tool` | Plans create new shopping lists tied to `plan_id`. Pantry diff writes the list items with `category`, `quantity`, `unit`, and `purchased` flags so the frontend ShoppingListDisplay can render them. |
+
+### Tool Catalogue (Reads/Writes & Environment Contracts)
+All MealAgent tools follow the async-generator pattern described in [Creating Tools](https://weaviate.github.io/elysia/creating_tools/) and return the payload types listed in [Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/). The table below documents exactly how each tool interacts with both the Environment and Weaviate, ensuring the implementation matches the schemas under `MealAgent/schemas/`.
+
+| Tool | Purpose & Flow | Collections (Read → Write) | Environment Keys |
+|------|----------------|----------------------------|------------------|
+| `profile_crud_tool` | REST onboarding calls this tool after initial profile creation so the tree has the same record. Validates payloads, upserts `UserProfile`, and streams status/results. | `UserProfile`: read (for `action="read"`) / upsert | Writes `profile_crud_tool.profile` |
+| `macro_calc_tool` | Implements Harris-Benedict logic entirely in code: fetches profile object from env, derives TDEE/macro split, persists the numbers back to the same `UserProfile` document, and stores them for downstream tools. | `UserProfile`: read → update (tdee_kcal, protein_g, fat_g, carb_g, micronutrient_targets) | Writes `macro_calc_tool.targets` |
+| `constraints_guard_tool` | Merges diet/allergen/time/device filters from profile defaults + ad-hoc parameters into a single Weaviate where-clause. | Reads `UserProfile` (via env) only; no database writes. | Writes `constraints_guard_tool.filters` containing the JSON filter |
+| `search_and_rank_tool` | Calls Elysia’s `query` tool against `Recipe`, enriches results (macro gap score, preference match), and yields ranked candidates. When macros are missing it invokes `calculate_recipe_macros_tool` before final scoring. | `Recipe`: read; may indirectly trigger updates through `calculate_recipe_macros_tool`. | Writes `search_and_rank_tool.topk` (list of recipe refs + scores) |
+| `calculate_recipe_macros_tool` | VN→EN translation + FDC lookup. Reads `Recipe.ingredients_with_qty`, queries `FdcFood`, `FdcNutrient`, `FdcPortion`, computes macros, then updates the source `Recipe` (`macros_per_serving` + `ingredient_fdc_map`). | `Recipe`: read→update; `FdcFood`/`FdcNutrient`/`FdcPortion`: read-only | Writes `calculate_recipe_macros_tool.macros` |
+| `plan_day_e2e_tool` | End-to-end planner: pulls profile targets, consumes ranked recipes, enforces constraints, assembles 3–5 meals, persists `MealPlan` + `MealPlanItem`, optionally kicks off `pantry_diff_tool`. | Reads `Recipe`, `UserProfile`; writes `MealPlan`, `MealPlanItem`, optionally `ShoppingList`/`ShoppingItem`. | Writes `plan_day_e2e_tool.plan` and `plan_day_e2e_tool.shopping` |
+| `plan_week_e2e_tool` | Weekly variant with variety scoring. Same data paths as day planner but loops through 7 days × 3 meals. | Same as `plan_day_e2e_tool`. | Writes `plan_week_e2e_tool.plan` |
+| `log_meal_e2e_tool` | Parses natural language via LLM, normalizes ingredients to FDC, calculates macros, inserts a `MealLogEntry`, and patches `UserProfile` nutrient deltas so future plans reflect remaining targets. | Reads `Fdc*`, `UserProfile`; writes `MealLogEntry`, updates `UserProfile`. | Writes `log_meal_e2e_tool.updated_profile` + `log_meal_e2e_tool.entry` |
+| `meal_history_tool` | Lightweight query for past `MealLogEntry` objects (paged). | `MealLogEntry`: read-only. | Writes `meal_history_tool.history` |
+| `pantry_crud_tool` | Provides CRUD over `Pantry` and `PantryItem`. Planning tools rely on this state to bias toward on-hand ingredients. | `Pantry`/`PantryItem`: read/write. | Writes `pantry_crud_tool.state` |
+| `pantry_diff_tool` | Aggregates ingredient demands from an approved plan, subtracts pantry holdings, and writes `ShoppingList` + `ShoppingItem`. | Reads `MealPlanItem`, `PantryItem`; writes `ShoppingList`, `ShoppingItem`. | Writes `pantry_diff_tool.diff` |
+| `cook_mode_tool` | Turns a recipe (or plan slot) into step-by-step instructions streamed to UI, including timers/equipment callouts. | `Recipe`: read-only. | Writes `cook_mode_tool.steps` |
+| `gap_fill_tool` | Computes macro/micro deficits after logging, proposes snacks, and (if accepted) patches `MealPlanItem` plus user remaining targets. | Reads `MealPlanItem`, `UserProfile`, `FdcFood`; writes updated `MealPlanItem` and optional snack entries. | Writes `gap_fill_tool.deficits` / `gap_fill_tool.updated_plan` |
+| `substitute_tool` | Suggests swaps for recipes or plan items (e.g., allergen avoidance). Reads plan and recipe metadata, searches Recipe/FdcFood for suitable replacements, updates `MealPlanItem` if approved. | Reads `MealPlanItem`, `Recipe`, `FdcFood`; writes `MealPlanItem`. | Writes `substitute_tool.suggestions` / `substitute_tool.updated_plan` |
+| `micros_tool` | Aggregates micronutrients across plan/log history and highlights shortfalls with suggested foods. | Reads `MealPlanItem`, `MealLogEntry`, `FdcFood`/`FdcNutrient`; optional writes to `MealPlanItem` when auto-adding boosters. | Writes `micros_tool.summary` |
+| Built-in `query`, `cited_summarize` | Directly from Elysia’s library; used for hybrid retrieval and explanation displays per [Payload Types](https://weaviate.github.io/elysia/Reference/PayloadTypes/). | `Recipe` (read), environment (read). | `query.results`, `cited_summarize.summary` |
+
+> **Note:** REST endpoints (`/auth/*`, `/mealagent/profile/*`) only act as onboarding shims. After a profile exists, all flows above are exercised exclusively through `/ws/query`, preserving observability via Environment snapshots ([Advanced Environment](https://weaviate.github.io/elysia/Advanced/environment/)).
+**How the collections and tools combine**
+- **Planning workflow**: `plan_day_e2e_tool` pulls `UserProfile` + `macro_calc_tool.targets` → queries `Recipe` (enriching via `calculate_recipe_macros_tool` as needed) → writes structured plan to `MealPlan`/`MealPlanItem`, then optionally calls `pantry_diff_tool` which reads `PantryItem` and writes `ShoppingList/ShoppingItem`.
+- **Meal logging workflow**: `log_meal_e2e_tool` parses the meal (LLM) → resolves each ingredient against `FdcFood`, `FdcNutrient`, `FdcPortion` → inserts the entry into `MealLogEntry` and updates `UserProfile` remaining targets. Subsequent `gap_fill_tool` or `plan_*` tools read these updated targets to adapt recommendations.
+- **Optimization workflow**: `gap_fill_tool`, `substitute_tool`, and `micros_tool` treat `MealPlanItem` objects plus nutrient sources (`Recipe`, `Fdc*`) as inputs to suggest snacks, substitutions, or micronutrient boosters, then persist adjustments back to `MealPlanItem` (or environment) so future tool runs (e.g., `cited_summarize`) have the latest state.
+
 ### Data Flow
 
 ```mermaid
@@ -607,25 +674,30 @@ sequenceDiagram
 
 ### Elysia WebSocket-Based Communication
 
-MealAgent does **NOT** use custom REST API endpoints. Instead, all interactions flow through Elysia's standard WebSocket endpoints, where the Tree orchestrates tool execution based on natural language queries.
+Operational workflows (search → plan → log → optimize) still run entirely through the Elysia tree on `/ws/query`, keeping execution observable through Environment snapshots and payload logs.
 
 #### Standard Elysia WebSocket Endpoints
 
-All MealAgent functionality is accessed through Elysia's existing WebSocket infrastructure:
-
 ```
-WS     /ws/query                           # Main Tree execution stream (all MealAgent queries)
+WS     /ws/query        # Main Tree execution stream (all MealAgent queries)
 ```
-
-**Note**: MealAgent uses only the `/ws/query` endpoint. Other endpoints (`/ws/processor`, `/ws/init`) are Elysia infrastructure endpoints but not used by MealAgent's standard workflow.
 
 **Key Architecture Points:**
-- **No custom REST endpoints**: All functionality is handled by tools registered to the MealAgent Tree
-- **Natural language interface**: Users send queries like "Create a meal plan for today" or "Log that I ate chicken salad"
-- **Tree orchestration**: The Elysia decision tree automatically selects and executes the appropriate tools based on the query
-- **Streaming responses**: All tool outputs (Text, Result, Error) are streamed back via WebSocket
+- **Natural language interface**: Users send queries like "Create a meal plan for today" or "Log that I ate chicken salad".
+- **Tree orchestration**: The Elysia decision tree automatically selects and executes the appropriate tools based on the query ([Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)).
+- **Streaming responses**: All tool outputs (Text, Result, Error) are streamed back via WebSocket per [Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/).
+- **Managers & clients**: `/ws/query` delegates to `UserManager.process_tree`, which instantiates/loads `TreeManager` + `ClientManager` per user as described in [User & Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/).
 
 #### WebSocket Message Format (Elysia Standard)
+
+### REST Endpoints (Auth + Profile Onboarding)
+
+While all operational MealAgent tools still run through `/ws/query`, two REST entry points were added:
+
+- `POST /auth/signup`, `POST /auth/login`: Create/login accounts backed by `UserAccount` and hydrate `UserManager`.
+- `GET/POST /mealagent/profile/{user_id}`: Initial profile onboarding over HTTP; subsequent edits at runtime still happen through the WebSocket tools (`profile_crud_tool`).
+
+Frontend uses these routes for first-time signup/log-in and for the required profile setup page, after which all planning/logging flows reuse the existing WebSocket orchestration.
 
 **Client → Server:**
 ```json

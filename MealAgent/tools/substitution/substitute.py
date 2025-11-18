@@ -9,6 +9,7 @@ from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 
@@ -102,10 +103,10 @@ async def substitute_tool(
         
         original_fdc = None
         if original_fdc_id:
-            results = fdc_collection.query.fetch_objects(
-                where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(original_fdc_id)},
-                limit=1,
+            original_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(original_fdc_id)}
             )
+            results = fdc_collection.query.fetch_objects(filters=original_filter, limit=1)
             if results.objects:
                 original_fdc = results.objects[0].properties
         elif original_ingredient_name:
@@ -134,10 +135,10 @@ async def substitute_tool(
         suggestions = []
         if substitute_fdc_id:
             # Direct apply mode - fetch substitute
-            sub_results = fdc_collection.query.fetch_objects(
-                where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(substitute_fdc_id)},
-                limit=1,
+            sub_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(substitute_fdc_id)}
             )
+            sub_results = fdc_collection.query.fetch_objects(filters=sub_filter, limit=1)
             if not sub_results.objects:
                 yield Error(f"Substitute FDC ID {substitute_fdc_id} not found")
                 return
@@ -284,10 +285,10 @@ async def substitute_tool(
                             recipes_to_update.append((recipe, meal_data))
             
             # Get substitute FDC data
-            sub_results = fdc_collection.query.fetch_objects(
-                where={"path": ["fdc_id"], "operator": "Equal", "valueInt": int(target_substitute_fdc_id)},
-                limit=1,
+            sub_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(target_substitute_fdc_id)}
             )
+            sub_results = fdc_collection.query.fetch_objects(filters=sub_filter, limit=1)
             if not sub_results.objects:
                 yield Error(f"Substitute FDC ID {target_substitute_fdc_id} not found")
                 return
@@ -315,10 +316,10 @@ async def substitute_tool(
                 
                 if uses_original:
                     # Update recipe in Weaviate
-                    recipe_results = recipe_collection.query.fetch_objects(
-                        where={"path": ["food_id"], "operator": "Equal", "valueString": food_id},
-                        limit=1,
+                    recipe_filter = build_filters_from_where(
+                        {"path": ["food_id"], "operator": "Equal", "valueString": food_id}
                     )
+                    recipe_results = recipe_collection.query.fetch_objects(filters=recipe_filter, limit=1)
                     if recipe_results.objects:
                         recipe_obj = recipe_results.objects[0]
                         recipe_obj.properties["ingredient_fdc_map"] = updated_map

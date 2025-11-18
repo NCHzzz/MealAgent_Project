@@ -34,7 +34,8 @@ USER_PROFILE_SCHEMA = {
         Property(name="protein_g", data_type=DataType.NUMBER),  # Daily protein target
         Property(name="fat_g", data_type=DataType.NUMBER),  # Daily fat target
         Property(name="carb_g", data_type=DataType.NUMBER),  # Daily carb target
-        Property(name="micronutrient_targets", data_type=DataType.TEXT),  # JSON string: {"vitamin_c_mg": 90, "iron_mg": 18, ...}
+        # Structured micronutrient targets for code/tools (stored as JSON-like object in Weaviate 4.x)
+        Property(name="micronutrient_targets", data_type=DataType.OBJECT),
         
         # Metadata
         Property(name="created_at", data_type=DataType.DATE),

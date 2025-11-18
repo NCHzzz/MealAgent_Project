@@ -25,6 +25,11 @@ RECIPE_SCHEMA = {
         Property(name="ingredients", data_type=DataType.TEXT_ARRAY),
         Property(name="cooking_method_array", data_type=DataType.TEXT_ARRAY),
         Property(name="image_link", data_type=DataType.TEXT),
+        # Constraint filtering fields (optional; populated by tools or ETL enrichment)
+        # Used by constraints_guard_tool / planning tools for diet/allergen/device filters
+        Property(name="diet_type", data_type=DataType.TEXT_ARRAY),
+        Property(name="allergens", data_type=DataType.TEXT_ARRAY),
+        Property(name="devices", data_type=DataType.TEXT_ARRAY),
         # Computed field: macros per serving (object requires nested properties in Weaviate)
         Property(
             name="macros_per_serving",

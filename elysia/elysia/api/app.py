@@ -12,10 +12,12 @@ from elysia.api.core.log import logger, set_log_level
 from elysia.api.dependencies.common import get_user_manager
 from elysia.api.middleware.error_handlers import register_error_handlers
 from elysia.api.routes import (
+    auth,
     collections,
     feedback,
     init,
     processor,
+    profile,
     query,
     user_config,
     tree_config,
@@ -90,6 +92,10 @@ app.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 app.include_router(utils.router, prefix="/util", tags=["utilities"])
 app.include_router(tools.router, prefix="/tools", tags=["tools"])
 app.include_router(db.router, prefix="/db", tags=["db"])
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(
+    profile.router, prefix="/mealagent/profile", tags=["mealagent-profile"]
+)
 
 
 # Health check endpoint (kept in main app.py due to its simplicity)

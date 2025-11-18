@@ -6,6 +6,8 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 
 REQUIRED_FIELDS = [
     "user_id",
@@ -105,14 +107,10 @@ async def profile_crud_tool(
 
             # Upsert by user_id: try fetch, then insert/update
             user_id = profile_data["user_id"]
-            existing = collection.query.fetch_objects(
-                where={
-                    "path": ["user_id"],
-                    "operator": "Equal",
-                    "valueString": user_id,
-                },
-                limit=1,
+            existing_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            existing = collection.query.fetch_objects(filters=existing_filter, limit=1)
 
             if existing.objects:
                 collection.data.update(
@@ -143,14 +141,10 @@ async def profile_crud_tool(
                 yield Response("Skipping profile read: user_id is required")
                 return
 
-            result = collection.query.fetch_objects(
-                where={
-                    "path": ["user_id"],
-                    "operator": "Equal",
-                    "valueString": user_id,
-                },
-                limit=1,
+            result_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            result = collection.query.fetch_objects(filters=result_filter, limit=1)
 
             if not result.objects:
                 yield Response(f"Profile not found for user {user_id}")

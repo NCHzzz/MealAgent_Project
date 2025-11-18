@@ -6,6 +6,8 @@ from elysia.objects import Result, Error, Response, Retrieval
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 # Try to import Elysia Query tool
 try:
     from elysia.tools.retrieval.query import Query as ElysiaQuery
@@ -177,7 +179,8 @@ async def _search_with_custom_logic(
             return collection.query.bm25(query=query_text, limit=limit)
 
         def _fetch():
-            return collection.query.fetch_objects(where=where if where else None, limit=limit)
+            filters = build_filters_from_where(where) if where else None
+            return collection.query.fetch_objects(filters=filters, limit=limit)
 
         results = None
         if query_text:

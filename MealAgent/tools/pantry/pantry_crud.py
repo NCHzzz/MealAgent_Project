@@ -9,6 +9,8 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 
 def _validate_pantry_item(item: Dict[str, Any]) -> tuple[bool, str]:
     """
@@ -97,10 +99,10 @@ async def pantry_crud_tool(
 
         if action == "read":
             # Get pantry (create if doesn't exist)
-            pantry_results = pantry_collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                limit=1,
+            pantry_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
 
             if not pantry_results.objects:
                 # Create pantry
@@ -111,9 +113,10 @@ async def pantry_crud_tool(
                 pantry_collection.data.insert(pantry_data)
 
             # Get all pantry items
-            items_results = item_collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+            items_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            items_results = item_collection.query.fetch_objects(filters=items_filter)
 
             items = [obj.properties for obj in items_results.objects]
 
@@ -146,10 +149,10 @@ async def pantry_crud_tool(
                 return
 
             # Ensure pantry exists
-            pantry_results = pantry_collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                limit=1,
+            pantry_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
             if not pantry_results.objects:
                 pantry_data = {
                     "user_id": user_id,
@@ -222,16 +225,16 @@ async def pantry_crud_tool(
                     continue
 
                 # Find existing item
-                item_results = item_collection.query.fetch_objects(
-                    where={
+                item_filter = build_filters_from_where(
+                    {
                         "operator": "And",
                         "operands": [
                             {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
                             {"path": ["ingredient_name"], "operator": "Equal", "valueString": ingredient_name},
                         ],
-                    },
-                    limit=1,
+                    }
                 )
+                item_results = item_collection.query.fetch_objects(filters=item_filter, limit=1)
 
                 if item_results.objects:
                     # Update existing
@@ -247,10 +250,10 @@ async def pantry_crud_tool(
 
             # Update pantry timestamp only if items were actually updated
             if updated_count > 0:
-                pantry_results = pantry_collection.query.fetch_objects(
-                    where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                    limit=1,
+                pantry_filter = build_filters_from_where(
+                    {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
                 )
+                pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
                 if pantry_results.objects:
                     pantry = pantry_results.objects[0]
                     pantry.properties["updated_at"] = datetime.now().isoformat()
@@ -288,26 +291,26 @@ async def pantry_crud_tool(
                 if not ingredient_name:
                     continue
 
-                item_results = item_collection.query.fetch_objects(
-                    where={
+                item_filter = build_filters_from_where(
+                    {
                         "operator": "And",
                         "operands": [
                             {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
                             {"path": ["ingredient_name"], "operator": "Equal", "valueString": ingredient_name},
                         ],
-                    },
-                    limit=1,
+                    }
                 )
+                item_results = item_collection.query.fetch_objects(filters=item_filter, limit=1)
 
                 if item_results.objects:
                     item_collection.data.delete_by_id(item_results.objects[0].uuid)
                     deleted_count += 1
 
             # Update pantry timestamp
-            pantry_results = pantry_collection.query.fetch_objects(
-                where={"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                limit=1,
+            pantry_filter = build_filters_from_where(
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
             )
+            pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
             if pantry_results.objects:
                 pantry = pantry_results.objects[0]
                 pantry.properties["updated_at"] = datetime.now().isoformat()

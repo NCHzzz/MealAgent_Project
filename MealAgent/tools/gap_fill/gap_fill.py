@@ -12,6 +12,7 @@ from elysia import tool
 
 
 from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 
 def _calculate_plan_macros(plan: Dict[str, Any]) -> Dict[str, float]:
@@ -198,10 +199,10 @@ async def gap_fill_tool(
             
             # Search for snack recipes
             try:
-                results = recipe_collection.query.fetch_objects(
-                    where={"path": ["dish_type"], "operator": "Equal", "valueString": "snack"},
-                    limit=100,
+                snack_filter = build_filters_from_where(
+                    {"path": ["dish_type"], "operator": "Equal", "valueString": "snack"}
                 )
+                results = recipe_collection.query.fetch_objects(filters=snack_filter, limit=100)
                 if not results.objects:
                     results = recipe_collection.query.fetch_objects(limit=100)
             except Exception:

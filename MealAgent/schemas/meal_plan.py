@@ -30,7 +30,17 @@ MEAL_PLAN_ITEM_SCHEMA = {
         Property(name="meal_type", data_type=DataType.TEXT),  # "breakfast", "lunch", "dinner", "snack"
         Property(name="recipe_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="servings", data_type=DataType.NUMBER),  # Portion multiplier
-        Property(name="actual_macros", data_type=DataType.TEXT),  # JSON string: {"kcal": float, "protein_g": float, ...}
+        # Actual macros for this slot; structured object for direct querying/aggregation
+        Property(
+            name="actual_macros",
+            data_type=DataType.OBJECT,
+            nested_properties=[
+                Property(name="kcal", data_type=DataType.NUMBER),
+                Property(name="protein_g", data_type=DataType.NUMBER),
+                Property(name="fat_g", data_type=DataType.NUMBER),
+                Property(name="carb_g", data_type=DataType.NUMBER),
+            ],
+        ),
     ],
     "vector_config": None,  # Non-vectorized
     "references": [

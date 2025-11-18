@@ -17,6 +17,50 @@ description: Define testing approach, test cases, and quality assurance for Meal
 
 ## Unit Tests
 
+### Component: API Routes (FastAPI)
+
+#### Auth Routes (`elysia/api/routes/auth.py`)
+- [ ] **Test: Signup creates UserAccount + UserManager entry**
+  - Input: POST `/auth/signup` with new email/password
+  - Expected: 200 response, user_id returned, UserAccount object stored in Weaviate
+  - Coverage: Happy path
+
+- [ ] **Test: Duplicate signup rejected**
+  - Input: POST `/auth/signup` twice with same email
+  - Expected: 400 response `"Email is already registered."`
+  - Coverage: Uniqueness enforcement
+
+- [ ] **Test: Login success updates last_login_at**
+  - Input: Existing email/password
+  - Expected: 200 response, user_id returned, `last_login_at` updated
+  - Coverage: Credential verification
+
+- [ ] **Test: Login invalid password**
+  - Input: Wrong password
+  - Expected: 401 response `"Invalid credentials."`
+  - Coverage: Failure path
+
+#### Profile REST Routes (`elysia/api/routes/profile.py`)
+- [ ] **Test: GET profile when none exists**
+  - Input: GET `/mealagent/profile/{user_id}`
+  - Expected: `{profile: null}`
+  - Coverage: Empty state
+
+- [ ] **Test: POST profile validates payload**
+  - Input: Missing required field (age)
+  - Expected: 400 response with validation message from `_validate_profile_payload`
+  - Coverage: Validation error
+
+- [ ] **Test: POST profile upsert**
+  - Input: Complete profile → POST twice with updated weight
+  - Expected: Created then updated (created_at preserved, updated_at refreshed)
+  - Coverage: Insert + update logic
+
+- [ ] **Test: GET profile returns stored document**
+  - Input: After upsert, GET endpoint
+  - Expected: JSON payload matches stored properties
+  - Coverage: Read path
+
 ### Component: Profile Tools
 
 #### ProfileCRUDTool (`tools/profile/profile_crud.py`)

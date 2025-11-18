@@ -8,6 +8,8 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
 
 def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) -> float:
     """
@@ -20,14 +22,10 @@ def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) ->
     if fdc_id:
         try:
             portion_collection = client.collections.get("FdcPortion")
-            portion_results = portion_collection.query.fetch_objects(
-                where={
-                    "path": ["fdc_id"],
-                    "operator": "Equal",
-                    "valueInt": int(fdc_id),
-                },
-                limit=10,
+            portion_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
             )
+            portion_results = portion_collection.query.fetch_objects(filters=portion_filter, limit=10)
             
             for portion_obj in portion_results.objects:
                 portion = portion_obj.properties

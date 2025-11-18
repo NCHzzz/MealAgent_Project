@@ -153,6 +153,32 @@ NUTRIENT_IDS = {
     1109: "vitamin_e_mg_100g",
 }
 
+# Optional: human-readable nutrient labels for FdcNutrient.nutrient_name
+NUTRIENT_LABELS = {
+    1008: "Energy (kcal)",
+    1003: "Protein",
+    1004: "Total fat",
+    1005: "Carbohydrate",
+    2000: "Sugars, total",
+    1079: "Fiber, total dietary",
+    1093: "Sodium",
+    1258: "Fatty acids, total saturated",
+    1087: "Calcium",
+    1089: "Iron",
+    1092: "Potassium",
+    1090: "Magnesium",
+    1095: "Zinc",
+    1106: "Vitamin A, RAE",
+    1175: "Vitamin B6",
+    1178: "Vitamin B12",
+    1165: "Thiamin (B1)",
+    1166: "Riboflavin (B2)",
+    1167: "Niacin (B3)",
+    1162: "Vitamin C",
+    1114: "Vitamin D",
+    1109: "Vitamin E",
+}
+
 # Default units per nutrient_id (per 100g)
 NUTRIENT_UNITS = {
     1008: "kcal",
@@ -267,7 +293,8 @@ def ingest_from_flat_csv(client, csv_path: str, batch_size: int = 1000):
                             "nutrient_id": nid_int,
                             "amount_100g": to_float(amt),
                             "unit": to_str(unit) or NUTRIENT_UNITS.get(nid_int, ""),
-                            "nutrient_name": NUTRIENT_IDS.get(nid_int),
+                            # Prefer human-readable label; fall back to internal field name if missing
+                            "nutrient_name": NUTRIENT_LABELS.get(nid_int, NUTRIENT_IDS.get(nid_int, "")),
                         }
                         batch_nut.add_object(properties=props, uuid=uuid_nutrient(fdc_id, int(nid)))
                         if batch_nut.number_errors > 200:

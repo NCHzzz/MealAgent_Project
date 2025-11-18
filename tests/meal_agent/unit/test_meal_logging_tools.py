@@ -129,8 +129,9 @@ async def test_meal_history_date_filtering(
     
     # Verify
     assert len(results) > 0
-    # Check that where clause was built with date filters
+    # Check that filters argument was provided
     assert collection.query.fetch_objects.called
     call_args = collection.query.fetch_objects.call_args
     assert call_args is not None
+    assert "filters" in call_args.kwargs
 

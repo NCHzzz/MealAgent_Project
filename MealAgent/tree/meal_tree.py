@@ -41,7 +41,7 @@ from elysia.objects import Result, Error, Status, Response
 from elysia.util.client import ClientManager
 from elysia.tree.tree import Tree
 from elysia.config import Settings
-from elysia.tools.text.text import CitedSummarizer
+from elysia.tools.text.text import CitedSummarizer, FakeTextResponse
 
 # Import all tools
 from MealAgent.tree.config import MEAL_AGENT_TOOLS
@@ -516,16 +516,51 @@ def build_meal_agent_tree(
     # cooking branch
     add_tool("cooking", "cook_mode_tool")
     
-    # explain branch: Register Elysia's built-in cited_summarize tool
-    # This tool reads from the entire environment and provides explanations with citations
-    # Per design doc: "cited_summarize (Elysia built-in) - Explanations with citations"
+    # explain branch: Register Elysia's built-in explanation tools
+    # - cited_summarize: explanations with citations, only available when environment is non-empty
+    # - text_response: fallback so the branch always has at least one available tool
     try:
         if "explain" in tree.decision_nodes:
             tree.add_tool(CitedSummarizer(), branch_id="explain")
-            logging.debug("MealAgent: successfully added cited_summarize tool to 'explain' branch")
+            tree.add_tool(FakeTextResponse(), branch_id="explain")
+            logging.debug(
+                "MealAgent: successfully added cited_summarize and text_response tools to 'explain' branch"
+            )
         else:
-            logging.warning("MealAgent: 'explain' branch does not exist, cannot register cited_summarize")
+            logging.warning(
+                "MealAgent: 'explain' branch does not exist, cannot register explanation tools"
+            )
     except Exception as e:
-        logging.error(f"MealAgent: failed to register cited_summarize to 'explain' branch: {e}")
+        logging.error(
+            f"MealAgent: failed to register explanation tools to 'explain' branch: {e}"
+        )
+
+    return tree
+
+
+def import_meal_agent_tree_from_json(json_data: dict) -> Tree:
+    """
+    Rehydrate a MealAgent-specific tree from saved JSON, ensuring all tools are registered.
+    """
+
+    settings = Settings.from_json(json_data["settings"])
+    tree = build_meal_agent_tree(
+        settings=settings,
+        user_id=json_data["user_id"],
+        conversation_id=json_data["conversation_id"],
+        style=json_data["tree_data"]["atlas"]["style"],
+        agent_description=json_data["tree_data"]["atlas"]["agent_description"],
+        end_goal=json_data["tree_data"]["atlas"]["end_goal"],
+        low_memory=json_data["low_memory"],
+        use_elysia_collections=json_data["use_elysia_collections"],
+    )
+
+    tree.returner.store = json_data["frontend_rebuild"]
+    tree.tree_data = TreeData.from_json(json_data["tree_data"])
+    tree.branch_initialisation = json_data["branch_initialisation"]
+    tree.tree_index = json_data.get("tree_index", tree.tree_index)
+    tree.store_retrieved_objects = json_data.get(
+        "store_retrieved_objects", tree.store_retrieved_objects
+    )
 
     return tree

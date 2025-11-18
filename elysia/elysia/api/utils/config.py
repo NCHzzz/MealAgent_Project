@@ -23,6 +23,7 @@ class Config:
         branch_initialisation: BranchInitType = "one_branch",
         use_elysia_collections: bool = True,
         tree_builder: Callable[..., Any] | None = None,
+        tree_loader: Callable[[dict], Any] | None = None,
     ):
 
         if id is None:
@@ -65,6 +66,7 @@ class Config:
         self.branch_initialisation: BranchInitType = branch_initialisation
         self.use_elysia_collections: bool = use_elysia_collections
         self.tree_builder = tree_builder
+        self.tree_loader = tree_loader
 
         use_meal_agent_default = (
             os.getenv("USE_MEAL_AGENT_TREE", "true").lower() == "true"
@@ -72,9 +74,13 @@ class Config:
 
         if self.tree_builder is None and use_meal_agent_default:
             try:
-                from MealAgent.tree.meal_tree import build_meal_agent_tree
+                from MealAgent.tree.meal_tree import (
+                    build_meal_agent_tree,
+                    import_meal_agent_tree_from_json,
+                )
 
                 self.tree_builder = build_meal_agent_tree
+                self.tree_loader = import_meal_agent_tree_from_json
 
                 if style_was_none:
                     self.style = "Friendly and helpful meal planning assistant"
