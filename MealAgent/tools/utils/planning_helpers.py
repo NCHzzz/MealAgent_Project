@@ -3,7 +3,14 @@ Helper functions for meal planning tools.
 Extracted from legacy tools to be shared across E2E tools.
 """
 
+from __future__ import annotations
+
+import json
+from datetime import datetime
 from typing import Dict, Any, List
+from uuid import uuid4
+
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 
 def _get_meal_macros(recipe: Dict[str, Any]) -> Dict[str, float]:
@@ -101,4 +108,107 @@ def _validate_constraints(
         "valid": len(violations) == 0,
         "violations": violations,
     }
+
+
+def _generate_plan_id(user_id: str | None = None) -> str:
+    prefix = f"{user_id}_" if user_id else ""
+    return f"{prefix}plan_{uuid4().hex[:12]}"
+
+
+def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    plan_type = plan.get("plan_type", "day")
+
+    def _append_meal_entries(meals: Dict[str, Any], day_index: int):
+        for meal_key, meal_data in meals.items():
+            recipe = meal_data.get("recipe", {})
+            if not isinstance(recipe, dict):
+                continue
+            recipe_id = recipe.get("food_id") or recipe.get("recipe_id")
+            if not recipe_id:
+                continue
+            servings = float(meal_data.get("servings", 1.0))
+            macros = _get_meal_macros(recipe)
+            scaled_macros = {
+                k: macros.get(k, 0.0) * servings for k in ["kcal", "protein_g", "fat_g", "carb_g"]
+            }
+            items.append(
+                {
+                    "day_index": day_index,
+                    "meal_type": meal_data.get("meal_type", meal_key),
+                    "recipe_id": str(recipe_id),
+                    "servings": servings,
+                    "actual_macros": json.dumps(scaled_macros),
+                }
+            )
+
+    if plan_type == "day":
+        _append_meal_entries(plan.get("meals", {}), day_index=0)
+        for snack in plan.get("snacks", []):
+            _append_meal_entries({snack.get("meal_type", "snack"): snack}, day_index=0)
+    else:
+        for day_data in plan.get("days", {}).values():
+            if not isinstance(day_data, dict):
+                continue
+            day_index = int(day_data.get("day_index", 0))
+            _append_meal_entries(day_data.get("meals", {}), day_index=day_index)
+            for snack in day_data.get("snacks", []):
+                _append_meal_entries({snack.get("meal_type", "snack"): snack}, day_index=day_index)
+
+    return items
+
+
+def sync_plan_to_weaviate(
+    plan: Dict[str, Any],
+    user_id: str,
+    client_manager,
+    start_date: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Upsert MealPlan + MealPlanItem records so downstream tools can rely on persisted data.
+    """
+    if not user_id:
+        return plan
+
+    client = client_manager.get_client()
+    plan_collection = client.collections.get("MealPlan")
+    item_collection = client.collections.get("MealPlanItem")
+
+    plan_type = plan.get("plan_type", "day")
+    plan_id = plan.get("plan_id") or _generate_plan_id(user_id)
+    created_at = plan.get("created_at") or datetime.utcnow().isoformat()
+    plan_start_date = plan.get("start_date") or start_date or datetime.utcnow().date().isoformat()
+
+    plan_payload = {
+        "plan_id": plan_id,
+        "user_id": user_id,
+        "plan_type": plan_type,
+        "start_date": plan_start_date,
+        "created_at": created_at,
+    }
+
+    plan_filter = build_filters_from_where(
+        {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
+    )
+    existing_plan = plan_collection.query.fetch_objects(filters=plan_filter, limit=1)
+    if existing_plan.objects:
+        plan_collection.data.update(uuid=existing_plan.objects[0].uuid, properties=plan_payload)
+    else:
+        plan_collection.data.insert(plan_payload)
+
+    items = _build_plan_items(plan)
+
+    if plan_filter:
+        existing_items = item_collection.query.fetch_objects(filters=plan_filter, limit=256)
+        for obj in existing_items.objects:
+            item_collection.data.delete_by_id(obj.uuid)
+
+    for item in items:
+        item_collection.data.insert({"plan_id": plan_id, **item})
+
+    plan["plan_id"] = plan_id
+    plan["user_id"] = user_id
+    plan["start_date"] = plan_start_date
+    plan["created_at"] = created_at
+    return plan
 

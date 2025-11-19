@@ -11,7 +11,6 @@ import EvalPage from "./pages/EvalPage";
 import FeedbackPage from "./pages/FeedbackPage";
 import ElysiaPage from "./pages/ElysiaPage";
 import DisplayPage from "./pages/DisplayPage";
-import ProfilePage from "./pages/ProfilePage";
 import { ToastContext } from "./components/contexts/ToastContext";
 import ConfirmationModal from "./components/dialog/ConfirmationModal";
 
@@ -29,7 +28,6 @@ export default function Home() {
       {currentPage === "feedback" && <FeedbackPage />}
       {currentPage === "elysia" && <ElysiaPage />}
       {currentPage === "display" && <DisplayPage />}
-      {currentPage === "profile" && <ProfilePage />}
     </div>
   );
 }

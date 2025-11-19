@@ -135,6 +135,7 @@ async def process_daily_planning_workflow(
     async for result in e2e_plan_tool(
         tree_data=tree_data,
         client_manager=client_manager,
+        user_id=user_id,
         **kwargs,
     ):
         if isinstance(result, Error):

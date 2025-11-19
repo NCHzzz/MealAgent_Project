@@ -228,7 +228,16 @@ async def _evaluate_field_statistics(
 
     # List (lengths)
     elif properties[property].endswith("[]"):
-        lengths = [len(obj[property]) for obj in sample_objects]
+        lengths = []
+        for obj in sample_objects:
+            value = obj.get(property) if isinstance(obj, dict) else None
+            if isinstance(value, (list, tuple, set)):
+                lengths.append(len(value))
+            elif value is not None:
+                # Some collections store nulls or singular values even when the schema
+                # declares an array. Fall back to treating any non-null, non-iterable
+                # value as length 1 to avoid crashing the preprocessor.
+                lengths.append(1)
 
         if len(lengths) == 0:
             out["range"] = None

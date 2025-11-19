@@ -15,11 +15,11 @@ from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 # RDA (Recommended Daily Allowance) values for common micronutrients
 # Source: USDA Dietary Guidelines
 DEFAULT_RDAs = {
-    "calcium_mg": 1000.0,  # mg per day
-    "iron_mg": 18.0,  # mg per day (adult female), 8mg for adult male
-    "potassium_mg": 2600.0,  # mg per day (adult female), 3400mg for adult male
-    "vitamin_c_mg": 90.0,  # mg per day (adult male), 75mg for adult female
-    "vitamin_a_IU": 3000.0,  # IU per day (adult male), 2333 IU for adult female
+    "calcium_mg": 1000.0,
+    "iron_mg": 18.0,
+    "potassium_mg": 2600.0,
+    "vitamin_c_mg": 90.0,
+    "vitamin_a_rae_ug": 900.0,
 }
 
 
@@ -108,15 +108,14 @@ async def micros_tool(
         if profile_results and profile_results[0]["objects"]:
             profile = profile_results[0]["objects"][0]
             gender = profile.get("gender", "").lower()
-            # Adjust RDAs based on gender (simplified)
             if gender == "female":
-                rdas["iron_mg"] = 18.0  # Higher for females
+                rdas["iron_mg"] = 18.0
                 rdas["vitamin_c_mg"] = 75.0
-                rdas["vitamin_a_IU"] = 2333.0
+                rdas["vitamin_a_rae_ug"] = 700.0
             elif gender == "male":
                 rdas["iron_mg"] = 8.0
                 rdas["vitamin_c_mg"] = 90.0
-                rdas["vitamin_a_IU"] = 3000.0
+                rdas["vitamin_a_rae_ug"] = 900.0
         
         # Step 3: Aggregate micronutrients from plan
         yield Response("Aggregating micronutrients from all meals...")
@@ -152,7 +151,7 @@ async def micros_tool(
                                     ("iron_mg_100g", "iron_mg"),
                                     ("potassium_mg_100g", "potassium_mg"),
                                     ("vitamin_c_mg_100g", "vitamin_c_mg"),
-                                    ("vitamin_a_iu_100g", "vitamin_a_IU"),
+                                    ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
                                 ]
                                 for field, key in micro_fields:
                                     if field in fdc_food:
@@ -184,7 +183,7 @@ async def micros_tool(
                                         ("iron_mg_100g", "iron_mg"),
                                         ("potassium_mg_100g", "potassium_mg"),
                                         ("vitamin_c_mg_100g", "vitamin_c_mg"),
-                                        ("vitamin_a_iu_100g", "vitamin_a_IU"),
+                                        ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
                                     ]
                                     for field, key in micro_fields:
                                         if field in fdc_food:
@@ -249,7 +248,7 @@ async def micros_tool(
             "iron_mg": "iron_mg_100g",
             "potassium_mg": "potassium_mg_100g",
             "vitamin_c_mg": "vitamin_c_mg_100g",
-            "vitamin_a_IU": "vitamin_a_iu_100g",
+            "vitamin_a_rae_ug": "vitamin_a_rae_ug_100g",
         }
         
         all_suggestions = []

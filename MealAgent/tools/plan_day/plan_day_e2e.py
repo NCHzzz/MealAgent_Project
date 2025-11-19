@@ -1,5 +1,6 @@
 from typing import AsyncGenerator, Dict, Any, List
 import logging
+from datetime import datetime
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -10,6 +11,7 @@ from MealAgent.tools.utils.planning_helpers import (
     _get_meal_macros,
     _validate_macro_targets,
     _validate_constraints,
+    sync_plan_to_weaviate,
 )
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 from MealAgent.utils.nutrition import build_default_macro_targets
@@ -119,6 +121,9 @@ async def plan_day_e2e_tool(
     query_text: str = "",
     collection_name: str = "Recipe",
     macro_tolerance_percent: float = 0.15,
+    user_id: str | None = None,
+    plan_id: str | None = None,
+    start_date: str | None = None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -146,6 +151,11 @@ async def plan_day_e2e_tool(
     yield Response("Planning daily meals...")
 
     try:
+        if not user_id:
+            profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+            if profile_results and profile_results[0]["objects"]:
+                user_id = profile_results[0]["objects"][0].get("user_id")
+
         # Step 1: Resolve targets (for validation)
         targets = None
         macro_results = tree_data.environment.find("macro_calc_tool", "targets")
@@ -163,10 +173,9 @@ async def plan_day_e2e_tool(
 
         # Step 2: Read constraints filters (for validation)
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
-        filters_metadata = None
+        filters_metadata: Dict[str, Any] | None = None
         if filters_results and filters_results[0]["objects"]:
-            filters_obj = filters_results[0]["objects"][0]
-            filters_metadata = filters_results[0].metadata if hasattr(filters_results[0], "metadata") else {}
+            filters_metadata = filters_results[0].get("metadata") or {}
             yield Response("Constraints filters found")
         else:
             yield Response("No constraints filters found; plan will be assembled without constraint validation")
@@ -282,8 +291,23 @@ async def plan_day_e2e_tool(
             "meals": plan,
             "total_macros": total_macros,
             "validation": validation,
-            "created_at": None,
+            "created_at": datetime.utcnow().isoformat(),
         }
+        if plan_id:
+            plan_output["plan_id"] = plan_id
+        if start_date:
+            plan_output["start_date"] = start_date
+
+        if user_id:
+            plan_output = sync_plan_to_weaviate(
+                plan_output,
+                user_id=user_id,
+                client_manager=client_manager,
+                start_date=plan_output.get("start_date"),
+            )
+            yield Response(f"Persisted plan {plan_output.get('plan_id')} for user {user_id}")
+        else:
+            yield Response("User ID missing – plan stored in memory only.")
 
         # Stream response first for immediate feedback
         status_msg = "✓" if validation["valid"] else "⚠"
@@ -302,6 +326,7 @@ async def plan_day_e2e_tool(
                 "valid": validation["valid"],
                 "macro_violations": len(validation.get("macro_validation", {}).get("violations", [])),
                 "constraint_violations": len(validation.get("constraint_validation", {}).get("violations", [])),
+                "plan_id": plan_output.get("plan_id"),
             },
             payload_type="generic",
             display=True,

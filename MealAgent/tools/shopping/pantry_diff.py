@@ -2,6 +2,8 @@
 Subtract pantry items from shopping list to get final shopping list.
 """
 from typing import AsyncGenerator, Dict, Any, List
+from datetime import datetime
+from uuid import uuid4
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -238,7 +240,9 @@ async def pantry_diff_tool(
     # Read plan from E2E tools (prefer daily, fallback to weekly)
     plan = None
     plan_source = None
-    
+    plan_id = None
+    plan_user_id = None
+
     day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
     if day_plan_results and day_plan_results[0]["objects"]:
         plan = day_plan_results[0]["objects"][0]
@@ -251,6 +255,8 @@ async def pantry_diff_tool(
         else:
             yield Error("No plan found. Run plan_day_e2e_tool or plan_week_e2e_tool first.")
             return
+    plan_id = plan.get("plan_id")
+    plan_user_id = plan.get("user_id")
     
     # Extract shopping items from plan
     shopping_items = _extract_ingredients_from_plan(plan)
@@ -258,15 +264,18 @@ async def pantry_diff_tool(
 
     # Read pantry state
     pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
-    if not pantry_results or not pantry_results[0].objects:
+    if not pantry_results or not pantry_results[0].get("objects"):
         yield Error("Pantry state not found. Run pantry_crud_tool first.")
         return
 
-    pantry_state = pantry_results[0].objects[0]
+    pantry_state = pantry_results[0]["objects"][0]
     pantry_items = pantry_state.get("items", [])
 
     try:
         client = client_manager.get_client()
+        shopping_list_collection = client.collections.get("ShoppingList")
+        shopping_item_collection = client.collections.get("ShoppingItem")
+
         # Build pantry lookup (by normalized ingredient name)
         pantry_lookup: Dict[str, Dict[str, Any]] = {}
         for item in pantry_items:
@@ -334,6 +343,47 @@ async def pantry_diff_tool(
             "warnings": warnings,
         }
 
+        list_id = f"{plan_id or user_id}_shopping_{uuid4().hex[:8]}"
+        shopping_payload = {
+            "list_id": list_id,
+            "user_id": plan_user_id or user_id,
+            "plan_id": plan_id,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+        if plan_id:
+            existing_list_filter = build_filters_from_where(
+                {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
+            )
+            existing_lists = shopping_list_collection.query.fetch_objects(
+                filters=existing_list_filter, limit=5
+            )
+            for lst in existing_lists.objects:
+                list_filter = build_filters_from_where(
+                    {"path": ["list_id"], "operator": "Equal", "valueString": lst.properties.get("list_id")}
+                )
+                existing_items = shopping_item_collection.query.fetch_objects(
+                    filters=list_filter, limit=256
+                )
+                for obj in existing_items.objects:
+                    shopping_item_collection.data.delete_by_id(obj.uuid)
+                shopping_list_collection.data.delete_by_id(lst.uuid)
+
+        shopping_list_collection.data.insert(shopping_payload)
+        for item in final_items:
+            shopping_item_collection.data.insert(
+                {
+                    "list_id": list_id,
+                    "ingredient_name": item.get("ingredient_name"),
+                    "quantity": float(item.get("quantity", 0.0)),
+                    "unit": item.get("unit", "g"),
+                    "category": item.get("category", "general"),
+                    "purchased": False,
+                }
+            )
+
+        diff_output["shopping_list_id"] = list_id
+
         yield Result(
             name="diff",
             objects=[diff_output],
@@ -362,7 +412,10 @@ async def pantry_diff_tool(
         warning_msg = ""
         if warnings:
             warning_msg = f" Warnings: {len(warnings)} items have excess pantry stock."
-        yield Response(f"Shopping list updated: {len(final_items)} items needed (removed {len(shopping_items) - len(final_items)} from pantry)")
+        yield Response(
+            f"Shopping list updated: {len(final_items)} items needed (removed {len(shopping_items) - len(final_items)} from pantry)"
+        )
+        yield Response(f"Shopping list persisted as {list_id}")
 
     except Exception as e:
         yield Error(f"Pantry diff calculation failed for user {user_id}: {str(e)}")

@@ -11,6 +11,7 @@ from elysia import tool
 from MealAgent.tools.utils.planning_helpers import (
     _get_meal_macros,
     _validate_macro_targets,
+    sync_plan_to_weaviate,
 )
 
 
@@ -160,6 +161,8 @@ async def plan_week_e2e_tool(
     start_date: str | None = None,
     macro_tolerance_percent: float = 0.15,
     min_variety_score: float = 50.0,
+    user_id: str | None = None,
+    plan_id: str | None = None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -189,6 +192,11 @@ async def plan_week_e2e_tool(
     yield Response("Planning weekly meals (21 meals over 7 days)...")
     
     try:
+        if not user_id:
+            profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+            if profile_results and profile_results[0]["objects"]:
+                user_id = profile_results[0]["objects"][0].get("user_id")
+
         # Step 1: Resolve targets (for validation)
         targets = None
         macro_results = tree_data.environment.find("macro_calc_tool", "targets")
@@ -202,10 +210,9 @@ async def plan_week_e2e_tool(
         
         # Step 2: Read constraints filters (for validation)
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
-        filters_metadata = None
+        filters_metadata: Dict[str, Any] | None = None
         if filters_results and filters_results[0]["objects"]:
-            filters_obj = filters_results[0]["objects"][0]
-            filters_metadata = filters_results[0].metadata if hasattr(filters_results[0], "metadata") else {}
+            filters_metadata = filters_results[0].get("metadata") or {}
             yield Response("Constraints filters found")
         else:
             yield Response("No constraints filters found; plan will be assembled without constraint validation")
@@ -412,6 +419,19 @@ async def plan_week_e2e_tool(
             "variety_score": variety_score,
             "created_at": datetime.now().isoformat(),
         }
+        if plan_id:
+            plan_output["plan_id"] = plan_id
+
+        if user_id:
+            plan_output = sync_plan_to_weaviate(
+                plan_output,
+                user_id=user_id,
+                client_manager=client_manager,
+                start_date=plan_output["start_date"],
+            )
+            yield Response(f"Persisted weekly plan {plan_output.get('plan_id')} for user {user_id}")
+        else:
+            yield Response("User ID missing – weekly plan stored in memory only.")
         
         # Stream response first for immediate feedback
         status_msg = "✓" if validation["valid"] else "⚠"
@@ -432,6 +452,7 @@ async def plan_week_e2e_tool(
                 "variety_score": variety_score,
                 "macro_violations": len(validation.get("macro_validation", {}).get("violations", [])),
                 "constraint_violations": len(validation.get("constraint_validation", {}).get("violations", [])),
+                "plan_id": plan_output.get("plan_id"),
             },
             payload_type="generic",
             display=True,

@@ -65,9 +65,7 @@ graph TD
 
 ### Tree Integration (Elysia)
 
-**Critical Architecture Point**: All business workflows still run through the Elysia tree on `/ws/query`, but a **narrow REST surface** now exists for user onboarding:
-1. `/auth/signup` + `/auth/login` (FastAPI) provision `UserAccount` documents and hydrate `UserManager`.
-2. `/mealagent/profile/{user_id}` lets the frontend collect the initial `UserProfile` via REST; once the profile exists, every follow-up change flows through the tree tools (per [Creating Tools](https://weaviate.github.io/elysia/creating_tools/) and [Advanced Tool Construction](https://weaviate.github.io/elysia/Advanced/advanced_tool_construction/)).
+**Critical Architecture Point**: MealAgent does NOT use custom REST API endpoints. All functionality is implemented as tools registered to an Elysia Tree, accessed through standard WebSocket endpoints (`/ws/query`).
 
 - A dedicated MealAgent Tree is created and populated with branches matching feature areas.
 - Tools are registered into branches so Elysia's decision agent (LLM) can automatically select and orchestrate execution based on natural language queries.
@@ -284,29 +282,7 @@ Note: We intentionally keep only the CSV fields to reduce redundancy and simplif
 }
 ```
 
-#### UserAccount (Auth Credentials)
-```python
-{
-    "class": "UserAccount",
-    "properties": [
-        {"name": "user_id", "dataType": ["text"], "indexFilterable": True},
-        {"name": "email", "dataType": ["text"], "indexFilterable": True},
-        {"name": "password_hash", "dataType": ["text"]},
-        {"name": "created_at", "dataType": ["date"]},
-        {"name": "last_login_at", "dataType": ["date"]}
-    ],
-    "vectorizer": "none"
-}
-```
-
-Stores account-level credentials so that signup/login can happen over REST (hashed passwords with bcrypt). `user_id` links to `UserProfile`/MealAgent data.
-
 **Note**: NutrientTarget properties are embedded directly in UserProfile for simplicity. This avoids the need for separate collection queries and maintains data locality.
-
-#### Data Availability & Tool Ownership
-- **Source CSV coverage**: Only `Recipe`, `FdcFood`, `FdcNutrient`, and `FdcPortion` are populated during ETL (ingests `recipe.csv` + `FDC_data.csv`). These collections are immutable except for cached fields (`macros_per_serving`, `ingredient_fdc_map`).
-- **Runtime-owned collections**: `UserProfile`, `UserAccount`, `MealPlan`, `MealPlanItem`, `MealLogEntry`, `Pantry`, `PantryItem`, `ShoppingList`, `ShoppingItem` start empty and are **entirely created/updated/deleted by tools or REST onboarding**. This keeps the schema lean while letting tools persist state as prescribed in [Environment](https://weaviate.github.io/elysia/Advanced/environment/) and [Custom Objects](https://weaviate.github.io/elysia/Advanced/custom_objects/).
-- **CRUD responsibilities**: Every tool that mutates a collection is documented below. All property names listed here are validated against the corresponding schema modules under `MealAgent/schemas/*.py`, ensuring parity between documentation and code.
 
 ### Data Relationships
 
@@ -674,30 +650,25 @@ sequenceDiagram
 
 ### Elysia WebSocket-Based Communication
 
-Operational workflows (search → plan → log → optimize) still run entirely through the Elysia tree on `/ws/query`, keeping execution observable through Environment snapshots and payload logs.
+MealAgent does **NOT** use custom REST API endpoints. Instead, all interactions flow through Elysia's standard WebSocket endpoints, where the Tree orchestrates tool execution based on natural language queries.
 
 #### Standard Elysia WebSocket Endpoints
 
+All MealAgent functionality is accessed through Elysia's existing WebSocket infrastructure:
+
 ```
-WS     /ws/query        # Main Tree execution stream (all MealAgent queries)
+WS     /ws/query             # Main Tree execution stream (all MealAgent queries)
 ```
 
+**Note**: MealAgent uses only the `/ws/query` endpoint. Other endpoints (`/ws/processor`, `/ws/init`) are Elysia infrastructure endpoints but not used by MealAgent's standard workflow.
+
 **Key Architecture Points:**
-- **Natural language interface**: Users send queries like "Create a meal plan for today" or "Log that I ate chicken salad".
+ **Natural language interface**: Users send queries like "Create a meal plan for today" or "Log that I ate chicken salad".
 - **Tree orchestration**: The Elysia decision tree automatically selects and executes the appropriate tools based on the query ([Tree Reference](https://weaviate.github.io/elysia/Reference/Tree/)).
 - **Streaming responses**: All tool outputs (Text, Result, Error) are streamed back via WebSocket per [Payload Formats](https://weaviate.github.io/elysia/API/payload_formats/).
 - **Managers & clients**: `/ws/query` delegates to `UserManager.process_tree`, which instantiates/loads `TreeManager` + `ClientManager` per user as described in [User & Tree Managers](https://weaviate.github.io/elysia/API/user_and_tree_managers/).
 
 #### WebSocket Message Format (Elysia Standard)
-
-### REST Endpoints (Auth + Profile Onboarding)
-
-While all operational MealAgent tools still run through `/ws/query`, two REST entry points were added:
-
-- `POST /auth/signup`, `POST /auth/login`: Create/login accounts backed by `UserAccount` and hydrate `UserManager`.
-- `GET/POST /mealagent/profile/{user_id}`: Initial profile onboarding over HTTP; subsequent edits at runtime still happen through the WebSocket tools (`profile_crud_tool`).
-
-Frontend uses these routes for first-time signup/log-in and for the required profile setup page, after which all planning/logging flows reuse the existing WebSocket orchestration.
 
 **Client → Server:**
 ```json

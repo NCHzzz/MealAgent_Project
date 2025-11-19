@@ -10,6 +10,7 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.planning_helpers import sync_plan_to_weaviate
 
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 
@@ -59,6 +60,8 @@ async def substitute_tool(
     top_k: int = 10,
     auto_apply: bool = False,  # If True, automatically apply best substitute
     recalculate_macros: bool = True,
+    user_id: str | None = None,
+    plan_id: str | None = None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -198,7 +201,6 @@ async def substitute_tool(
         exclude_allergens = []
         plan = None
         plan_source = None
-        
         day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
         if day_plan_results and day_plan_results[0]["objects"]:
             plan = copy.deepcopy(day_plan_results[0]["objects"][0])
@@ -208,12 +210,15 @@ async def substitute_tool(
             if week_plan_results and week_plan_results[0]["objects"]:
                 plan = copy.deepcopy(week_plan_results[0]["objects"][0])
                 plan_source = "plan_week_e2e_tool"
+        plan_user_id = plan.get("user_id") if plan else None
+        if plan and (plan.get("plan_id") or plan_id):
+            plan["plan_id"] = plan.get("plan_id") or plan_id
         
         # Read constraints for allergen checks
         if plan:
             filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
             if filters_results and filters_results[0]["objects"]:
-                filters_metadata = filters_results[0].metadata if hasattr(filters_results[0], "metadata") else {}
+                filters_metadata = filters_results[0].get("metadata") or {}
                 exclude_allergens = filters_metadata.get("exclude_allergens", [])
         
         # Filter suggestions by allergens (if constraints available)
@@ -380,6 +385,15 @@ async def substitute_tool(
                     "carb_g": total_macros["carb_g"] / 7.0,
                 }
             plan["total_macros"] = total_macros
+
+            persist_user_id = plan_user_id or user_id
+            if persist_user_id:
+                plan = sync_plan_to_weaviate(
+                    plan,
+                    user_id=persist_user_id,
+                    client_manager=client_manager,
+                    start_date=plan.get("start_date"),
+                )
             
             yield Result(
                 name="updated_plan",
@@ -390,6 +404,7 @@ async def substitute_tool(
                     "original_fdc_id": original_fdc_id,
                     "substitute_fdc_id": target_substitute_fdc_id,
                     "macros_recalculated": macros_recalculated,
+                    "plan_id": plan.get("plan_id"),
                 },
                 payload_type="generic",
                 display=True,

@@ -34,8 +34,28 @@ USER_PROFILE_SCHEMA = {
         Property(name="protein_g", data_type=DataType.NUMBER),  # Daily protein target
         Property(name="fat_g", data_type=DataType.NUMBER),  # Daily fat target
         Property(name="carb_g", data_type=DataType.NUMBER),  # Daily carb target
-        # Structured micronutrient targets for code/tools (stored as JSON-like object in Weaviate 4.x)
-        Property(name="micronutrient_targets", data_type=DataType.OBJECT),
+        Property(
+            name="micronutrient_targets",
+            data_type=DataType.OBJECT,
+            nested_properties=[
+                # Vitamins
+                Property(name="vitamin_c_mg", data_type=DataType.NUMBER),
+                Property(name="vitamin_d_ug", data_type=DataType.NUMBER),
+                Property(name="vitamin_e_mg", data_type=DataType.NUMBER),
+                Property(name="vitamin_a_rae_ug", data_type=DataType.NUMBER),
+                Property(name="vitamin_b6_mg", data_type=DataType.NUMBER),
+                Property(name="vitamin_b12_ug", data_type=DataType.NUMBER),
+                Property(name="thiamin_b1_mg", data_type=DataType.NUMBER),
+                Property(name="riboflavin_b2_mg", data_type=DataType.NUMBER),
+                Property(name="niacin_b3_mg", data_type=DataType.NUMBER),
+                # Minerals
+                Property(name="calcium_mg", data_type=DataType.NUMBER),
+                Property(name="iron_mg", data_type=DataType.NUMBER),
+                Property(name="potassium_mg", data_type=DataType.NUMBER),
+                Property(name="magnesium_mg", data_type=DataType.NUMBER),
+                Property(name="zinc_mg", data_type=DataType.NUMBER),
+            ],
+        ),  # JSON string: {"vitamin_c_mg": 90, "iron_mg": 18, ...}
         
         # Metadata
         Property(name="created_at", data_type=DataType.DATE),

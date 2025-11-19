@@ -11,7 +11,7 @@ from elysia.util.client import ClientManager
 from elysia import tool
 
 
-from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+from MealAgent.tools.utils.planning_helpers import _get_meal_macros, sync_plan_to_weaviate
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 
@@ -79,6 +79,8 @@ async def gap_fill_tool(
     client_manager: ClientManager,
     auto_apply: bool = False,  # If True, automatically apply best snack suggestion
     top_k: int = 5,  # Number of snack suggestions to generate
+    user_id: str | None = None,
+    plan_id: str | None = None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -122,6 +124,11 @@ async def gap_fill_tool(
             else:
                 yield Error("No plan found. Run plan_day_e2e_tool or plan_week_e2e_tool first.")
                 return
+        plan_user_id = plan.get("user_id") or user_id
+        if plan_id or plan.get("plan_id"):
+            plan["plan_id"] = plan.get("plan_id") or plan_id
+        else:
+            plan_id = None
         
         # Step 2: Read targets
         macro_results = tree_data.environment.find("macro_calc_tool", "targets")
@@ -248,7 +255,6 @@ async def gap_fill_tool(
                         plan["snacks"] = []
                     plan["snacks"].append(snack_meal)
                 elif plan.get("plan_type") == "week":
-                    # Add to first day (or could be smarter about which day)
                     sorted_days = sorted(plan.get("days", {}).keys())
                     if sorted_days:
                         target_day_key = sorted_days[0]
@@ -268,6 +274,14 @@ async def gap_fill_tool(
                         "carb_g": updated_macros["carb_g"] / 7.0,
                     }
                 
+                if plan_user_id:
+                    plan = sync_plan_to_weaviate(
+                        plan,
+                        user_id=plan_user_id,
+                        client_manager=client_manager,
+                        start_date=plan.get("start_date"),
+                    )
+
                 yield Result(
                     name="updated_plan",
                     objects=[plan],
@@ -275,6 +289,7 @@ async def gap_fill_tool(
                         "plan_type": plan.get("plan_type"),
                         "snack_added": True,
                         "snack_name": best_snack.get("dish_name", ""),
+                        "plan_id": plan.get("plan_id"),
                     },
                     payload_type="generic",
                     display=True,

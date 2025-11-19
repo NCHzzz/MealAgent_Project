@@ -39,7 +39,6 @@ import dynamic from "next/dynamic";
 import { Separator } from "@/components/ui/separator";
 import { CollectionContext } from "../components/contexts/CollectionContext";
 import TreeSettingsView from "../components/configuration/TreeSettingsView";
-import ProfileOnboardingDialog from "../components/profile/ProfileOnboardingDialog";
 
 const AbstractSphereScene = dynamic(
   () => import("@/app/components/threejs/AbstractSphere"),
@@ -199,9 +198,7 @@ export default function ChatPage() {
   }
 
   return (
-    <>
-      <ProfileOnboardingDialog userId={id} />
-      <div className="flex flex-col w-full h-full items-center justify-start gap-3">
+    <div className="flex flex-col w-full h-full items-center justify-start gap-3">
       <div className="flex w-full justify-start items-center lg:sticky z-20 top-0 lg:p-0 p-4 gap-5 bg-background">
         {currentConversation != null && (
           <DropdownMenu>
@@ -441,6 +438,5 @@ export default function ChatPage() {
       ) : null}
       {showRateLimitDialog && <RateLimitDialog />}
     </div>
-    </>
   );
 }
