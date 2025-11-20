@@ -201,9 +201,32 @@ class TreeManager:
             (list): A list of dictionaries, each containing a frontend payload that was used to generate the tree.
                 The list is ordered by the time the payload was originally sent to the frontend (at the time it was saved).
         """
-        tree = await Tree.import_from_weaviate(
-            "ELYSIA_TREES__", conversation_id, client_manager
-        )
+        tree_loader = getattr(self.config, "tree_loader", None)
+
+        if callable(tree_loader):
+            async with client_manager.connect_to_async_client() as client:
+
+                if not await client.collections.exists("ELYSIA_TREES__"):
+                    raise ValueError(
+                        "Collection 'ELYSIA_TREES__' does not exist in this Weaviate instance."
+                    )
+
+                collection = client.collections.get("ELYSIA_TREES__")
+                uuid = generate_uuid5(conversation_id)
+                response = await collection.query.fetch_object_by_id(uuid)
+
+            if response is None:
+                raise ValueError(
+                    f"No tree found for conversation id '{conversation_id}' in collection 'ELYSIA_TREES__'."
+                )
+
+            json_data_str = response.properties["tree"]
+            json_data = json.loads(json_data_str)  # type: ignore
+            tree = tree_loader(json_data)
+        else:
+            tree = await Tree.import_from_weaviate(
+                "ELYSIA_TREES__", conversation_id, client_manager
+            )
         if conversation_id not in self.trees:
             self.trees[conversation_id] = {
                 "tree": None,

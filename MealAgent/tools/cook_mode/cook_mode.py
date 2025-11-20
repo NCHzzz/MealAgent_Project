@@ -157,7 +157,7 @@ def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> D
     return None
 
 
-@tool(end=True)
+@tool(end=False)
 async def cook_mode_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
@@ -169,9 +169,9 @@ async def cook_mode_tool(
     """
     Produce step-by-step cooking guidance for a recipe and stream steps.
 
-    **IMPORTANT: This tool can END the conversation** after successfully providing cooking instructions.
-    When this tool completes successfully, the user's request for a recipe has been FULLY FULFILLED.
-    After this tool completes, you should set `end_actions=True` to stop further processing.
+    This tool delivers the full cooking workflow (steps + optional tips).
+    After it finishes, the explain branch (cited_summarize) should be invoked
+    to provide a natural-language recap with citations before ending.
 
     If cooking guidance has already been provided (cook_mode_tool.completed exists), this tool will skip execution.
 
@@ -185,15 +185,14 @@ async def cook_mode_tool(
     Environment writes:
       - cook_mode_tool.steps: [{ food_id, dish_name, steps: [...] }]
       - cook_mode_tool.completed: [{ food_id, timestamp }] - **SIGNALS TASK COMPLETION**
-      - cook_mode_tool.final_summary: [{ title, text }] - **INDICATES FULL DELIVERY, SET end_actions=True**
-      - cook_mode_tool.next_action_hint: [{ suggested_action: "end", reason: "primary goal completed" }] - **EXPLICIT HINT TO END**
+      - cook_mode_tool.final_summary: [{ title, text }] - signals cooking guidance is complete
+      - cook_mode_tool.next_action_hint: [{ suggested_action: "explain", reason: "summarize cooking result" }] - tells agent to run explain branch
 
     Decision hints for LLM:
-      - **CRITICAL**: If cook_mode_tool.completed exists, the cooking request is ALREADY FULFILLED. Set `end_actions=True` immediately.
-      - **CRITICAL**: If cook_mode_tool.final_summary is present, the cooking guidance is FULLY DELIVERED. Set `end_actions=True` to stop.
-      - **CRITICAL**: If cook_mode_tool.next_action_hint suggests "end", the primary goal is COMPLETE. Set `end_actions=True`.
+      - If cook_mode_tool.completed exists, the cooking request is ALREADY FULFILLED.
+      - If cook_mode_tool.final_summary is present, cooking guidance is done; run explain branch for recap.
+      - If cook_mode_tool.next_action_hint suggests "explain", call the explain branch (cited_summarize) before ending.
       - If cook_mode_tool.steps is present, cooking guidance has been provided successfully.
-      - This tool has `end=True` flag, meaning it can terminate the conversation when it completes successfully.
     """
     logging.info("cook_mode_tool: start (food_id=%s)", food_id)
     
@@ -209,37 +208,45 @@ async def cook_mode_tool(
                 steps_data = steps_results[0]["objects"][0]
                 dish = steps_data.get("dish_name", "the dish")
                 steps = steps_data.get("steps", [])
+                # Re-emit steps for frontend display
+                yield Result(
+                    name="steps",
+                    objects=[steps_data],
+                    metadata={"steps_count": len(steps) if isinstance(steps, list) else 0, "tool": "cook_mode_tool"},
+                    payload_type="cooking_steps",
+                    display=True,
+                )
                 yield Result(
                     name="final_summary",
                     objects=[{
                         "title": f"Cooking instructions for {dish}",
-                        "text": f"Cooking guidance has already been provided for {dish}. You can start cooking now. **TASK ALREADY COMPLETE: Set end_actions=True immediately.**",
+                        "text": f"Cooking guidance has already been provided for {dish}. Call the explain branch if a recap is needed before ending.",
                     }],
                     metadata={
                         "dish_name": dish, 
                         "steps_count": len(steps) if isinstance(steps, list) else 0,
                         "task_complete": True,
-                        "should_end": True,
+                        "should_explain": True,
                         "already_completed": True,
                     },
                     payload_type="generic",
-                    display=True,
+                    display=False,  # Internal signal for decision agent only, not for user display
                 )
                 yield Result(
                     name="next_action_hint",
                     objects=[{
-                        "suggested_action": "end", 
-                        "reason": "primary goal already completed - cooking instructions were already provided",
-                        "instruction": "Set end_actions=True immediately. Do not call any more tools.",
+                        "suggested_action": "explain", 
+                        "reason": "cooking instructions already exist - provide a short explanation before closing",
+                        "instruction": "Call the explain branch (cited_summarize) to recap the recipe, then decide whether to end.",
                     }],
                     metadata={
-                        "suggested_action": "end",
+                        "suggested_action": "explain",
                         "task_complete": True,
-                        "must_end": True,
+                        "should_explain": True,
                         "already_completed": True,
                     },
                     payload_type="generic",
-                    display=True,
+                    display=False,  # Internal signal for decision agent only, not for user display
                 )
         except Exception:
             pass
@@ -266,6 +273,7 @@ async def cook_mode_tool(
         logging.error("cook_mode_tool: no steps extracted (food_id=%s)", recipe.get("food_id"))
         yield Error("Could not extract steps from recipe")
         return
+    dish_name = str(recipe.get("dish_name") or "the dish")
 
     # Stream steps FIRST for immediate user feedback, then emit Result objects
     # This ensures frontend receives streaming text immediately
@@ -279,7 +287,22 @@ async def cook_mode_tool(
     # Stream completion message
     yield Response("Cooking guidance complete.")
     
+    # Emit Result objects FIRST to ensure cooking steps display appears before tips
+    # This ensures the main recipe component is shown before supplementary tips
+    yield Result(
+        name="steps",
+        objects=[{
+            "food_id": str(recipe.get("food_id") or ""), 
+            "dish_name": str(recipe.get("dish_name") or ""), 
+            "steps": steps
+        }],
+        metadata={"steps_count": len(steps), "tool": "cook_mode_tool"},
+        payload_type="cooking_steps",
+        display=True,
+    )
+    
     # Optional polish with ElysiaChainOfThought for a brief intro/tips
+    # These are supplementary tips shown AFTER the main recipe component
     if base_lm and polish:
         try:
             class CookIntroPrompt(dspy.Signature):
@@ -317,51 +340,41 @@ async def cook_mode_tool(
                 yield Response(tips_text)
         except Exception as e:
             logging.debug(f"cook_mode_tool: CoT polish skipped due to error: {str(e)}")
-
-    # Emit Result objects AFTER streaming text for data consistency
-    # This ensures frontend has already received streaming text
-    yield Result(
-        name="steps",
-        objects=[{"food_id": recipe.get("food_id"), "dish_name": recipe.get("dish_name"), "steps": steps}],
-        metadata={"steps_count": len(steps), "tool": "cook_mode_tool"},
-        payload_type="generic",
-        display=True,
-    )
     # Provide a concise document-style summary to help the decision agent conclude
     # CRITICAL: These signals tell the decision agent that the task is COMPLETE
     try:
-        dish = str(recipe.get("dish_name") or "the dish")
+        dish = dish_name
         steps_count = len(steps)
         yield Result(
             name="final_summary",
             objects=[{
                 "title": f"Cooking instructions for {dish}",
-                "text": f"Provided {steps_count} step-by-step instructions for {dish}. You can start cooking now. **TASK COMPLETE: Set end_actions=True to stop processing.**",
+                "text": f"Provided {steps_count} step-by-step instructions for {dish}. Run the explain branch for a brief recap before closing.",
             }],
             metadata={
                 "dish_name": dish, 
                 "steps_count": steps_count,
                 "task_complete": True,
-                "should_end": True,
+                "should_explain": True,
             },
             payload_type="generic",
-            display=True,
+            display=False,  # Internal signal for decision agent only, not for user display
         )
-        # Explicit hint to decision agent: END THE SESSION
+        # Hint to decision agent: run explanation before ending
         yield Result(
             name="next_action_hint",
             objects=[{
-                "suggested_action": "end", 
-                "reason": "primary goal completed - cooking instructions fully delivered",
-                "instruction": "Set end_actions=True immediately. The user's request for a recipe has been completely fulfilled.",
+                "suggested_action": "explain", 
+                "reason": "primary goal completed - provide a cited summary of the cooking steps",
+                "instruction": "Call the explain branch (cited_summarize) to summarize the dish, then decide whether to end.",
             }],
             metadata={
-                "suggested_action": "end",
+                "suggested_action": "explain",
                 "task_complete": True,
-                "must_end": True,
+                "should_explain": True,
             },
             payload_type="generic",
-            display=True,
+            display=False,  # Internal signal for decision agent only, not for user display
         )
     except Exception:
         pass
