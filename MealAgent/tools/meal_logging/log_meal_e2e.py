@@ -30,7 +30,7 @@ async def log_meal_e2e_tool(
     Decision hints:
       - If log_meal_e2e_tool.updated_profile is present, the meal has been logged successfully.
     """
-    yield Response("Logging meal in one step...")
+    yield Response("🍽️ Logging your meal and calculating nutrition...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -244,7 +244,13 @@ Return JSON with:
         }
 
         # Stream response first for immediate feedback
-        yield Response(f"Meal logged. Remaining: {remaining_targets['kcal']:.0f} kcal | {remaining_targets['protein_g']:.0f}g P")
+        consumed_kcal = total_macros['kcal']
+        remaining_kcal = remaining_targets['kcal']
+        remaining_protein = remaining_targets['protein_g']
+        yield Response(
+            f"✅ Meal logged! Consumed: {consumed_kcal:.0f} kcal | "
+            f"Remaining today: {remaining_kcal:.0f} kcal | {remaining_protein:.0f}g protein"
+        )
         
         # Then yield Result for data consistency
         yield Result(

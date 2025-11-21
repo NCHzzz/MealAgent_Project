@@ -81,7 +81,14 @@ async def pantry_crud_tool(
     Environment writes:
       - environment["pantry_crud_tool"]["state"]
     """
-    yield Response(f"Processing pantry {action}...")
+    action_icons = {
+        "read": "📋",
+        "create": "➕",
+        "update": "✏️",
+        "delete": "🗑️",
+    }
+    icon = action_icons.get(action, "📦")
+    yield Response(f"{icon} Processing pantry {action}...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -141,7 +148,7 @@ async def pantry_crud_tool(
                 payload_type="table",
                 display=True,
             )
-            yield Response(f"Retrieved {len(items)} pantry items")
+            yield Response(f"✅ Retrieved {len(items)} pantry item(s)")
 
         elif action == "create":
             if not pantry_items:
@@ -205,7 +212,7 @@ async def pantry_crud_tool(
                 payload_type="table",
                 display=True,
             )
-            yield Response(f"Created {len(created_items)} pantry items")
+            yield Response(f"✅ Added {len(created_items)} item(s) to pantry")
 
         elif action == "update":
             if not pantry_items:
@@ -272,7 +279,7 @@ async def pantry_crud_tool(
                 display=True,
             )
             # For update, fetch latest items for table view (optional minimal change: skip fetch; no rows emitted)
-            yield Response(f"Updated {updated_count} pantry items")
+            yield Response(f"✅ Updated {updated_count} pantry item(s)")
 
         elif action == "delete":
             if not pantry_items:
@@ -329,7 +336,7 @@ async def pantry_crud_tool(
                 display=True,
             )
             # For delete, we can also emit remaining items table on demand (skipped here to avoid extra fetch)
-            yield Response(f"Deleted {deleted_count} pantry items")
+            yield Response(f"✅ Removed {deleted_count} item(s) from pantry")
 
     except Exception as e:
         yield Error(f"Pantry operation {action} failed for user {user_id}: {str(e)}")

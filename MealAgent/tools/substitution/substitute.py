@@ -86,7 +86,7 @@ async def substitute_tool(
       - If auto_apply=True, substitute_tool.updated_plan contains the plan with substitute applied.
     """
     logging.info("substitute_tool: start")
-    yield Response("Finding ingredient substitutes...")
+    yield Response("🔄 Finding ingredient substitutes with similar nutrition...")
     
     try:
         # Step 1: Identify ingredient to substitute
@@ -194,7 +194,7 @@ async def substitute_tool(
             suggestions = scored_substitutes[:top_k]
         
         if not suggestions:
-            yield Response("No suitable substitutes found within tolerance")
+            yield Response("⚠️ No suitable substitutes found within ±20% macro tolerance")
             return
         
         # Step 4: Check allergens (if plan available)
@@ -262,14 +262,15 @@ async def substitute_tool(
         )
         
         if suggestions:
-            yield Response(f"Found {len(suggestions)} substitute suggestions")
+            yield Response(f"✅ Found {len(suggestions)} substitute suggestion(s)")
         
         # Step 5: Optionally apply best substitute to plan
         if (auto_apply or substitute_fdc_id) and plan:
             best_substitute = suggestions[0]
             target_substitute_fdc_id = substitute_fdc_id or best_substitute.get("fdc_id")
             
-            yield Response(f"Applying substitute: {best_substitute.get('description', 'Unknown')}")
+            sub_name = best_substitute.get('description', 'Unknown')
+            yield Response(f"🔄 Applying substitute: {sub_name}")
             
             # Apply substitute to recipes in plan
             recipe_collection = client.collections.get("Recipe")
@@ -335,7 +336,7 @@ async def substitute_tool(
                         updated_recipes.append(food_id)
             
             if not updated_recipes:
-                yield Response(f"No recipes found using ingredient with FDC ID {original_fdc_id}")
+                yield Response(f"ℹ️ No recipes in plan use ingredient with FDC ID {original_fdc_id}")
                 return
             
             # Recalculate macros if requested
@@ -406,14 +407,20 @@ async def substitute_tool(
                     "macros_recalculated": macros_recalculated,
                     "plan_id": plan.get("plan_id"),
                 },
-                payload_type="generic",
+                payload_type="meal_plan",  # Use meal_plan for frontend detection
                 display=True,
             )
             
             if macros_recalculated:
-                yield Response(f"Substitute applied to {len(updated_recipes)} recipe(s). Macros recalculated.")
+                yield Response(
+                    f"✅ Substitute applied to {len(updated_recipes)} recipe(s). "
+                    f"Nutritional values updated."
+                )
             else:
-                yield Response(f"Substitute applied to {len(updated_recipes)} recipe(s). Run calculate_recipe_macros_tool to update macros.")
+                yield Response(
+                    f"✅ Substitute applied to {len(updated_recipes)} recipe(s). "
+                    f"Note: Run calculate_recipe_macros_tool to update macros."
+                )
         
     except ValueError as e:
         error_msg = f"Invalid input: {str(e)}"

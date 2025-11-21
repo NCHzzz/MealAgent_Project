@@ -43,8 +43,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           <div className="flex justify-between items-center">
             <CardTitle className="text-lg">Daily Meal Plan</CardTitle>
             <Badge
-              variant={plan.validation?.valid ? "default" : "destructive"}
-              className="ml-2"
+              className={`ml-2 ${plan.validation?.valid ? "" : "bg-destructive/10 text-destructive"}`}
             >
               {plan.validation?.valid ? "Valid" : "Issues"}
             </Badge>
@@ -59,26 +58,44 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 className="p-3 bg-background rounded-lg border border-secondary/5"
               >
                 <div className="flex justify-between items-start mb-2">
-                  <div>
+                  <div className="flex-1">
                     <h4 className="font-semibold text-primary capitalize">
                       {meal.meal_type}
                     </h4>
                     <p className="text-sm text-secondary">
-                      {meal.recipe.dish_name}
+                      {meal.recipe?.dish_name || "Unknown dish"}
                     </p>
+                    {meal.recipe?.cooking_time && (
+                      <p className="text-xs text-secondary mt-1">
+                        ⏱️ {meal.recipe.cooking_time} min
+                      </p>
+                    )}
                   </div>
-                  <Badge variant="outline" className="text-xs">
+                  <div className="flex flex-col items-end gap-1">
+                  <Badge className="text-xs border border-secondary/20">
                     {meal.servings}x serving{meal.servings !== 1 ? "s" : ""}
                   </Badge>
-                </div>
-                {meal.recipe.macros_per_serving && (
-                  <div className="flex gap-4 text-xs text-secondary mt-2">
-                    <span>
-                      {formatKcal(meal.macros.kcal)} | {formatMacro(meal.macros.protein_g)} P |{" "}
-                      {formatMacro(meal.macros.fat_g)} F | {formatMacro(meal.macros.carb_g)} C
-                    </span>
+                    {meal.recipe?.image_link && (
+                      <div className="w-12 h-12 rounded overflow-hidden bg-secondary/5">
+                        <img 
+                          src={meal.recipe.image_link} 
+                          alt={meal.recipe.dish_name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+                {/* Macros per meal */}
+                <div className="flex gap-4 text-xs text-secondary mt-2">
+                  <span>
+                    {formatKcal(meal.macros?.kcal || 0)} | {formatMacro(meal.macros?.protein_g || 0)} P |{" "}
+                    {formatMacro(meal.macros?.fat_g || 0)} F | {formatMacro(meal.macros?.carb_g || 0)} C
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -114,12 +131,28 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
             </div>
           </div>
 
-          {/* Validation Warnings */}
-          {plan.validation && !plan.validation.valid && (
-            <div className="pt-3 border-t border-secondary/10">
-              <p className="text-xs text-destructive">
-                ⚠ Plan has validation issues. Check macro or constraint violations.
-              </p>
+          {/* Validation Details */}
+          {plan.validation && (
+            <div className="pt-3 border-t border-secondary/10 space-y-2">
+              {!plan.validation.valid && (
+                <div className="space-y-1">
+                  {plan.validation.macro_validation && !plan.validation.macro_validation.valid && (
+                    <div className="text-xs text-destructive">
+                      ⚠ Macro violations: {plan.validation.macro_validation.violations?.length || 0} issue(s)
+                    </div>
+                  )}
+                  {plan.validation.constraint_validation && !plan.validation.constraint_validation.valid && (
+                    <div className="text-xs text-destructive">
+                      ⚠ Constraint violations: {plan.validation.constraint_validation.violations?.length || 0} issue(s)
+                    </div>
+                  )}
+                </div>
+              )}
+              {plan.validation.macro_validation?.warnings && plan.validation.macro_validation.warnings.length > 0 && (
+                <div className="text-xs text-yellow-600 dark:text-yellow-400">
+                  ℹ️ {plan.validation.macro_validation.warnings.length} minor deviation(s) detected
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -142,13 +175,12 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
             <CardTitle className="text-lg">Weekly Meal Plan</CardTitle>
             <div className="flex gap-2">
               {plan.variety_score !== undefined && (
-                <Badge variant="outline" className="text-xs">
+                <Badge className="text-xs border border-secondary/20">
                   Variety: {plan.variety_score.toFixed(1)}/100
                 </Badge>
               )}
               <Badge
-                variant={plan.validation?.valid ? "default" : "destructive"}
-                className="text-xs"
+                className={`text-xs ${plan.validation?.valid ? "" : "bg-destructive/10 text-destructive"}`}
               >
                 {plan.validation?.valid ? "Valid" : "Issues"}
               </Badge>
@@ -175,12 +207,17 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                   {Object.entries(day.meals).map(([mealKey, meal]) => (
                     <div
                       key={mealKey}
-                      className="flex justify-between items-center text-sm"
+                      className="flex justify-between items-start text-sm p-2 bg-background/50 rounded"
                     >
-                      <span className="text-secondary capitalize">
-                        {meal.meal_type}:
-                      </span>
-                      <span className="text-primary">{meal.recipe.dish_name}</span>
+                      <div className="flex-1">
+                        <span className="text-secondary capitalize font-medium">
+                          {meal.meal_type}:
+                        </span>
+                        <span className="text-primary ml-2">{meal.recipe.dish_name}</span>
+                      </div>
+                      <div className="text-xs text-secondary ml-2">
+                        {formatKcal(meal.macros?.kcal || 0)}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -191,7 +228,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           {/* Summary */}
           <div className="pt-3 border-t border-secondary/10">
             <h5 className="font-semibold text-sm mb-2">Weekly Summary</h5>
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-2 gap-4 text-sm mb-3">
               <div>
                 <p className="text-secondary text-xs">Total Calories</p>
                 <p className="font-semibold text-primary">
@@ -207,6 +244,53 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 </div>
               )}
             </div>
+            {/* Average Daily Macros */}
+            {plan.average_daily_macros && (
+              <div className="grid grid-cols-4 gap-2 text-xs">
+                <div>
+                  <p className="text-secondary">Protein</p>
+                  <p className="font-semibold text-primary">
+                    {formatMacro(plan.average_daily_macros.protein_g)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-secondary">Fat</p>
+                  <p className="font-semibold text-primary">
+                    {formatMacro(plan.average_daily_macros.fat_g)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-secondary">Carbs</p>
+                  <p className="font-semibold text-primary">
+                    {formatMacro(plan.average_daily_macros.carb_g)}
+                  </p>
+                </div>
+              </div>
+            )}
+            {/* Validation Details */}
+            {plan.validation && (
+              <div className="mt-3 pt-3 border-t border-secondary/10 space-y-1">
+                {!plan.validation.valid && (
+                  <>
+                    {plan.validation.macro_validation && !plan.validation.macro_validation.valid && (
+                      <div className="text-xs text-destructive">
+                        ⚠ Macro violations: {plan.validation.macro_validation.violations?.length || 0} issue(s)
+                      </div>
+                    )}
+                    {plan.validation.constraint_validation && !plan.validation.constraint_validation.valid && (
+                      <div className="text-xs text-destructive">
+                        ⚠ Constraint violations: {plan.validation.constraint_validation.violations?.length || 0} issue(s)
+                      </div>
+                    )}
+                    {plan.validation.variety_validation && !plan.validation.variety_validation.valid && (
+                      <div className="text-xs text-destructive">
+                        ⚠ Variety score {plan.variety_score?.toFixed(1) || 0}/100 below minimum
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

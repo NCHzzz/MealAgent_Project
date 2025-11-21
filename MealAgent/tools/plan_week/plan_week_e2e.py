@@ -13,6 +13,7 @@ from MealAgent.tools.utils.planning_helpers import (
     _validate_macro_targets,
     sync_plan_to_weaviate,
 )
+from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 
 
 def _select_meal_by_strategy(
@@ -189,7 +190,7 @@ async def plan_week_e2e_tool(
       - Check plan.variety_score to see variety quality (>=70 is good).
     """
     logging.info("plan_week_e2e_tool: start")
-    yield Response("Planning weekly meals (21 meals over 7 days)...")
+    yield Response("📅 Planning your weekly meals (21 meals over 7 days)...")
     
     try:
         if not user_id:
@@ -204,18 +205,28 @@ async def plan_week_e2e_tool(
             targets = macro_results[0]["objects"][0]
         
         if targets:
-            yield Response(f"Using targets: {targets.get('tdee_kcal', 0):.0f} kcal/day")
+            yield Response(
+                f"📊 Using your daily targets: {targets.get('tdee_kcal', 0):.0f} kcal/day | "
+                f"{targets.get('protein_g', 0):.0f}g protein/day"
+            )
         else:
-            yield Response("No targets found; plan will be assembled without validation")
+            yield Response("📊 Using default targets (create profile for personalized targets)")
         
         # Step 2: Read constraints filters (for validation)
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
         filters_metadata: Dict[str, Any] | None = None
         if filters_results and filters_results[0]["objects"]:
             filters_metadata = filters_results[0].get("metadata") or {}
-            yield Response("Constraints filters found")
+            diet_types = filters_metadata.get("diet_types", [])
+            allergens = filters_metadata.get("exclude_allergens", [])
+            constraint_msg = "✅ Applying your dietary preferences"
+            if diet_types:
+                constraint_msg += f" ({', '.join(diet_types)})"
+            if allergens:
+                constraint_msg += f" (excluding: {', '.join(allergens)})"
+            yield Response(constraint_msg)
         else:
-            yield Response("No constraints filters found; plan will be assembled without constraint validation")
+            yield Response("ℹ️ No dietary constraints specified")
         
         # Step 3: Read ranked recipes
         sr = tree_data.environment.find("search_and_rank_tool", "topk")
@@ -227,15 +238,44 @@ async def plan_week_e2e_tool(
         if len(recipes) < 7:
             yield Response(f"Warning: Only {len(recipes)} recipes available. Some recipes will be reused for 21 meals.")
         
-        # Check for missing macros
+        # Check for missing macros and auto-calculate if base_lm is available
         missing_macros = [
             r for r in recipes
             if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict)
             or not r.get("macros_per_serving", {}).get("kcal")
         ]
         if missing_macros:
-            logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
-            yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
+            if kwargs.get("base_lm"):
+                yield Response(f"🧮 Calculating nutrition for {len(missing_macros)} recipe(s)...")
+                calculated_count = 0
+                for recipe in missing_macros:
+                    food_id = recipe.get("food_id")
+                    if food_id:
+                        try:
+                            async for result in calculate_recipe_macros_tool(
+                                tree_data=tree_data,
+                                client_manager=client_manager,
+                                recipe_id=str(food_id),
+                                base_lm=kwargs.get("base_lm"),
+                            ):
+                                if isinstance(result, Result) and result.name == "macros" and result.objects:
+                                    recipe["macros_per_serving"] = result.objects[0]
+                                    calculated_count += 1
+                                    break
+                                elif isinstance(result, Error):
+                                    break
+                        except Exception as exc:
+                            logging.warning(
+                                f"plan_week_e2e_tool: calculate_recipe_macros_tool failed for {food_id}: {exc}"
+                            )
+                            continue
+                if calculated_count > 0:
+                    yield Response(f"✅ Calculated nutrition for {calculated_count} recipe(s).")
+                if calculated_count < len(missing_macros):
+                    yield Response(f"⚠️ {len(missing_macros) - calculated_count} recipe(s) still missing nutrition data.")
+            else:
+                logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
+                yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
         
         # Step 4: Parse start_date or use today
         if start_date:
@@ -263,7 +303,7 @@ async def plan_week_e2e_tool(
             start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
         # Step 5: Assemble 21-meal plan with variety enforcement
-        yield Response("Assembling 21-meal plan with variety enforcement...")
+        yield Response("🔍 Selecting 21 meals with variety optimization...")
         
         weekly_plan = {}
         total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
@@ -364,7 +404,7 @@ async def plan_week_e2e_tool(
         validation = {"valid": True, "macro_validation": {}, "constraint_validation": {}, "variety_validation": {}}
         
         if targets:
-            yield Response("Validating weekly macro balance...")
+            yield Response("✅ Checking weekly nutritional balance...")
             # Validate against weekly targets (7x daily targets)
             weekly_targets = {
                 "tdee_kcal": targets.get("tdee_kcal", 2000) * 7.0,
@@ -376,12 +416,17 @@ async def plan_week_e2e_tool(
             validation["macro_validation"] = macro_validation
             if not macro_validation["valid"]:
                 validation["valid"] = False
-                yield Response(f"Macro validation: {len(macro_validation['violations'])} violations, {len(macro_validation['warnings'])} warnings")
+                violations = len(macro_validation.get('violations', []))
+                warnings = len(macro_validation.get('warnings', []))
+                if violations > 0:
+                    yield Response(f"⚠️ Weekly macros: {violations} deviation(s) from targets")
+                if warnings > 0:
+                    yield Response(f"ℹ️ {warnings} minor deviation(s) detected")
             else:
-                yield Response("Macro validation passed")
+                yield Response("✅ Weekly macros within target range")
         
         if filters_metadata:
-            yield Response("Validating constraints...")
+            yield Response("✅ Verifying dietary constraints across all meals...")
             diet_types = filters_metadata.get("diet_types", [])
             exclude_allergens = filters_metadata.get("exclude_allergens", [])
             constraint_validation = _validate_constraints_weekly(
@@ -392,9 +437,10 @@ async def plan_week_e2e_tool(
             validation["constraint_validation"] = constraint_validation
             if not constraint_validation["valid"]:
                 validation["valid"] = False
-                yield Response(f"Constraint validation: {len(constraint_validation['violations'])} violations")
+                violations = len(constraint_validation.get('violations', []))
+                yield Response(f"⚠️ {violations} constraint violation(s) found")
             else:
-                yield Response("Constraint validation passed")
+                yield Response("✅ All dietary constraints satisfied")
         
         # Variety validation
         variety_validation = {
@@ -405,9 +451,9 @@ async def plan_week_e2e_tool(
         validation["variety_validation"] = variety_validation
         if not variety_validation["valid"]:
             validation["valid"] = False
-            yield Response(f"Variety validation: Score {variety_score:.1f} below minimum {min_variety_score:.1f}")
+            yield Response(f"⚠️ Variety score {variety_score:.1f}/100 (minimum: {min_variety_score:.1f})")
         else:
-            yield Response(f"Variety validation passed: Score {variety_score:.1f}/100")
+            yield Response(f"✅ Variety score: {variety_score:.1f}/100 (excellent variety!)")
         
         plan_output = {
             "plan_type": "week",
@@ -429,18 +475,21 @@ async def plan_week_e2e_tool(
                 client_manager=client_manager,
                 start_date=plan_output["start_date"],
             )
-            yield Response(f"Persisted weekly plan {plan_output.get('plan_id')} for user {user_id}")
+            yield Response(f"💾 Weekly plan saved (ID: {plan_output.get('plan_id', 'N/A')})")
         else:
-            yield Response("User ID missing – weekly plan stored in memory only.")
+            yield Response("ℹ️ Plan stored in memory (create profile to save permanently)")
         
         # Stream response first for immediate feedback
-        status_msg = "✓" if validation["valid"] else "⚠"
+        status_icon = "✅" if validation["valid"] else "⚠️"
         yield Response(
-            f"{status_msg} Weekly plan assembled: {total_macros['kcal']:.0f} kcal total | "
-            f"{average_daily_macros['kcal']:.0f} kcal/day avg | Variety: {variety_score:.1f}/100"
+            f"{status_icon} Weekly meal plan ready! "
+            f"Total: {total_macros['kcal']:.0f} kcal | "
+            f"Daily avg: {average_daily_macros['kcal']:.0f} kcal | "
+            f"Variety: {variety_score:.1f}/100"
         )
         
         # Then yield Result for data consistency
+        # Use "meal_plan" payload_type for explicit frontend detection
         yield Result(
             name="plan",
             objects=[plan_output],
@@ -454,7 +503,7 @@ async def plan_week_e2e_tool(
                 "constraint_violations": len(validation.get("constraint_validation", {}).get("violations", [])),
                 "plan_id": plan_output.get("plan_id"),
             },
-            payload_type="generic",
+            payload_type="meal_plan",
             display=True,
         )
     

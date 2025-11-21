@@ -203,12 +203,28 @@ const NutritionSummary: React.FC<NutritionSummaryProps> = ({
                     </div>
                   )}
 
-                {/* Validation Warnings */}
-                {summary.validation && !summary.validation.valid && (
-                  <div className="pt-3 border-t border-secondary/10">
-                    <p className="text-xs text-destructive">
-                      ⚠ Nutrition targets not met. Check violations and warnings.
-                    </p>
+                {/* Validation Details */}
+                {summary.validation && (
+                  <div className="pt-3 border-t border-secondary/10 space-y-1">
+                    {!summary.validation.valid && (
+                      <div className="space-y-1">
+                        {summary.validation.violations && summary.validation.violations.length > 0 && (
+                          <div className="text-xs text-destructive">
+                            ⚠️ {summary.validation.violations.length} violation(s) detected
+                          </div>
+                        )}
+                        {summary.validation.warnings && summary.validation.warnings.length > 0 && (
+                          <div className="text-xs text-yellow-600 dark:text-yellow-400">
+                            ℹ️ {summary.validation.warnings.length} warning(s)
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {summary.validation.valid && (
+                      <div className="text-xs text-green-600 dark:text-green-400">
+                        ✅ All nutrition targets met
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>

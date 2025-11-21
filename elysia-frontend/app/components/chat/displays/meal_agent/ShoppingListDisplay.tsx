@@ -26,13 +26,34 @@ const ShoppingListDisplay: React.FC<ShoppingListDisplayProps> = ({
       [category: string]: ShoppingListPayload["items"];
     } = {};
     items.forEach((item) => {
-      const category = item.category || "Other";
+      // Try to infer category from ingredient name if not provided
+      const category = item.category || _inferCategory(item.ingredient_name) || "Other";
       if (!grouped[category]) {
         grouped[category] = [];
       }
       grouped[category].push(item);
     });
     return grouped;
+  };
+
+  const _inferCategory = (ingredientName: string): string => {
+    const name = ingredientName.toLowerCase();
+    if (name.includes("chicken") || name.includes("beef") || name.includes("pork") || name.includes("fish") || name.includes("meat")) {
+      return "Meat & Seafood";
+    }
+    if (name.includes("milk") || name.includes("cheese") || name.includes("yogurt") || name.includes("butter")) {
+      return "Dairy";
+    }
+    if (name.includes("tomato") || name.includes("onion") || name.includes("carrot") || name.includes("lettuce") || name.includes("vegetable")) {
+      return "Produce";
+    }
+    if (name.includes("rice") || name.includes("pasta") || name.includes("bread") || name.includes("flour")) {
+      return "Grains";
+    }
+    if (name.includes("oil") || name.includes("vinegar") || name.includes("spice") || name.includes("salt") || name.includes("pepper")) {
+      return "Pantry Staples";
+    }
+    return "Other";
   };
 
   return (
@@ -75,11 +96,11 @@ const ShoppingListDisplay: React.FC<ShoppingListDisplayProps> = ({
                       {items.map((item, itemIdx) => (
                         <div
                           key={itemIdx}
-                          className="flex justify-between items-center text-sm py-1"
+                          className="flex justify-between items-center text-sm py-1.5 px-2 rounded hover:bg-background/50 transition-colors"
                         >
-                          <span className="text-primary">{item.ingredient_name}</span>
-                          <span className="text-secondary">
-                            {item.quantity} {item.unit}
+                          <span className="text-primary flex-1">{item.ingredient_name}</span>
+                          <span className="text-secondary font-medium ml-2">
+                            {item.quantity.toFixed(1)} {item.unit}
                           </span>
                         </div>
                       ))}
@@ -88,16 +109,21 @@ const ShoppingListDisplay: React.FC<ShoppingListDisplayProps> = ({
                 ))}
 
                 {/* Summary */}
-                {list.original_count !== undefined &&
-                  list.removed_count !== undefined && (
-                    <div className="pt-3 border-t border-secondary/10">
-                      <p className="text-xs text-secondary">
-                        Original: {list.original_count} items | Removed:{" "}
-                        {list.removed_count} from pantry | Final: {list.items.length}{" "}
-                        items needed
-                      </p>
-                    </div>
+                <div className="pt-3 border-t border-secondary/10 space-y-1">
+                  {list.original_count !== undefined &&
+                    list.removed_count !== undefined && (
+                      <div className="text-xs text-secondary">
+                        <span className="font-medium">Summary:</span> Original {list.original_count} items | 
+                        <span className="text-green-600 dark:text-green-400"> -{list.removed_count} from pantry</span> | 
+                        Final: <span className="font-semibold text-primary">{list.items.length} items needed</span>
+                      </div>
+                    )}
+                  {list.items.length === 0 && (
+                    <p className="text-xs text-green-600 dark:text-green-400">
+                      ✅ All items already in pantry!
+                    </p>
                   )}
+                </div>
               </CardContent>
             </Card>
           </motion.div>

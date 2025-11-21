@@ -200,13 +200,12 @@ async def cook_mode_tool(
     completed_check = tree_data.environment.find("cook_mode_tool", "completed")
     if completed_check and completed_check[0].get("objects"):
         logging.info("cook_mode_tool: already completed; skipping re-execution")
-        yield Response("Cooking guidance has already been provided.")
-        # Still emit completion signals to ensure frontend and decision agent know task is done
+        yield Response("✅ Cooking instructions are already available. Task completed.")
+        # Re-emit steps if available for frontend display
         try:
             steps_results = tree_data.environment.find("cook_mode_tool", "steps")
             if steps_results and steps_results[0].get("objects"):
                 steps_data = steps_results[0]["objects"][0]
-                dish = steps_data.get("dish_name", "the dish")
                 steps = steps_data.get("steps", [])
                 # Re-emit steps for frontend display
                 yield Result(
@@ -216,48 +215,28 @@ async def cook_mode_tool(
                     payload_type="cooking_steps",
                     display=True,
                 )
-                yield Result(
-                    name="final_summary",
-                    objects=[{
-                        "title": f"Cooking instructions for {dish}",
-                        "text": f"Cooking guidance has already been provided for {dish}. Call the explain branch if a recap is needed before ending.",
-                    }],
-                    metadata={
-                        "dish_name": dish, 
-                        "steps_count": len(steps) if isinstance(steps, list) else 0,
-                        "task_complete": True,
-                        "should_explain": True,
-                        "already_completed": True,
-                    },
-                    payload_type="generic",
-                    display=False,  # Internal signal for decision agent only, not for user display
-                )
-                yield Result(
-                    name="next_action_hint",
-                    objects=[{
-                        "suggested_action": "explain", 
-                        "reason": "cooking instructions already exist - provide a short explanation before closing",
-                        "instruction": "Call the explain branch (cited_summarize) to recap the recipe, then decide whether to end.",
-                    }],
-                    metadata={
-                        "suggested_action": "explain",
-                        "task_complete": True,
-                        "should_explain": True,
-                        "already_completed": True,
-                    },
-                    payload_type="generic",
-                    display=False,  # Internal signal for decision agent only, not for user display
-                )
         except Exception:
             pass
+        # Emit clear completion signal to prevent further calls
+        yield Result(
+            name="task_complete",
+            objects=[{"status": "completed", "message": "Cooking instructions have been provided."}],
+            metadata={
+                "task_complete": True,
+                "stop_calling_tool": True,
+                "suggested_action": "explain",
+            },
+            payload_type="generic",
+            display=False,
+        )
         return
 
     # Stream initial message first for immediate feedback
-    yield Response("Preparing cooking steps...")
+    yield Response("🔪 Preparing step-by-step cooking instructions...")
 
     recipe = _find_recipe_from_environment(tree_data, food_id)
     if not recipe:
-        msg = "No recipe found in environment. Provide food_id or run planning/search first."
+        msg = "No recipe found. Please select a recipe from your meal plan or search results first."
         logging.warning("cook_mode_tool: %s", msg)
         yield Error(msg)
         return
@@ -277,26 +256,45 @@ async def cook_mode_tool(
 
     # Stream steps FIRST for immediate user feedback, then emit Result objects
     # This ensures frontend receives streaming text immediately
+    total_time = sum(s.get("estimated_seconds", 0) for s in steps)
+    total_minutes = total_time // 60
+    yield Response(f"📋 Found {len(steps)} steps for {dish_name} (est. {total_minutes} min total)")
+    
     for step in steps:
         idx = step.get("index")
         txt = step.get("instruction")
         dur = step.get("estimated_seconds")
+        dur_min = dur // 60 if dur >= 60 else dur
+        dur_unit = "min" if dur >= 60 else "sec"
         logging.debug("cook_mode_tool: step %s (%ss): %s", idx, dur, txt)
-        yield Response(f"Step {idx}: {txt} (est. {dur}s)")
+        yield Response(f"Step {idx}: {txt} (~{dur_min} {dur_unit})")
     
     # Stream completion message
-    yield Response("Cooking guidance complete.")
+    yield Response(f"✅ Cooking instructions ready for {dish_name}!")
     
     # Emit Result objects FIRST to ensure cooking steps display appears before tips
     # This ensures the main recipe component is shown before supplementary tips
+    # Calculate total cooking time for metadata
+    total_time_seconds = sum(s.get("estimated_seconds", 0) for s in steps)
+    total_time_minutes = total_time_seconds // 60
+    
     yield Result(
         name="steps",
         objects=[{
             "food_id": str(recipe.get("food_id") or ""), 
             "dish_name": str(recipe.get("dish_name") or ""), 
-            "steps": steps
+            "steps": steps,
+            "total_time_seconds": total_time_seconds,
+            "total_time_minutes": total_time_minutes,
+            "serving_size": recipe.get("serving_size", 1),
         }],
-        metadata={"steps_count": len(steps), "tool": "cook_mode_tool"},
+        metadata={
+            "steps_count": len(steps),
+            "tool": "cook_mode_tool",
+            "total_time_seconds": total_time_seconds,
+            "total_time_minutes": total_time_minutes,
+            "dish_name": dish_name,
+        },
         payload_type="cooking_steps",
         display=True,
     )
@@ -384,10 +382,25 @@ async def cook_mode_tool(
         tree_data.environment.add_objects(
             "cook_mode_tool",
             "completed",
-            [{"food_id": str(recipe.get("food_id") or ""), "timestamp": datetime.utcnow().isoformat()}],
+            [{"food_id": str(recipe.get("food_id") or ""), "timestamp": datetime.now(datetime.timezone.utc).isoformat()}],
             metadata={"status": "done"},
         )
     except Exception:
         pass
+    
+    # Emit final completion signal to prevent further tool calls
+    yield Result(
+        name="task_complete",
+        objects=[{"status": "completed", "message": f"Cooking instructions for {dish_name} have been provided."}],
+        metadata={
+            "task_complete": True,
+            "stop_calling_tool": True,
+            "suggested_action": "explain",
+            "dish_name": dish_name,
+            "steps_count": len(steps),
+        },
+        payload_type="generic",
+        display=False,
+    )
     
     logging.info("cook_mode_tool: complete (steps=%s)", len(steps))

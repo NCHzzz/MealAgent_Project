@@ -254,7 +254,8 @@ async def search_and_rank_tool(
       (e.g., plan_day_e2e_tool can select recipes from topk).
     """
     logging.info(f"search_and_rank_tool: start (use_elysia_query={use_elysia_query})")
-    yield Response(f"Searching and ranking {collection_name}...")
+    collection_display = "recipes" if collection_name == "Recipe" else collection_name.lower()
+    yield Response(f"🔍 Searching and ranking {collection_display}...")
 
     if limit <= 0 or limit > 1000:
         yield Error("limit must be between 1 and 1000")
@@ -266,13 +267,13 @@ async def search_and_rank_tool(
     try:
         # Option 1: Use Elysia Query tool for LLM-driven query optimization
         if use_elysia_query and ELYSIA_QUERY_AVAILABLE and kwargs.get("base_lm"):
-            yield Response("Using Elysia Query tool for LLM-driven search optimization...")
+            yield Response("🤖 Using AI-powered search optimization...")
             items = await _search_with_elysia_query(
                 tree_data, client_manager, query_text, collection_name, limit, alpha, kwargs
             )
             if items is None:
                 # Fallback to custom search if Elysia Query fails
-                yield Response("Elysia Query failed, falling back to custom search...")
+                yield Response("⚠️ AI search unavailable, using standard search...")
                 items = await _search_with_custom_logic(
                     tree_data, client_manager, query_text, collection_name, limit, alpha
                 )
@@ -355,11 +356,46 @@ async def search_and_rank_tool(
         scored_items.sort(key=lambda x: x.get("fit_score", 0.0), reverse=True)
         top_items = scored_items[:top_k]
 
+        # Auto-calculate missing macros for top_k items if base_lm is available
+        # This ensures recipes have nutrition data before being used in meal planning
+        if collection_name == "Recipe" and kwargs.get("base_lm"):
+            from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+            
+            calculated_count = 0
+            for item in top_items:
+                macros = item.get("macros_per_serving", {})
+                if not macros or not isinstance(macros, dict) or not macros.get("kcal"):
+                    # Missing macros - try to calculate
+                    food_id = item.get("food_id")
+                    if food_id:
+                        try:
+                            async for result in calculate_recipe_macros_tool(
+                                tree_data=tree_data,
+                                client_manager=client_manager,
+                                recipe_id=str(food_id),
+                                base_lm=kwargs.get("base_lm"),
+                            ):
+                                if isinstance(result, Result) and result.name == "macros" and result.objects:
+                                    item["macros_per_serving"] = result.objects[0]
+                                    calculated_count += 1
+                                    break
+                                elif isinstance(result, Error):
+                                    break
+                        except Exception as e:
+                            logging.warning(f"Failed to auto-calculate macros for recipe {food_id}: {str(e)}")
+                            continue
+
+            if calculated_count > 0:
+                yield Response(f"🧮 Calculated nutrition for {calculated_count} recipe(s).")
+
         warn = ""
         if missing_macros_count > 0 and has_targets:
-            warn = f" Warning: {missing_macros_count} items missing macros_per_serving."
-        yield Response(f"Ranked top {len(top_items)} items.{warn}")
+            warn = f" ⚠️ {missing_macros_count} item(s) missing nutrition data."
+        yield Response(f"✅ Ranked top {len(top_items)} result(s).{warn}")
 
+        # Use recipe_card payload_type if collection is Recipe for better frontend detection
+        payload_type = "recipe_card" if collection_name == "Recipe" else "generic"
+        
         yield Result(
             name="topk",
             objects=top_items,
@@ -370,7 +406,7 @@ async def search_and_rank_tool(
                 "collection": collection_name,
                 "query": query_text,
             },
-            payload_type="generic",
+            payload_type=payload_type,
             display=True,
         )
 

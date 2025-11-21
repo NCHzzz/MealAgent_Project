@@ -231,7 +231,7 @@ async def pantry_diff_tool(
     Environment writes:
       - environment["pantry_diff_tool"]["diff"]
     """
-    yield Response("Calculating shopping list after pantry deduction...")
+    yield Response("🛒 Generating shopping list (checking pantry inventory)...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -260,7 +260,8 @@ async def pantry_diff_tool(
     
     # Extract shopping items from plan
     shopping_items = _extract_ingredients_from_plan(plan)
-    yield Response(f"Extracted {len(shopping_items)} items from {plan_source} plan")
+    plan_type = plan.get("plan_type", "day")
+    yield Response(f"📋 Extracted {len(shopping_items)} ingredient(s) from {plan_type} plan")
 
     # Read pantry state
     pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
@@ -384,6 +385,15 @@ async def pantry_diff_tool(
 
         diff_output["shopping_list_id"] = list_id
 
+        # Create shopping list payload for frontend display
+        shopping_list_payload = {
+            "items": final_items,
+            "original_count": len(shopping_items),
+            "removed_count": len(shopping_items) - len(final_items),
+            "shopping_list_id": list_id,
+            "warnings": warnings,
+        }
+        
         yield Result(
             name="diff",
             objects=[diff_output],
@@ -397,25 +407,28 @@ async def pantry_diff_tool(
             payload_type="generic",
             display=True,
         )
-        # Table view of final items (rows) for display
+        # Shopping list for frontend display component
         yield Result(
-            name="final_items",
-            objects=final_items,
+            name="shopping_list",
+            objects=[shopping_list_payload],
             metadata={
                 "user_id": user_id,
                 "final_count": len(final_items),
+                "removed_count": len(shopping_items) - len(final_items),
+                "shopping_list_id": list_id,
             },
-            payload_type="table",
+            payload_type="shopping_list",
             display=True,
         )
 
-        warning_msg = ""
+        removed_count = len(shopping_items) - len(final_items)
         if warnings:
-            warning_msg = f" Warnings: {len(warnings)} items have excess pantry stock."
+            yield Response(f"ℹ️ {len(warnings)} item(s) have excess pantry stock")
         yield Response(
-            f"Shopping list updated: {len(final_items)} items needed (removed {len(shopping_items) - len(final_items)} from pantry)"
+            f"✅ Shopping list ready: {len(final_items)} item(s) needed "
+            f"({removed_count} already in pantry)"
         )
-        yield Response(f"Shopping list persisted as {list_id}")
+        yield Response(f"💾 Shopping list saved (ID: {list_id})")
 
     except Exception as e:
         yield Error(f"Pantry diff calculation failed for user {user_id}: {str(e)}")

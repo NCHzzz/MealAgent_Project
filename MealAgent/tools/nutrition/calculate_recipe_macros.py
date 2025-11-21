@@ -132,7 +132,7 @@ async def calculate_recipe_macros_tool(
       - If calculate_recipe_macros_tool.macros is present, recipe macros have been calculated successfully.
       - Recipes with macros_per_serving can be used for accurate meal planning and macro tracking.
     """
-    yield Response("Calculating recipe macros...")
+    yield Response("🧮 Calculating recipe nutrition (macros per serving)...")
 
     try:
         client = client_manager.get_client()
@@ -171,7 +171,7 @@ async def calculate_recipe_macros_tool(
                 payload_type="generic",
                 display=True,
             )
-            yield Response("Macros retrieved from cache")
+            yield Response("✅ Nutrition data retrieved from cache")
             return
 
         # Need to calculate: translate ingredients
@@ -185,9 +185,12 @@ async def calculate_recipe_macros_tool(
         # Find FDC foods and calculate macros
         total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
         ingredient_map = []
+        found_count = 0
+        not_found_ingredients = []
 
         for item in translated:
             ingredient_en = item.get("en", "")
+            ingredient_vn = item.get("vn", "")
             quantity_g = float(item.get("quantity", 100.0))
 
             fdc_food = await _find_fdc_food(ingredient_en, client)
@@ -197,12 +200,32 @@ async def calculate_recipe_macros_tool(
                     total_macros[key] += ingredient_macros[key]
 
                 ingredient_map.append({
-                    "ingredient_vn": item.get("vn", ""),
+                    "ingredient_vn": ingredient_vn,
                     "ingredient_en": ingredient_en,
                     "fdc_id": int(fdc_food.get("fdc_id", 0)),
                     "quantity_g": quantity_g,
                     "confidence": 0.8,  # Could be improved with actual match score
                 })
+                found_count += 1
+            else:
+                not_found_ingredients.append(ingredient_vn or ingredient_en)
+
+        # Check if we found any FDC foods - if not, don't update with zeros
+        if found_count == 0:
+            yield Error(
+                f"Could not find nutrition data for any ingredients. "
+                f"Please ensure ingredients are in English or check FDC database. "
+                f"Ingredients tried: {', '.join(not_found_ingredients[:5])}"
+            )
+            return
+
+        # Warn if some ingredients were not found
+        if not_found_ingredients:
+            yield Response(
+                f"⚠️ Could not find nutrition data for {len(not_found_ingredients)} ingredient(s): "
+                f"{', '.join(not_found_ingredients[:3])}. "
+                f"Calculated macros may be incomplete."
+            )
 
         # Divide by serving_size to get per-serving macros
         serving_size = float(recipe_obj.get("serving_size", 1.0))
@@ -210,6 +233,15 @@ async def calculate_recipe_macros_tool(
             macros_per_serving = {k: v / serving_size for k, v in total_macros.items()}
         else:
             macros_per_serving = total_macros
+
+        # Only update if macros are non-zero (at least kcal > 0)
+        if macros_per_serving.get("kcal", 0) <= 0:
+            yield Error(
+                f"Calculated macros are zero or invalid. "
+                f"Found FDC data for {found_count}/{len(translated)} ingredients. "
+                f"Please check ingredient names and FDC database."
+            )
+            return
 
         # Update Recipe in Weaviate with deduplicated ingredient_fdc_map
         if recipe_uuid:
@@ -262,7 +294,11 @@ async def calculate_recipe_macros_tool(
             payload_type="generic",
             display=True,
         )
-        yield Response(f"Calculated macros: {macros_per_serving['kcal']:.0f} kcal per serving")
+        yield Response(
+            f"✅ Calculated nutrition: {macros_per_serving['kcal']:.0f} kcal/serving | "
+            f"{macros_per_serving['protein_g']:.0f}g protein | "
+            f"{macros_per_serving['carb_g']:.0f}g carbs"
+        )
 
     except Exception as e:
         yield Error(f"Macro calculation failed: {str(e)}")

@@ -26,7 +26,7 @@ async def meal_history_tool(
     Environment writes:
       - environment["meal_history_tool"]["history"]
     """
-    yield Response("Retrieving meal history...")
+    yield Response("📊 Retrieving your meal history...")
 
     if not user_id:
         yield Error("user_id is required")
@@ -100,14 +100,15 @@ async def meal_history_tool(
             "date_range": {"start": start_date, "end": end_date},
         }
 
+        # Use meal_history payload_type for explicit frontend detection
         yield Result(
             name="history",
             objects=[history],
             metadata={"user_id": user_id, "logs_count": len(logs), "days_count": len(daily_totals)},
-            payload_type="generic",
+            payload_type="meal_history",
             display=True,
         )
-        # Table view of logs for display
+        # Table view of logs for display (fallback for table view)
         yield Result(
             name="logs",
             objects=logs,
@@ -115,7 +116,9 @@ async def meal_history_tool(
             payload_type="table",
             display=True,
         )
-        yield Response(f"Retrieved {len(logs)} meal logs across {len(daily_totals)} days")
+        yield Response(
+            f"✅ Found {len(logs)} meal log(s) across {len(daily_totals)} day(s)"
+        )
 
     except Exception as e:
         yield Error(f"Meal history retrieval failed for user {user_id}: {str(e)}")

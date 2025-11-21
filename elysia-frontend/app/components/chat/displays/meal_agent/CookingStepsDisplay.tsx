@@ -50,13 +50,14 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
 
-  const totalTime =
-    stepList.length > 0
+  // Use total_time_seconds from metadata if available, otherwise calculate
+  const totalTime = stepData.total_time_seconds ?? 
+    (stepList.length > 0
       ? stepList.reduce(
           (sum, step) => sum + (step.estimated_seconds ?? 0),
           0
         )
-      : 0;
+      : 0);
 
   useEffect(() => {
     if (!isPlaying || timeRemaining === null || timeRemaining <= 0) {
@@ -195,14 +196,19 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
             ))}
           </div>
 
-          {/* Total Time */}
-          {totalTime > 0 && (
-            <div className="pt-3 border-t border-secondary/10">
+          {/* Total Time & Serving Info */}
+          <div className="pt-3 border-t border-secondary/10 space-y-1">
+            {totalTime > 0 && (
               <p className="text-xs text-secondary">
-                Total estimated time: {formatTime(totalTime)}
+                ⏱️ Total estimated time: {formatTime(totalTime)}
               </p>
-            </div>
-          )}
+            )}
+            {stepData.serving_size && stepData.serving_size > 0 && (
+              <p className="text-xs text-secondary">
+                🍽️ Serves: {stepData.serving_size} {stepData.serving_size === 1 ? 'person' : 'people'}
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
     </motion.div>

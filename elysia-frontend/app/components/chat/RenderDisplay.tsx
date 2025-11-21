@@ -28,6 +28,7 @@ import HistogramDisplay from "./displays/ChartTable/HistogramDisplay";
 // MealAgent custom displays
 import MealPlanDisplay from "./displays/meal_agent/MealPlanDisplay";
 import RecipeCard from "./displays/meal_agent/RecipeCard";
+import RecipeDetail from "./displays/meal_agent/RecipeDetail";
 import NutritionSummary from "./displays/meal_agent/NutritionSummary";
 import ShoppingListDisplay from "./displays/meal_agent/ShoppingListDisplay";
 import CookingStepsDisplay from "./displays/meal_agent/CookingStepsDisplay";
@@ -114,6 +115,15 @@ const RenderDisplay: React.FC<RenderDisplayProps> = ({
         <RecipeCard
           key={`${keyBase}-recipe-card`}
           recipes={payload.objects as RecipeCardPayload[]}
+          handleResultPayloadChange={handleResultPayloadChangeWithCollectionName}
+        />
+      );
+    case "recipe_detail":
+      const recipeDetail = payload.objects[0] as RecipeCardPayload;
+      return (
+        <RecipeDetail
+          key={`${keyBase}-recipe-detail`}
+          recipe={recipeDetail}
           handleResultPayloadChange={handleResultPayloadChangeWithCollectionName}
         />
       );

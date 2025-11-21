@@ -83,7 +83,13 @@ async def profile_crud_tool(
       emits a Response("Skipping ...") and returns to avoid noisy errors.
     """
     logging.info(f"profile_crud_tool: start (action={action})")
-    yield Response(f"Processing profile {action}...")
+    action_icons = {
+        "create": "➕",
+        "update": "✏️",
+        "read": "📋",
+    }
+    icon = action_icons.get(action, "👤")
+    yield Response(f"{icon} Processing profile {action}...")
 
     # Ensure valid action
     allowed = {"create", "update", "read"}
@@ -129,7 +135,8 @@ async def profile_crud_tool(
                 payload_type="generic",
                 display=True,
             )
-            yield Response(f"Profile {action}d successfully for user {user_id}")
+            action_past = "created" if action == "create" else "updated"
+            yield Response(f"✅ Profile {action_past} successfully for user {user_id}")
 
         else:  # read
             user_id = (
@@ -160,7 +167,7 @@ async def profile_crud_tool(
                 payload_type="generic",
                 display=True,
             )
-            yield Response(f"Profile read successfully for user {user_id}")
+            yield Response(f"✅ Profile loaded for user {user_id}")
 
     except ValueError as e:
         error_msg = f"Invalid input: {str(e)}"

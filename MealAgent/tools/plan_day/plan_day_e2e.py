@@ -148,7 +148,7 @@ async def plan_day_e2e_tool(
       - Check plan.validation.valid to see if plan meets targets and constraints.
     """
     logging.info("plan_day_e2e_tool: start")
-    yield Response("Planning daily meals...")
+    yield Response("🍽️ Planning your daily meals (breakfast, lunch, dinner)...")
 
     try:
         if not user_id:
@@ -163,12 +163,16 @@ async def plan_day_e2e_tool(
             targets = macro_results[0]["objects"][0]
         
         if targets:
-            yield Response(f"Using targets: {targets.get('tdee_kcal', 0):.0f} kcal")
+            yield Response(
+                f"📊 Using your targets: {targets.get('tdee_kcal', 0):.0f} kcal | "
+                f"{targets.get('protein_g', 0):.0f}g protein | "
+                f"{targets.get('carb_g', 0):.0f}g carbs"
+            )
         else:
             targets = build_default_macro_targets()
             yield Response(
-                "No personalized targets found; using WHO baseline "
-                f"{targets['tdee_kcal']:.0f} kcal plan."
+                f"📊 Using default targets: {targets['tdee_kcal']:.0f} kcal/day "
+                "(create a profile for personalized targets)"
             )
 
         # Step 2: Read constraints filters (for validation)
@@ -176,9 +180,16 @@ async def plan_day_e2e_tool(
         filters_metadata: Dict[str, Any] | None = None
         if filters_results and filters_results[0]["objects"]:
             filters_metadata = filters_results[0].get("metadata") or {}
-            yield Response("Constraints filters found")
+            diet_types = filters_metadata.get("diet_types", [])
+            allergens = filters_metadata.get("exclude_allergens", [])
+            constraint_msg = "✅ Applying your dietary preferences"
+            if diet_types:
+                constraint_msg += f" ({', '.join(diet_types)})"
+            if allergens:
+                constraint_msg += f" (excluding: {', '.join(allergens)})"
+            yield Response(constraint_msg)
         else:
-            yield Response("No constraints filters found; plan will be assembled without constraint validation")
+            yield Response("ℹ️ No dietary constraints specified")
 
         # Step 3: Read ranked recipes
         sr = tree_data.environment.find("search_and_rank_tool", "topk")
@@ -191,18 +202,32 @@ async def plan_day_e2e_tool(
             yield Error("Insufficient recipes for 3-meal plan. Need at least 3 recipes.")
             return
 
-        # Check for missing macros
+        # Check for missing macros and auto-calculate if base_lm is available
         missing_macros = [
             r for r in recipes
             if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict)
             or not r.get("macros_per_serving", {}).get("kcal")
         ]
         if missing_macros:
-            logging.warning(f"plan_day_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
-            yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
+            if kwargs.get("base_lm"):
+                yield Response(f"🧮 Calculating nutrition for {len(missing_macros)} recipe(s)...")
+                calculated_count = 0
+                for recipe in missing_macros:
+                    macros = await _ensure_recipe_macros_cached(
+                        recipe, tree_data, client_manager, kwargs.get("base_lm")
+                    )
+                    if macros and macros.get("kcal"):
+                        calculated_count += 1
+                if calculated_count > 0:
+                    yield Response(f"✅ Calculated nutrition for {calculated_count} recipe(s).")
+                if calculated_count < len(missing_macros):
+                    yield Response(f"⚠️ {len(missing_macros) - calculated_count} recipe(s) still missing nutrition data.")
+            else:
+                logging.warning(f"plan_day_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
+                yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
 
         # Step 4: Assemble plan
-        yield Response("Assembling 3-meal plan...")
+        yield Response("🔍 Selecting meals for breakfast, lunch, and dinner...")
         
         breakfast = _select_meal_by_strategy(
             recipes, "highest_carb", preferred_meal_type="breakfast"
@@ -261,17 +286,22 @@ async def plan_day_e2e_tool(
         validation = {"valid": True, "macro_validation": {}, "constraint_validation": {}}
         
         if targets:
-            yield Response("Validating macro balance...")
+            yield Response("✅ Checking nutritional balance...")
             macro_validation = _validate_macro_targets(total_macros, targets, macro_tolerance_percent)
             validation["macro_validation"] = macro_validation
             if not macro_validation["valid"]:
                 validation["valid"] = False
-                yield Response(f"Macro validation: {len(macro_validation['violations'])} violations, {len(macro_validation['warnings'])} warnings")
+                violations = len(macro_validation.get('violations', []))
+                warnings = len(macro_validation.get('warnings', []))
+                if violations > 0:
+                    yield Response(f"⚠️ Macro balance: {violations} deviation(s) from targets")
+                if warnings > 0:
+                    yield Response(f"ℹ️ {warnings} minor deviation(s) detected")
             else:
-                yield Response("Macro validation passed")
+                yield Response("✅ All macros within target range")
         
         if filters_metadata:
-            yield Response("Validating constraints...")
+            yield Response("✅ Verifying dietary constraints...")
             diet_types = filters_metadata.get("diet_types", [])
             exclude_allergens = filters_metadata.get("exclude_allergens", [])
             constraint_validation = _validate_constraints(
@@ -282,9 +312,10 @@ async def plan_day_e2e_tool(
             validation["constraint_validation"] = constraint_validation
             if not constraint_validation["valid"]:
                 validation["valid"] = False
-                yield Response(f"Constraint validation: {len(constraint_validation['violations'])} violations")
+                violations = len(constraint_validation.get('violations', []))
+                yield Response(f"⚠️ {violations} constraint violation(s) found")
             else:
-                yield Response("Constraint validation passed")
+                yield Response("✅ All dietary constraints satisfied")
 
         plan_output = {
             "plan_type": "day",
@@ -305,18 +336,22 @@ async def plan_day_e2e_tool(
                 client_manager=client_manager,
                 start_date=plan_output.get("start_date"),
             )
-            yield Response(f"Persisted plan {plan_output.get('plan_id')} for user {user_id}")
+            yield Response(f"💾 Plan saved (ID: {plan_output.get('plan_id', 'N/A')})")
         else:
-            yield Response("User ID missing – plan stored in memory only.")
+            yield Response("ℹ️ Plan stored in memory (create profile to save permanently)")
 
         # Stream response first for immediate feedback
-        status_msg = "✓" if validation["valid"] else "⚠"
+        status_icon = "✅" if validation["valid"] else "⚠️"
         yield Response(
-            f"{status_msg} Daily plan assembled: {total_macros['kcal']:.0f} kcal | "
-            f"{total_macros['protein_g']:.0f}g P | {total_macros['fat_g']:.0f}g F | {total_macros['carb_g']:.0f}g C"
+            f"{status_icon} Daily meal plan ready! "
+            f"Total: {total_macros['kcal']:.0f} kcal | "
+            f"{total_macros['protein_g']:.0f}g protein | "
+            f"{total_macros['fat_g']:.0f}g fat | "
+            f"{total_macros['carb_g']:.0f}g carbs"
         )
         
         # Then yield Result for data consistency
+        # Use "meal_plan" payload_type for explicit frontend detection
         yield Result(
             name="plan",
             objects=[plan_output],
@@ -328,7 +363,7 @@ async def plan_day_e2e_tool(
                 "constraint_violations": len(validation.get("constraint_validation", {}).get("violations", [])),
                 "plan_id": plan_output.get("plan_id"),
             },
-            payload_type="generic",
+            payload_type="meal_plan",
             display=True,
         )
 

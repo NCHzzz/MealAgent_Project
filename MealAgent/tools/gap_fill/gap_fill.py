@@ -105,7 +105,7 @@ async def gap_fill_tool(
       - If auto_apply=True, gap_fill_tool.updated_plan contains the plan with snack added.
     """
     logging.info("gap_fill_tool: start")
-    yield Response("Analyzing plan for macro gaps...")
+    yield Response("🔍 Analyzing your meal plan for nutritional gaps...")
     
     try:
         # Step 1: Read plan from E2E tools
@@ -138,7 +138,7 @@ async def gap_fill_tool(
         targets = macro_results[0]["objects"][0]
         
         # Step 3: Calculate plan macros and deficits
-        yield Response("Calculating macro deficits...")
+        yield Response("📊 Calculating macro deficits...")
         plan_macros = _calculate_plan_macros(plan)
         
         # Get target macros (adjust for weekly if needed)
@@ -191,14 +191,18 @@ async def gap_fill_tool(
         )
         
         if not deficit_macros:
-            yield Response("No deficits - plan meets or exceeds targets")
+            yield Response("✅ No deficits found - your plan meets or exceeds all targets!")
             return
         
-        deficit_str = ", ".join([f"{k}: {v:.1f}" for k, v in deficit_macros.items()])
-        yield Response(f"Deficits found: {deficit_str}")
+        deficit_list = []
+        for k, v in deficit_macros.items():
+            macro_name = k.replace("_g", "").replace("kcal", "calories").title()
+            deficit_list.append(f"{macro_name}: {v:.1f}")
+        deficit_str = ", ".join(deficit_list)
+        yield Response(f"⚠️ Deficits detected: {deficit_str}")
         
         # Step 4: Suggest snacks
-        yield Response("Searching for snacks to fill deficits...")
+        yield Response("🍎 Searching for snacks to fill nutritional gaps...")
         
         try:
             client = client_manager.get_client()
@@ -233,15 +237,16 @@ async def gap_fill_tool(
             suggestions = scored_recipes[:top_k]
             
             if not suggestions:
-                yield Response("No suitable snacks found to fill deficits")
+                yield Response("⚠️ No suitable snacks found to fill deficits")
                 return
             
-            yield Response(f"Found {len(suggestions)} snack suggestions")
+            yield Response(f"✅ Found {len(suggestions)} snack suggestion(s)")
             
             # Step 5: Optionally apply best snack
             if auto_apply and suggestions:
                 best_snack = suggestions[0]
-                yield Response(f"Auto-applying best snack: {best_snack.get('dish_name', 'Unknown')}")
+                snack_name = best_snack.get('dish_name', 'Unknown')
+                yield Response(f"➕ Adding snack to plan: {snack_name}")
                 
                 # Add snack to plan
                 snack_meal = {
@@ -291,10 +296,13 @@ async def gap_fill_tool(
                         "snack_name": best_snack.get("dish_name", ""),
                         "plan_id": plan.get("plan_id"),
                     },
-                    payload_type="generic",
+                    payload_type="meal_plan",  # Use meal_plan for frontend detection
                     display=True,
                 )
-                yield Response(f"Snack added. Updated totals: {updated_macros['kcal']:.0f} kcal")
+                yield Response(
+                    f"✅ Snack added! Updated plan totals: {updated_macros['kcal']:.0f} kcal | "
+                    f"{updated_macros['protein_g']:.0f}g protein"
+                )
             else:
                 # Just yield suggestions without applying
                 suggestions_output = {

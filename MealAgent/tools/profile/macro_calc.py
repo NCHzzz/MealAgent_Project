@@ -32,7 +32,7 @@ async def macro_calc_tool(
     - If profile missing, this tool emits a skip Response to prevent noisy errors.
     """
     logging.info(f"macro_calc_tool: start (protein_share={protein_share}, fat_share={fat_share}, carb_share={carb_share})")
-    yield Response("Calculating nutritional targets...")
+    yield Response("📊 Calculating your nutritional targets (TDEE & macros)...")
 
     try:
         results = tree_data.environment.find("profile_crud_tool", "profile")
@@ -134,13 +134,14 @@ async def macro_calc_tool(
 
         if fallback_reason:
             yield Response(
-                "No personalized profile available; using WHO baseline "
-                f"{summary_kcal:.0f} kcal | {summary_protein:.0f}g P | {summary_fat:.0f}g F | {summary_carb:.0f}g C"
+                f"📊 Using default targets: {summary_kcal:.0f} kcal | "
+                f"{summary_protein:.0f}g protein | {summary_fat:.0f}g fat | {summary_carb:.0f}g carbs "
+                "(create profile for personalized targets)"
             )
         else:
             yield Response(
-                f"Target: {summary_kcal:.0f} kcal | {summary_protein:.0f}g P | "
-                f"{summary_fat:.0f}g F | {summary_carb:.0f}g C"
+                f"✅ Your targets: {summary_kcal:.0f} kcal | "
+                f"{summary_protein:.0f}g protein | {summary_fat:.0f}g fat | {summary_carb:.0f}g carbs"
             )
     except ValueError as e:
         error_msg = f"Invalid input: {str(e)}"

@@ -44,7 +44,7 @@ async def constraints_guard_tool(
     - If constraints_guard_tool.filters exists, search tools should use it.
     - Metadata includes constraint details (diet_types, exclude_allergens, etc.) for debugging.
     """
-    yield Response("Generating combined constraints (diet/allergen + time/device)...")
+    yield Response("🔒 Applying dietary constraints and preferences...")
 
     # Read profile for defaults
     profile_results = tree_data.environment.find("profile_crud_tool", "profile")
@@ -105,6 +105,9 @@ async def constraints_guard_tool(
         payload_type="generic",
         display=True,
     )
-    yield Response("Combined constraints generated")
+    if operands:
+        yield Response("✅ Constraints applied successfully")
+    else:
+        yield Response("ℹ️ No constraints specified")
 
 

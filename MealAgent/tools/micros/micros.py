@@ -78,7 +78,7 @@ async def micros_tool(
       - If micros_tool.suggestions is present, food suggestions are available to fill deficits.
     """
     logging.info("micros_tool: start")
-    yield Response("Analyzing micronutrients in plan...")
+    yield Response("🔬 Analyzing micronutrients (vitamins & minerals) in your plan...")
     
     try:
         # Step 1: Read plan from E2E tools
@@ -118,7 +118,7 @@ async def micros_tool(
                 rdas["vitamin_a_rae_ug"] = 900.0
         
         # Step 3: Aggregate micronutrients from plan
-        yield Response("Aggregating micronutrients from all meals...")
+        yield Response("📊 Aggregating micronutrients from all meals...")
         
         client = client_manager.get_client()
         fdc_collection = client.collections.get("FdcFood")
@@ -233,14 +233,18 @@ async def micros_tool(
         )
         
         if deficits:
-            deficit_str = ", ".join([f"{k}: {v['deficit']:.1f}" for k, v in list(deficits.items())[:3]])
-            yield Response(f"Deficits found: {deficit_str}...")
+            deficit_list = []
+            for k, v in list(deficits.items())[:3]:
+                nutrient_name = k.replace("_mg", "").replace("_ug", "").replace("_", " ").title()
+                deficit_list.append(f"{nutrient_name}: {v['deficit']:.1f}")
+            deficit_str = ", ".join(deficit_list)
+            yield Response(f"⚠️ Micronutrient deficits: {deficit_str}...")
         else:
-            yield Response("No deficits - plan meets or exceeds RDA values")
+            yield Response("✅ All micronutrients meet or exceed RDA values!")
             return
         
         # Step 5: Suggest foods for deficient nutrients
-        yield Response("Searching for foods rich in deficient nutrients...")
+        yield Response("🔍 Searching for foods rich in deficient nutrients...")
         
         deficient_nutrients = list(deficits.keys())
         nutrient_field_map = {
@@ -324,9 +328,10 @@ async def micros_tool(
         )
         
         if unique_suggestions:
-            yield Response(f"Found {len(unique_suggestions[:top_k * len(deficient_nutrients)])} food suggestions for deficient nutrients")
+            count = len(unique_suggestions[:top_k * len(deficient_nutrients)])
+            yield Response(f"✅ Found {count} food suggestion(s) to fill micronutrient gaps")
         else:
-            yield Response("No suitable foods found for deficient nutrients")
+            yield Response("⚠️ No suitable foods found for deficient nutrients")
     
     except ValueError as e:
         error_msg = f"Invalid input: {str(e)}"
