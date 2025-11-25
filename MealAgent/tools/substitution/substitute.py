@@ -65,25 +65,24 @@ async def substitute_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    End-to-end substitution: suggest substitutes → optionally apply to plan.
-    
-    This tool orchestrates the full substitution workflow:
-    1. Read plan from environment (plan_day_e2e_tool.plan or plan_week_e2e_tool.plan)
-    2. Identify ingredient to substitute (from plan or parameters)
-    3. Suggest macro-tolerant substitutes (±20% tolerance)
-    4. Optionally apply best substitute to plan (if auto_apply=True)
-    5. Recalculate recipe macros if needed
-    
-    Environment reads:
-      - plan_day_e2e_tool.plan or plan_week_e2e_tool.plan (optional - if ingredient not specified)
-      - macro_calc_tool.targets (for allergen checks)
-    Environment writes:
-      - substitute_tool.substitutes: suggested substitutes
-      - substitute_tool.updated_plan: plan with substitute applied (if auto_apply=True)
-    
+    Macro-aware ingredient substitution helper (suggest → optionally apply → recalc macros).
+
+    Workflow:
+      1. Identify the original ingredient via `ingredient_name` or `fdc_id`.
+      2. Query FDC for nutritionally similar candidates within ±`tolerance`.
+      3. Emit ranked substitutes table; optionally apply the best one to current plan.
+      4. When `auto_apply` and `base_lm` are provided, trigger macro recalculation + plan sync.
+
+    Environment contract:
+      Reads
+        • `plan_day_e2e_tool.plan` / `plan_week_e2e_tool.plan` (when auto-applying on the active plan).
+      Writes
+        • `substitute_tool.substitutes` (list + table variants for display).
+        • `substitute_tool.updated_plan` when modifications are persisted.
+
     Decision hints:
-      - If substitute_tool.substitutes is present, substitute suggestions are available.
-      - If auto_apply=True, substitute_tool.updated_plan contains the plan with substitute applied.
+      • If only `substitutes` is present, ask the user to pick or apply automatically.
+      • Once `updated_plan` exists, downstream tools (gap fill, micros, pantry) should consume the new plan version.
     """
     logging.info("substitute_tool: start")
     yield Response("🔄 Finding ingredient substitutes with similar nutrition...")
@@ -346,6 +345,8 @@ async def substitute_tool(
                 for food_id in updated_recipes:
                     try:
                         async for result in calculate_recipe_macros_tool(
+                            inputs={"recipe_id": str(food_id)},
+                            complex_lm=None,
                             tree_data=tree_data,
                             client_manager=client_manager,
                             recipe_id=food_id,

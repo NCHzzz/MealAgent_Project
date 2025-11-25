@@ -32,17 +32,15 @@ async def constraints_guard_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Merge diet/allergen and time/device filters into a single where-clause.
+    Merge diet/allergen/time/equipment preferences into a single Weaviate where-clause.
 
-    Environment interface:
-    - Reads:
-      - profile_crud_tool.profile (optional defaults for diet/allergens/equipment)
-    - Writes:
-      - constraints_guard_tool.filters: [{ where: <Filter JSON> }]
+    Environment contract:
+      Reads – `profile_crud_tool.profile` for defaults.
+      Writes – `constraints_guard_tool.filters` (objects + metadata used by search/planning).
 
     Decision hints:
-    - If constraints_guard_tool.filters exists, search tools should use it.
-    - Metadata includes constraint details (diet_types, exclude_allergens, etc.) for debugging.
+      • If `filters` doesn't exist, search should assume no constraints.
+      • Metadata exposes derived parameters so the agent can debug/explain constraint logic.
     """
     yield Response("🔒 Applying dietary constraints and preferences...")
 

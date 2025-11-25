@@ -235,23 +235,22 @@ async def search_and_rank_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    End-to-end search → normalize/deduplicate → rank.
-    Applies combined constraints if available. Returns top_k in one Result.
+    Hybrid recipe retrieval with constraint-aware filters, diversity scoring, and macro-fit ranking.
 
-    This tool can use either:
-    1. Elysia Query tool (if use_elysia_query=True and base_lm available) - LLM-driven query optimization
-    2. Custom search logic (default) - Direct Weaviate queries with deterministic behavior
+    Modes:
+      1. `ElysiaQuery` (LLM-optimized) when `use_elysia_query=True` and models are available.
+      2. Deterministic custom Weaviate hybrid/BM25 fetch (default), honoring filters + macro targets.
 
-    Environment interface:
-    - Reads:
-      - constraints_guard_tool.filters (combined where clause for filtering)
-      - macro_calc_tool.targets (optional for macro-aware ranking)
-    - Writes:
-      - search_and_rank_tool.topk: ranked candidate items
+    Environment contract:
+      Reads
+        • `constraints_guard_tool.filters` for user diet/allergen/time guardrails.
+        • `macro_calc_tool.targets` (optional) to bias scoring toward per-meal targets.
+      Writes
+        • `search_and_rank_tool.topk` – normalized candidate list used by planning/search displays.
 
     Decision hints:
-    - Presence of search_and_rank_tool.topk means downstream tools can proceed
-      (e.g., plan_day_e2e_tool can select recipes from topk).
+      • Lack of `search_and_rank_tool.topk` means downstream planning tools must not run.
+      • Metadata includes `has_targets` so the agent knows whether nutrition-aware scoring ran.
     """
     logging.info(f"search_and_rank_tool: start (use_elysia_query={use_elysia_query})")
     collection_display = "recipes" if collection_name == "Recipe" else collection_name.lower()
@@ -362,6 +361,7 @@ async def search_and_rank_tool(
             from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
             
             calculated_count = 0
+            failed_ids: list[str] = []
             for item in top_items:
                 macros = item.get("macros_per_serving", {})
                 if not macros or not isinstance(macros, dict) or not macros.get("kcal"):
@@ -370,6 +370,8 @@ async def search_and_rank_tool(
                     if food_id:
                         try:
                             async for result in calculate_recipe_macros_tool(
+                                inputs={"recipe_id": str(food_id)},
+                                complex_lm=None,
                                 tree_data=tree_data,
                                 client_manager=client_manager,
                                 recipe_id=str(food_id),
@@ -380,13 +382,26 @@ async def search_and_rank_tool(
                                     calculated_count += 1
                                     break
                                 elif isinstance(result, Error):
+                                    failed_ids.append(str(food_id))
                                     break
                         except Exception as e:
                             logging.warning(f"Failed to auto-calculate macros for recipe {food_id}: {str(e)}")
+                            failed_ids.append(str(food_id))
                             continue
 
             if calculated_count > 0:
                 yield Response(f"🧮 Calculated nutrition for {calculated_count} recipe(s).")
+            remaining_missing = [
+                item for item in top_items
+                if not isinstance(item.get("macros_per_serving"), dict)
+                or not item.get("macros_per_serving", {}).get("kcal")
+            ]
+            if remaining_missing:
+                sample_ids = ", ".join(str(item.get("food_id")) for item in remaining_missing[:5])
+                yield Response(
+                    f"⚠️ Still missing nutrition for {len(remaining_missing)} recipe(s) (e.g. {sample_ids}). "
+                    "Run calculate_recipe_macros_tool explicitly if needed."
+                )
 
         warn = ""
         if missing_macros_count > 0 and has_targets:

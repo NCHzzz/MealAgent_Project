@@ -24,6 +24,7 @@ import { FaLinkedin } from "react-icons/fa";
 import { FaYoutube } from "react-icons/fa";
 
 import { RiRobot2Line } from "react-icons/ri";
+import { FiUser } from "react-icons/fi";
 
 
 import { public_path } from "@/app/components/host";
@@ -53,12 +54,15 @@ import { RouterContext } from "../contexts/RouterContext";
 import { CollectionContext } from "../contexts/CollectionContext";
 import { SessionContext } from "../contexts/SessionContext";
 import packageJson from "../../../package.json";
+import { AuthContext } from "../contexts/AuthContext";
+import { Button } from "@/components/ui/button";
 
 const SidebarComponent: React.FC = () => {
   const { socketOnline } = useContext(SocketContext);
   const { changePage, currentPage } = useContext(RouterContext);
   const { collections, loadingCollections } = useContext(CollectionContext);
   const { unsavedChanges } = useContext(SessionContext);
+  const { authUser, logout } = useContext(AuthContext);
 
   const [items, setItems] = useState<
     {
@@ -78,6 +82,12 @@ const SidebarComponent: React.FC = () => {
         mode: ["chat"],
         icon: <MdChatBubbleOutline />,
         onClick: () => changePage("chat", {}, true, unsavedChanges),
+      },
+      {
+        title: "Profile",
+        mode: ["profile"],
+        icon: <FiUser />,
+        onClick: () => changePage("profile", {}, true, unsavedChanges),
       },
       {
         title: "Data",
@@ -190,6 +200,24 @@ const SidebarComponent: React.FC = () => {
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
+          {authUser && (
+            <SidebarMenuItem>
+              <div className="w-full border border-secondary/10 rounded-lg p-3 bg-background_alt">
+                <p className="text-xs text-secondary uppercase">Signed in as</p>
+                <p className="text-sm font-semibold truncate">
+                  {authUser.display_name || authUser.email}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 w-full"
+                  onClick={logout}
+                >
+                  Logout
+                </Button>
+              </div>
+            </SidebarMenuItem>
+          )}
           <SidebarMenuItem>
             <SidebarMenuButton
               className="w-full justify-start items-center"

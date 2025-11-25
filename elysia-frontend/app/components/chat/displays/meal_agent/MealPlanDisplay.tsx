@@ -7,6 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import DisplayPagination from "../../components/DisplayPagination";
 
+type DailyMeal = NonNullable<MealPlanPayload["meals"]>[string];
+type WeeklyMeal = NonNullable<
+  NonNullable<MealPlanPayload["days"]>[string]["meals"]
+>[string];
+
 interface MealPlanDisplayProps {
   plans: MealPlanPayload[];
   handleResultPayloadChange?: (
@@ -29,13 +34,56 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
     return `${value.toFixed(0)} kcal`;
   };
 
+  const renderAccompaniments = (
+    items?: {
+      type?: string;
+      recipe?: { dish_name?: string };
+      servings?: number;
+      macros?: { kcal?: number };
+    }[]
+  ) => {
+    if (!items || items.length === 0) return null;
+    return (
+      <div className="mt-3 border-t border-secondary/10 pt-3 space-y-1">
+        <p className="text-xs font-semibold uppercase text-secondary tracking-wide">
+          Sides & extras
+        </p>
+        {items.map((item, idx) => (
+          <div
+            key={`${item.recipe?.dish_name}-${idx}`}
+            className="flex justify-between items-start text-xs bg-background/70 rounded p-2"
+          >
+            <div className="flex flex-col">
+              <span className="text-primary font-medium capitalize">
+                {item.type || "extra"}
+              </span>
+              <span className="text-secondary">
+                {item.recipe?.dish_name || "Unknown dish"}
+              </span>
+            </div>
+            <div className="text-right text-secondary">
+              {item.servings && (
+                <p>
+                  {item.servings} serving{item.servings !== 1 ? "s" : ""}
+                </p>
+              )}
+              <p>{formatKcal(item.macros?.kcal || 0)}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderDailyPlan = (plan: MealPlanPayload) => {
     if (plan.plan_type !== "day" || !plan.meals) return null;
 
-    const meals = Object.entries(plan.meals).map(([key, meal]) => ({
-      key,
-      ...meal,
-    }));
+    const meals = (Object.entries(plan.meals) as [string, DailyMeal][]).map(
+      ([key, meal]) => ({
+        key,
+        ...meal,
+      })
+    );
 
     return (
       <Card className="w-full bg-background_alt border-secondary/10">
@@ -96,6 +144,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                     {formatMacro(meal.macros?.fat_g || 0)} F | {formatMacro(meal.macros?.carb_g || 0)} C
                   </span>
                 </div>
+                {renderAccompaniments(meal.accompaniments)}
               </div>
             ))}
           </div>
@@ -204,22 +253,29 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                   </div>
                 </div>
                 <div className="space-y-2">
-                  {Object.entries(day.meals).map(([mealKey, meal]) => (
-                    <div
-                      key={mealKey}
-                      className="flex justify-between items-start text-sm p-2 bg-background/50 rounded"
-                    >
-                      <div className="flex-1">
-                        <span className="text-secondary capitalize font-medium">
-                          {meal.meal_type}:
-                        </span>
-                        <span className="text-primary ml-2">{meal.recipe.dish_name}</span>
+                  {Object.entries(day.meals).map(
+                    ([mealKey, meal]: [string, WeeklyMeal]) => (
+                      <div
+                        key={mealKey}
+                        className="flex flex-col gap-2 text-sm p-2 bg-background/50 rounded"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <span className="text-secondary capitalize font-medium">
+                              {meal.meal_type}:
+                            </span>
+                            <span className="text-primary ml-2">
+                              {meal.recipe.dish_name}
+                            </span>
+                          </div>
+                          <div className="text-xs text-secondary ml-2">
+                            {formatKcal(meal.macros?.kcal || 0)}
+                          </div>
+                        </div>
+                        {renderAccompaniments(meal.accompaniments)}
                       </div>
-                      <div className="text-xs text-secondary ml-2">
-                        {formatKcal(meal.macros?.kcal || 0)}
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  )}
                 </div>
               </div>
             ))}

@@ -70,17 +70,14 @@ async def profile_crud_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Create, read, or update a UserProfile in Weaviate.
+    Create, read, or update a `UserProfile` document and expose it to the environment.
 
-    Environment interface:
-    - Writes:
-      - profile_crud_tool.profile: [{ ...profile fields... }]
+    Environment contract:
+      Writes – `profile_crud_tool.profile` so every branch can reuse the latest profile snapshot.
 
     Decision hints:
-    - Presence of profile_crud_tool.profile means profile is available for downstream
-      tools (macro_calc_tool, constraints_guard_tool, etc.).
-    - This tool should not be auto-invoked without payload; when missing inputs it
-      emits a Response("Skipping ...") and returns to avoid noisy errors.
+      • If no profile data is provided (e.g., auto call), the tool emits a skip response instead of hard error.
+      • Downstream tools should gate on `profile_crud_tool.profile` existence before executing.
     """
     logging.info(f"profile_crud_tool: start (action={action})")
     action_icons = {

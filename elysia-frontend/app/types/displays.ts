@@ -145,59 +145,46 @@ export type SingleMessagePayload = DefaultResultPayload & {
 };
 
 // MealAgent-specific payload types
+type MealRecipe = {
+  food_id: string;
+  dish_name: string;
+  macros_per_serving?: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  allergens?: string[];
+  cooking_time?: number;
+  image_link?: string;
+};
+
+type MealComponent = {
+  meal_type?: string;
+  type?: string;
+  recipe: MealRecipe;
+  servings: number;
+  macros?: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+};
+
 export type MealPlanPayload = DefaultResultPayload & {
   plan_type: "day" | "week";
   meals?: {
-    [mealKey: string]: {
-      meal_type: string;
-      recipe: {
-        food_id: string;
-        dish_name: string;
-        macros_per_serving?: {
-          kcal: number;
-          protein_g: number;
-          fat_g: number;
-          carb_g: number;
-        };
-        allergens?: string[];
-        cooking_time?: number;
-        image_link?: string;
-      };
-      servings: number;
-      macros: {
-        kcal: number;
-        protein_g: number;
-        fat_g: number;
-        carb_g: number;
-      };
+    [mealKey: string]: MealComponent & {
+      accompaniments?: MealComponent[];
     };
   };
   days?: {
     [dayKey: string]: {
       date: string;
       meals: {
-        [mealKey: string]: {
-          meal_type: string;
-          recipe: {
-            food_id: string;
-            dish_name: string;
-            macros_per_serving?: {
-              kcal: number;
-              protein_g: number;
-              fat_g: number;
-              carb_g: number;
-            };
-            allergens?: string[];
-            cooking_time?: number;
-            image_link?: string;
-          };
-          servings: number;
-          macros: {
-            kcal: number;
-            protein_g: number;
-            fat_g: number;
-            carb_g: number;
-          };
+        [mealKey: string]: MealComponent & {
+          accompaniments?: MealComponent[];
         };
       };
       total_macros: {

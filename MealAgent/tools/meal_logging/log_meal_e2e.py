@@ -20,15 +20,17 @@ async def log_meal_e2e_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    End-to-end: parse → nutrition_calc → update profile → emit final result.
+    Meal logging E2E flow: LLM parsing → FDC validation → nutrition calc → profile + log persistence.
 
-    Environment reads:
-      - profile_crud_tool.profile (for current profile state)
-    Environment writes:
-      - log_meal_e2e_tool.updated_profile: [{ remaining_targets, consumed_today, consumed_this_meal, log_entry, warnings }]
+    Environment contract:
+      Reads
+        • `profile_crud_tool.profile` (optional) for cached profile context / faster UUID lookups.
+      Writes
+        • `log_meal_e2e_tool.updated_profile` containing `remaining_targets`, consumed macros, and persisted log metadata.
 
     Decision hints:
-      - If log_meal_e2e_tool.updated_profile is present, the meal has been logged successfully.
+      • Presence of `updated_profile` = meal logged; agent can summarize and/or adjust future plans.
+      • Errors typically mean the profile is missing or FDC match failed; prompt user accordingly.
     """
     yield Response("🍽️ Logging your meal and calculating nutrition...")
 

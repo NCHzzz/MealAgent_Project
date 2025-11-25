@@ -58,24 +58,15 @@ async def micros_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    End-to-end micronutrient check: aggregate totals → identify deficits → suggest foods.
-    
-    This tool orchestrates the full micronutrient workflow:
-    1. Read plan from environment (plan_day_e2e_tool.plan or plan_week_e2e_tool.plan)
-    2. Aggregate micronutrients from all meals
-    3. Compare against RDA values to identify deficits
-    4. Suggest foods rich in deficient nutrients
-    
-    Environment reads:
-      - plan_day_e2e_tool.plan or plan_week_e2e_tool.plan
-      - macro_calc_tool.targets (optional - for gender-based RDA adjustments)
-    Environment writes:
-      - micros_tool.totals: aggregated micronutrient totals
-      - micros_tool.suggestions: food suggestions for deficient nutrients
-    
+    Micronutrient auditor: plan aggregation → deficit detection → food suggestions.
+
+    Contract:
+      Reads – latest plan (day/week) plus optional `profile` metadata for gender-based RDAs.
+      Writes – `micros_tool.totals` (with `deficits` flag) and `micros_tool.suggestions` / table for UI.
+
     Decision hints:
-      - If micros_tool.totals.deficits is not empty, the plan has micronutrient gaps.
-      - If micros_tool.suggestions is present, food suggestions are available to fill deficits.
+      • `totals.has_deficits=False` ⇒ no action required.
+      • `suggestions` gives actionable foods; pair with substitution or gap-fill follow-ups.
     """
     logging.info("micros_tool: start")
     yield Response("🔬 Analyzing micronutrients (vitamins & minerals) in your plan...")

@@ -135,7 +135,6 @@ async def process_daily_planning_workflow(
     async for result in e2e_plan_tool(
         tree_data=tree_data,
         client_manager=client_manager,
-        user_id=user_id,
         **kwargs,
     ):
         if isinstance(result, Error):
@@ -308,13 +307,14 @@ def build_meal_agent_tree(
         conversation_history: Optional conversation history for context
         optimize_tools: If True, only load tools relevant to user intent (default: True)
 
-    Branch layout (optimized - 8 branches per design doc):
+    Branch layout (nutrition-first flow - 9 branches):
       - profile: Profile management and macro calculation
-      - planning: Daily/weekly meal planning (merged from plan_day + plan_week)
       - search: Recipe/food search and ranking
-      - logging: Meal logging and history
-      - pantry: Pantry and shopping list management (merged from pantry + shopping)
+      - nutrition: Nutrition calculation (per-recipe and batch)
+      - planning: Daily/weekly meal planning (merged from plan_day + plan_week)
       - optimization: Gap fill, substitution, micros (merged from 3 branches)
+      - pantry: Pantry and shopping list management (merged from pantry + shopping)
+      - logging: Meal logging and history
       - cooking: Cooking mode
       - explain: Explanations (using Elysia cited_summarize)
 
@@ -365,51 +365,56 @@ def build_meal_agent_tree(
         )
         logging.debug(f"MealAgent: successfully created root branch '{root_id}'")
     
-    # Branch configurations (optimized - 8 branches per design doc)
+    # Branch configurations (nutrition-first flow - 9 branches)
     BRANCH_CONFIGS = {
         "profile": {
-            "instruction": "Manage user profile and calculate nutritional targets",
-            "description": "When user wants to create, update, or view their profile",
+            "instruction": "Capture or update user profile information and compute TDEE/targets.",
+            "description": "Run when onboarding or adjusting personal data (age, weight, allergens).",
             "status": "Managing profile...",
         },
-        "planning": {
-            "instruction": "Plan daily or weekly meals from ranked recipes",
-            "description": "When user wants daily or weekly meal plan",
-            "status": "Planning meals...",
-        },
         "search": {
-            "instruction": "Search and rank recipes based on user preferences",
-            "description": "When user wants to find recipes",
+            "instruction": "Discover candidate recipes using hybrid search and guardrails.",
+            "description": "Provides ranked recipe lists for planning/optimization steps.",
             "status": "Searching recipes...",
         },
-        "logging": {
-            "instruction": "Log meals and view meal history",
-            "description": "When user wants to log what they ate or view meal history",
-            "status": "Logging meal...",
+        "nutrition": {
+            "instruction": "Ensure recipes have complete macro/micro data before planning.",
+            "description": "Triggers per-recipe or batch nutrition calculations.",
+            "status": "Calculating nutrition...",
         },
-        "pantry": {
-            "instruction": "Manage pantry items and generate shopping lists",
-            "description": "When user wants to manage pantry or view shopping list",
-            "status": "Managing pantry...",
+        "planning": {
+            "instruction": "Assemble daily/weekly plans using validated recipes and targets.",
+            "description": "Requires profile, search results, and nutrition data.",
+            "status": "Planning meals...",
         },
         "optimization": {
-            "instruction": "Optimize meal plans: fill gaps, substitute ingredients, check micronutrients",
-            "description": "When user wants to optimize their meal plan",
+            "instruction": "Improve plans via gap fill, substitution, and micronutrient checks.",
+            "description": "Depends on an existing plan in the environment.",
             "status": "Optimizing plan...",
         },
+        "pantry": {
+            "instruction": "Update pantry inventory and derive shopping list diffs.",
+            "description": "Uses active plan to figure out needed items.",
+            "status": "Managing pantry...",
+        },
+        "logging": {
+            "instruction": "Log consumed meals and inspect meal history.",
+            "description": "Updates remaining targets and feeds gap analysis.",
+            "status": "Logging meal...",
+        },
         "cooking": {
-            "instruction": "Show step-by-step cooking instructions",
-            "description": "When user wants cooking instructions for a recipe",
-            "status": "Preparing cooking instructions...",
+            "instruction": "Provide step-by-step cooking instructions for selected recipes.",
+            "description": "Works with recipes from search or plan outputs.",
+            "status": "Cooking...",
         },
         "explain": {
-            "instruction": "Explain meal planning decisions",
-            "description": "When user wants to understand why certain meals were recommended",
-            "status": "Generating explanation...",
+            "instruction": "Summarize decisions and provide rationale to the user.",
+            "description": "Use after planning/logging flows to build trust.",
+            "status": "Summarizing...",
         },
     }
     
-    # Create branches (optimized - 8 branches)
+    # Create branches (nutrition-first flow - 9 branches)
     for branch_id, config in BRANCH_CONFIGS.items():
         try:
             # Check if branch already exists
@@ -483,31 +488,33 @@ def build_meal_agent_tree(
                 )
                 # Don't raise - allow other tools to register even if one fails
 
-    # Register tools to branches (optimized - 8 branches per design doc)
+    # Register tools to branches (nutrition-first flow)
 
     # profile branch
     add_tool("profile", "profile_crud_tool")
     add_tool("profile", "macro_calc_tool", chain=["profile_crud_tool"])
 
-    # planning branch (merged from plan_day + plan_week)
+    # search branch
+    # constraints_guard_tool should run before search_and_rank_tool to provide filters
+    add_tool("search", "constraints_guard_tool")
+    add_tool("search", "search_and_rank_tool", chain=["constraints_guard_tool"])
+
+    # nutrition branch
+    add_tool("nutrition", "calculate_recipe_macros_tool")
+    add_tool("nutrition", "auto_calculate_macros_tool")
+
+    # planning branch (plan_day + plan_week)
     add_tool("planning", "plan_day_e2e_tool")
     add_tool("planning", "plan_week_e2e_tool")
-    # constraints_guard_tool is used by planning and search, add to planning
-    add_tool("planning", "constraints_guard_tool")
-
-    # search branch (includes nutrition tool)
-    add_tool("search", "search_and_rank_tool")
-    add_tool("search", "calculate_recipe_macros_tool")
-    # constraints_guard_tool also used by search
-    add_tool("search", "constraints_guard_tool")
 
     # logging branch
     add_tool("logging", "log_meal_e2e_tool")
     add_tool("logging", "meal_history_tool")
 
     # pantry branch (merged from pantry + shopping)
+    # pantry_diff_tool requires pantry_crud_tool.state, so chain it
     add_tool("pantry", "pantry_crud_tool")
-    add_tool("pantry", "pantry_diff_tool")
+    add_tool("pantry", "pantry_diff_tool", chain=["pantry_crud_tool"])
 
     # optimization branch (merged from gap_fill + substitution + micros)
     add_tool("optimization", "gap_fill_tool")

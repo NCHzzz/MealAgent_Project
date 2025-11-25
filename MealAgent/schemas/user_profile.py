@@ -15,6 +15,9 @@ USER_PROFILE_SCHEMA = {
     "name": "UserProfile",
     "properties": [
         # Basic Profile Info
+        Property(name="email", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
+        Property(name="password_hash", data_type=DataType.TEXT),
+        Property(name="display_name", data_type=DataType.TEXT),
         Property(name="user_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="age", data_type=DataType.INT),
         Property(name="gender", data_type=DataType.TEXT),  # "male", "female", "other"

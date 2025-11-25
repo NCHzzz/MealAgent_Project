@@ -16,6 +16,7 @@ from MealAgent.tools.search.search_and_rank import search_and_rank_tool
 
 # Nutrition tools
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+from MealAgent.tools.nutrition.auto_calculate_macros import auto_calculate_macros_tool
 
 # Plan Day tools
 from MealAgent.tools.plan_day.plan_day_e2e import plan_day_e2e_tool
@@ -63,6 +64,7 @@ MEAL_AGENT_TOOLS = {
     "search_and_rank_tool": search_and_rank_tool,  # Main search tool (uses Elysia Query internally)
     # Nutrition tools
     "calculate_recipe_macros_tool": calculate_recipe_macros_tool,
+    "auto_calculate_macros_tool": auto_calculate_macros_tool,
     # Plan Day tools
     "plan_day_e2e_tool": plan_day_e2e_tool,  # E2E daily planning (replaces target_resolver, plan_assemble, plan_validate)
     # Plan Week tools

@@ -121,6 +121,7 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     def _append_meal_entries(meals: Dict[str, Any], day_index: int):
         for meal_key, meal_data in meals.items():
+            # Main recipe
             recipe = meal_data.get("recipe", {})
             if not isinstance(recipe, dict):
                 continue
@@ -129,16 +130,29 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                 continue
             servings = float(meal_data.get("servings", 1.0))
             macros = _get_meal_macros(recipe)
-            scaled_macros = {
+            
+            # Calculate total macros including accompaniments
+            total_macros = {
                 k: macros.get(k, 0.0) * servings for k in ["kcal", "protein_g", "fat_g", "carb_g"]
             }
+            
+            # Add accompaniments macros (for Vietnamese meals)
+            accompaniments = meal_data.get("accompaniments", [])
+            for acc in accompaniments:
+                acc_recipe = acc.get("recipe", {})
+                acc_servings = float(acc.get("servings", 1.0))
+                if acc_recipe and isinstance(acc_recipe, dict):
+                    acc_macros = _get_meal_macros(acc_recipe)
+                    for k in total_macros:
+                        total_macros[k] += acc_macros.get(k, 0.0) * acc_servings
+            
             items.append(
                 {
                     "day_index": day_index,
                     "meal_type": meal_data.get("meal_type", meal_key),
                     "recipe_id": str(recipe_id),
                     "servings": servings,
-                    "actual_macros": json.dumps(scaled_macros),
+                    "actual_macros": json.dumps(total_macros),
                 }
             )
 

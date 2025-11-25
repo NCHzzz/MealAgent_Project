@@ -21,15 +21,13 @@ async def macro_calc_tool(
     """
     Calculate TDEE and macro targets (default 30/30/40 split).
 
-    Environment interface:
-    - Reads:
-      - profile_crud_tool.profile (required; if absent, tool will skip)
-    - Writes:
-      - macro_calc_tool.targets: [{ tdee_kcal, protein_g, fat_g, carb_g, split }]
+    Environment contract:
+      Reads – `profile_crud_tool.profile` (skips gracefully if missing).
+      Writes – `macro_calc_tool.targets` (single source of truth for downstream tools).
 
     Decision hints:
-    - If macro_calc_tool.targets exists, planning/ranking tools can use them.
-    - If profile missing, this tool emits a skip Response to prevent noisy errors.
+      • If `targets` exists, search/planning tools may proceed; otherwise re-run profile onboarding.
+      • Responses explicitly flag when defaults are used so the agent can prompt the user.
     """
     logging.info(f"macro_calc_tool: start (protein_share={protein_share}, fat_share={fat_share}, carb_share={carb_share})")
     yield Response("📊 Calculating your nutritional targets (TDEE & macros)...")

@@ -70,16 +70,15 @@ async def pantry_crud_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Create, read, update, or delete pantry items for a user.
+    CRUD helper for Pantry/PantryItem collections.
 
-    Actions:
-        - "read": Get all pantry items for user
-        - "create": Add new pantry items
-        - "update": Update existing pantry items
-        - "delete": Remove pantry items
+    Environment contract:
+      Writes – `pantry_crud_tool.state` (and `items` table) after successful operations so shopping tools
+      can consume inventory without re-querying.
 
-    Environment writes:
-      - environment["pantry_crud_tool"]["state"]
+    Supported actions:
+      • `read` (initialize pantry if missing) – default for downstream tools.
+      • `create` / `update` / `delete` with validation + timestamp refresh.
     """
     action_icons = {
         "read": "📋",

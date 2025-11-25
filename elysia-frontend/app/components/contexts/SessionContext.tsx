@@ -18,6 +18,7 @@ import { loadConfig } from "@/app/api/loadConfig";
 import { deleteConfig } from "@/app/api/deleteConfig";
 import { ToastContext } from "./ToastContext";
 import { useDeviceId } from "@/app/getDeviceId";
+import { AuthContext } from "./AuthContext";
 
 export const SessionContext = createContext<{
   mode: string;
@@ -87,7 +88,9 @@ export const SessionProvider = ({
 
   const [showRateLimitDialog, setShowRateLimitDialog] =
     useState<boolean>(false);
-  const id = useDeviceId();
+  const deviceId = useDeviceId();
+  const { activeUserId } = useContext(AuthContext);
+  const id = activeUserId || deviceId;
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [configIDs, setConfigIDs] = useState<ConfigListEntry[]>([]);
   const [correctSettings, setCorrectSettings] =
@@ -96,6 +99,7 @@ export const SessionProvider = ({
   const [loadingConfigs, setLoadingConfigs] = useState<boolean>(false);
   const [savingConfig, setSavingConfig] = useState<boolean>(false);
   const initialized = useRef(false);
+  const lastInitializedId = useRef<string | null>(null);
   const [fetchCollectionFlag, setFetchCollectionFlag] =
     useState<boolean>(false);
   const [fetchConversationFlag, setFetchConversationFlag] =
@@ -159,8 +163,11 @@ export const SessionProvider = ({
   };
 
   useEffect(() => {
-    if (initialized.current || !id) return;
-    initUser();
+    if (!id) return;
+    if (lastInitializedId.current === id) return;
+    lastInitializedId.current = id;
+    initialized.current = false;
+    void initUser(id);
   }, [id]);
 
   useEffect(() => {
@@ -182,11 +189,11 @@ export const SessionProvider = ({
     }
   }, [pathname]);
 
-  const initUser = async () => {
-    if (!id) {
+  const initUser = async (userId: string) => {
+    if (!userId) {
       return;
     }
-    const user_object = await initializeUser(id);
+    const user_object = await initializeUser(userId);
     setLoadingConfig(true);
 
     if (user_object.error) {
@@ -196,10 +203,10 @@ export const SessionProvider = ({
     }
 
     if (process.env.NODE_ENV === "development") {
-      console.log("Initialized user with id: " + id);
+      console.log("Initialized user with id: " + userId);
     }
 
-    getConfigIDs(id);
+    getConfigIDs(userId);
     setUserConfig({
       backend: user_object.config,
       frontend: user_object.frontend_config,

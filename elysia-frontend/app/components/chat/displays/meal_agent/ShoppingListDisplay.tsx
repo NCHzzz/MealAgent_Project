@@ -59,7 +59,10 @@ const ShoppingListDisplay: React.FC<ShoppingListDisplayProps> = ({
   return (
     <DisplayPagination>
       {lists.map((list, idx) => {
-        const grouped = groupByCategory(list.items);
+        const grouped =
+          list.categories && Object.keys(list.categories).length > 0
+            ? list.categories
+            : groupByCategory(list.items);
 
         return (
           <motion.div
@@ -73,12 +76,12 @@ const ShoppingListDisplay: React.FC<ShoppingListDisplayProps> = ({
                 <div className="flex justify-between items-center">
                   <CardTitle className="text-lg">Shopping List</CardTitle>
                   <div className="flex gap-2">
-                    <Badge variant="outline" className="text-xs">
+                    <Badge className="text-xs border border-secondary/30 bg-transparent text-secondary">
                       {list.items.length} items
                     </Badge>
                     {list.removed_count !== undefined &&
                       list.removed_count > 0 && (
-                        <Badge variant="secondary" className="text-xs">
+                        <Badge className="text-xs bg-green-500/15 text-green-700 dark:text-green-300 border border-green-500/30">
                           -{list.removed_count} from pantry
                         </Badge>
                       )}

@@ -37,7 +37,6 @@ description: Clarify the problem space, gather requirements, and define success 
 1. **Variety Optimization**: Minimize cuisine repetition within weekly plans
 2. **Gap Filling**: Automatically suggest snacks to fill macro/micro deficits
 3. **Substitution Support**: Enable ingredient substitution while maintaining nutritional equivalence (±20% macro tolerance)
-4. **Family Planning**: Support multi-person meal planning with merged constraints
 
 ### Non-Goals ( unnecessary function, no need to implement )
 - Recipe creation or modification (uses pre-existing recipe database)
@@ -115,7 +114,7 @@ description: Clarify the problem space, gather requirements, and define success 
 3. **Micronutrient gaps**: What if no single recipe fills a vitamin deficit? → Suggest top 3 options ranked by deficit reduction
 4. **Time/equipment not declared**: Tools should skip time/device validation if user hasn't specified
 5. **Multi-allergen users**: Union of all allergens must be respected in retrieval filters
-6. **Family with conflicting diets**: Intersection of diet types + union of allergens
+
 
 ## Success Criteria
 **How will we know when we're done?**

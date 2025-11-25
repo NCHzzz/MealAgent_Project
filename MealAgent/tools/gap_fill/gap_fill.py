@@ -16,38 +16,41 @@ from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 
 def _calculate_plan_macros(plan: Dict[str, Any]) -> Dict[str, float]:
-    """Calculate total macros from a plan."""
+    """Calculate total macros from a plan (including accompaniments for Vietnamese meals)."""
     total = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+
+    def _add_meal_macros(meal_data: Dict[str, Any]):
+        """Add macros from main recipe and accompaniments."""
+        # Main recipe
+        recipe = meal_data.get("recipe", {})
+        servings = float(meal_data.get("servings", 1.0))
+        macros = _get_meal_macros(recipe)
+        for key in total:
+            total[key] += macros[key] * servings
+        
+        # Accompaniments (for Vietnamese meals)
+        accompaniments = meal_data.get("accompaniments", [])
+        for acc in accompaniments:
+            acc_recipe = acc.get("recipe", {})
+            acc_servings = float(acc.get("servings", 1.0))
+            if acc_recipe:
+                acc_macros = _get_meal_macros(acc_recipe)
+                for key in total:
+                    total[key] += acc_macros[key] * acc_servings
 
     if plan.get("plan_type") == "day":
         for meal_data in plan.get("meals", {}).values():
-            recipe = meal_data.get("recipe", {})
-            servings = float(meal_data.get("servings", 1.0))
-            macros = _get_meal_macros(recipe)
-            for key in total:
-                total[key] += macros[key] * servings
+            _add_meal_macros(meal_data)
         # Include snacks if present
         for snack_data in plan.get("snacks", []):
-            recipe = snack_data.get("recipe", {})
-            servings = float(snack_data.get("servings", 1.0))
-            macros = _get_meal_macros(recipe)
-            for key in total:
-                total[key] += macros[key] * servings
+            _add_meal_macros(snack_data)
     elif plan.get("plan_type") == "week":
         for day_data in plan.get("days", {}).values():
             for meal_data in day_data.get("meals", {}).values():
-                recipe = meal_data.get("recipe", {})
-                servings = float(meal_data.get("servings", 1.0))
-                macros = _get_meal_macros(recipe)
-                for key in total:
-                    total[key] += macros[key] * servings
+                _add_meal_macros(meal_data)
             # Include snacks if present
             for snack_data in day_data.get("snacks", []):
-                recipe = snack_data.get("recipe", {})
-                servings = float(snack_data.get("servings", 1.0))
-                macros = _get_meal_macros(recipe)
-                for key in total:
-                    total[key] += macros[key] * servings
+                _add_meal_macros(snack_data)
 
     return total
 
@@ -84,25 +87,21 @@ async def gap_fill_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    End-to-end gap fill: calculate deficits → suggest snacks → optionally apply to plan.
-    
-    This tool orchestrates the full gap fill workflow:
-    1. Read plan from environment (plan_day_e2e_tool.plan or plan_week_e2e_tool.plan)
-    2. Read targets from environment
-    3. Calculate macro deficits
-    4. Suggest snacks to fill deficits
-    5. Optionally apply best snack to plan (if auto_apply=True)
-    
-    Environment reads:
-      - plan_day_e2e_tool.plan or plan_week_e2e_tool.plan
-      - macro_calc_tool.targets
-    Environment writes:
-      - gap_fill_tool.deficits: calculated deficits
-      - gap_fill_tool.updated_plan: plan with snack applied (if auto_apply=True)
-    
+    Automate macro deficit analysis and snack insertion for existing plans.
+
+    Steps:
+      1. Load the latest plan (`plan_day_e2e_tool.plan` or `plan_week_e2e_tool.plan`).
+      2. Pull personalized targets from `macro_calc_tool.targets`.
+      3. Sum total macros, compute deficits, suggest snacks ranked by fit.
+      4. Optionally insert top snack and sync back to Weaviate.
+
+    Environment contract:
+      Reads – day/week plan, macro targets.
+      Writes – `gap_fill_tool.deficits` and optionally `gap_fill_tool.updated_plan` / `suggestions`.
+
     Decision hints:
-      - If gap_fill_tool.deficits.has_deficits is True, the plan has macro gaps.
-      - If auto_apply=True, gap_fill_tool.updated_plan contains the plan with snack added.
+      • `deficits.has_deficits=False` ⇒ nothing to fill; move on.
+      • `updated_plan` result indicates the snack has been persisted, so other optimization tools should consume that version.
     """
     logging.info("gap_fill_tool: start")
     yield Response("🔍 Analyzing your meal plan for nutritional gaps...")

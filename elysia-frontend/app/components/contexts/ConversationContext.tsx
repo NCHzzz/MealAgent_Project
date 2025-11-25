@@ -146,6 +146,7 @@ export const ConversationProvider = ({
   const pathname = usePathname();
 
   const initial_ref = useRef<boolean>(false);
+  const previousUserId = useRef<string | null>(null);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationPreviews, setConversationPreviews] = useState<{
@@ -867,8 +868,26 @@ export const ConversationProvider = ({
   }, [collections]);
 
   useEffect(() => {
-    if (id && !initial_ref.current && initialized) {
+    if (!id || !initialized) {
+      return;
+    }
+
+    const switchingUser =
+      previousUserId.current !== null && previousUserId.current !== id;
+
+    if (switchingUser) {
+      setConversations([]);
+      setConversationPreviews({});
+      setCurrentConversation(null);
+      initial_ref.current = false;
+    }
+
+    if (!initial_ref.current) {
       initial_ref.current = true;
+      previousUserId.current = id;
+      loadConversationsFromDB();
+    } else if (switchingUser) {
+      previousUserId.current = id;
       loadConversationsFromDB();
     }
   }, [id, initialized]);

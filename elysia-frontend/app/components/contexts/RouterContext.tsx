@@ -3,7 +3,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ToastContext } from "./ToastContext";
 
 export const RouterContext = createContext<{
@@ -25,6 +25,7 @@ export const RouterProvider = ({ children }: { children: React.ReactNode }) => {
   const { showConfirmModal } = useContext(ToastContext);
 
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   const changePage = (
     page: string,
@@ -49,26 +50,37 @@ export const RouterProvider = ({ children }: { children: React.ReactNode }) => {
     params: Record<string, any> = {},
     replace: boolean = false
   ) => {
-    let finalParams: Record<string, any>;
+    const nextParams = new URLSearchParams();
 
-    if (replace) {
-      finalParams = { page, ...params };
-    } else {
-      const currentParams: Record<string, any> = {};
+    if (!replace) {
       searchParams.forEach((value, key) => {
-        currentParams[key] = value;
+        if (key === "page") return;
+        if (params[key] !== undefined && params[key] !== null) return;
+        nextParams.set(key, value);
       });
-      finalParams = { ...currentParams, page, ...params };
     }
 
-    const url = `/?${new URLSearchParams(finalParams).toString()}`;
+    if (page) {
+      nextParams.set("page", page);
+    }
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null) {
+        nextParams.delete(key);
+        return;
+      }
+      nextParams.set(key, String(value));
+    });
+
+    const queryString = nextParams.toString();
+    const url = queryString ? `/?${queryString}` : "/";
 
     if (replace) {
-      window.history.replaceState(null, "", url);
+      router.replace(url, { scroll: false });
     } else {
-      window.history.pushState(null, "", url);
+      router.push(url, { scroll: false });
     }
-    //showSuccessToast("Page changed to " + url);
+    setCurrentPage(page);
   };
 
   useEffect(() => {
@@ -100,6 +112,7 @@ export const RouterProvider = ({ children }: { children: React.ReactNode }) => {
       "feedback",
       "elysia",
       "display",
+      "profile",
     ];
     const validatedPage = validPages.includes(pageParam) ? pageParam : "chat";
 
