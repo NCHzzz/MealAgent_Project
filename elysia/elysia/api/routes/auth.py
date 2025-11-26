@@ -15,6 +15,7 @@ from elysia.api.core.log import logger
 from elysia.api.dependencies.common import get_user_manager
 from elysia.api.services.user import UserManager
 from elysia.util.client import ClientManager
+from MealAgent.utils.nutrition import calculate_tdee, adjust_targets_by_goal
 
 
 router = APIRouter()
@@ -57,6 +58,9 @@ class ProfileUpdateRequest(BaseModel):
         None, pattern="^(sedentary|light|moderate|very_active|extra_active)$"
     )
     diet_type: Optional[str] = Field(None, max_length=64)
+    goal: Optional[str] = Field(
+        None, pattern="^(weight_loss|weight_gain|muscle_gain|gym|maintenance)$"
+    )
     allergens: Optional[list[str]] = None
     preferences: Optional[list[str]] = None
     max_cooking_time_min: Optional[int] = Field(None, ge=1, le=600)
@@ -269,6 +273,84 @@ async def update_profile(
         uuid, existing = await _fetch_user_by_id(client, user_id)
         if not uuid or not existing:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+
+        # Merge updates with existing profile for calculation
+        merged_profile = {**existing, **updates}
+        
+        # Auto-recalculate TDEE and macros if relevant fields changed
+        fields_affecting_calculation = {"age", "gender", "weight_kg", "height_cm", "activity_level", "goal"}
+        if any(field in updates for field in fields_affecting_calculation):
+            try:
+                # Check if we have all required fields for calculation
+                required_fields = ["age", "gender", "weight_kg", "height_cm", "activity_level"]
+                if all(
+                    merged_profile.get(field) is not None 
+                    and (isinstance(merged_profile.get(field), (int, float)) or isinstance(merged_profile.get(field), str))
+                    for field in required_fields
+                ):
+                    # Calculate base TDEE using Mifflin-St Jeor
+                    calorie_override = merged_profile.get("tdee_kcal") or merged_profile.get("target_calories")
+                    if calorie_override is not None:
+                        base_tdee = float(calorie_override)
+                    else:
+                        base_tdee = calculate_tdee(
+                            age=int(merged_profile["age"]),
+                            gender=str(merged_profile["gender"]),
+                            weight_kg=float(merged_profile["weight_kg"]),
+                            height_cm=float(merged_profile["height_cm"]),
+                            activity_level=str(merged_profile["activity_level"]),
+                        )
+                    
+                    # Get goal and weight from merged profile
+                    goal = merged_profile.get("goal")
+                    weight_kg = merged_profile.get("weight_kg")
+                    
+                    # Use weight-based protein for gym/muscle_gain goals
+                    use_weight_based = goal and goal.lower() in ("muscle_gain", "gym")
+                    
+                    # Get macro overrides
+                    protein_override = merged_profile.get("protein_g")
+                    fat_override = merged_profile.get("fat_g")
+                    carb_override = merged_profile.get("carb_g")
+                    
+                    # Adjust targets by goal (includes rounding)
+                    adjusted_targets = adjust_targets_by_goal(
+                        tdee=base_tdee,
+                        goal=goal,
+                        weight_kg=float(weight_kg) if isinstance(weight_kg, (int, float)) else None,
+                        age=int(merged_profile["age"]) if merged_profile.get("age") else None,
+                        gender=str(merged_profile["gender"]) if merged_profile.get("gender") else None,
+                        height_cm=float(merged_profile["height_cm"]) if merged_profile.get("height_cm") else None,
+                        protein_override=float(protein_override) if isinstance(protein_override, (int, float)) else None,
+                        fat_override=float(fat_override) if isinstance(fat_override, (int, float)) else None,
+                        carb_override=float(carb_override) if isinstance(carb_override, (int, float)) else None,
+                        use_weight_based_protein=use_weight_based,
+                    )
+                    
+                    # Add calculated values to updates (already rounded)
+                    updates["tdee_kcal"] = adjusted_targets["tdee_kcal"]
+                    updates["protein_g"] = adjusted_targets["protein_g"]
+                    updates["fat_g"] = adjusted_targets["fat_g"]
+                    updates["carb_g"] = adjusted_targets["carb_g"]
+                    
+                    goal_str = f" (goal: {goal})" if goal else ""
+                    logger.info(
+                        f"Auto-calculated nutritional targets for user {user_id}{goal_str}: "
+                        f"TDEE={adjusted_targets['tdee_kcal']} kcal, "
+                        f"Protein={adjusted_targets['protein_g']}g, "
+                        f"Fat={adjusted_targets['fat_g']}g, "
+                        f"Carb={adjusted_targets['carb_g']}g"
+                    )
+                else:
+                    logger.warning(
+                        f"Cannot calculate nutritional targets for user {user_id}: "
+                        f"Missing required fields. Required: {required_fields}"
+                    )
+            except (ValueError, TypeError, KeyError) as calc_exc:
+                logger.warning(
+                    f"Failed to auto-calculate nutritional targets for user {user_id}: {str(calc_exc)}"
+                )
+                # Continue with update even if calculation fails
 
         try:
             await collection.data.update(uuid=uuid, properties=updates)

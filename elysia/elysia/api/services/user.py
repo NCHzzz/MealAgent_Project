@@ -294,8 +294,8 @@ class UserManager:
         low_memory: bool = False,
     ):
         """
-        Initialises a tree for a user for an existing user at user_id.
-        Requires a user to already exist in the UserManager, via `add_user_local`.
+        Initialises a tree for a user at user_id.
+        Automatically initializes the user if they don't exist (graceful handling for race conditions).
         This is a wrapper for the TreeManager.add_tree() method.
 
         Args:
@@ -305,7 +305,11 @@ class UserManager:
                 Controls the LM history being saved in the tree, and some other variables.
                 Defaults to False.
         """
-        # self.add_user_local(user_id)
+        # Auto-initialize user if not exists (graceful handling for race conditions)
+        if user_id not in self.users:
+            logger.debug(f"User {user_id} not found, auto-initializing...")
+            await self.add_user_local(user_id)
+        
         local_user = await self.get_user_local(user_id)
         tree_manager: TreeManager = local_user["tree_manager"]
         if not tree_manager.tree_exists(conversation_id):

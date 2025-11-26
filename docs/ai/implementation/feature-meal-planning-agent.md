@@ -400,101 +400,91 @@ from typing import AsyncGenerator
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
-from MealAgent.utils.nutrition import calculate_harris_benedict_tdee
+from MealAgent.utils.nutrition import (
+    calculate_tdee,
+    adjust_targets_by_goal,
+    build_default_macro_targets,
+)
 from elysia import tool
 
 @tool
 async def macro_calc_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
-    **kwargs
+    **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Calculate TDEE and macro targets using Harris-Benedict equation.
-    
-    Environment:
-        Reads: environment["profile_crud_tool"]["profile"]
-        Writes: environment["macro_calc_tool"]["targets"]
+    Calculate TDEE + macro targets via Mifflin-St Jeor → TDEE → goal adjustments.
     """
-    yield Response("Calculating nutritional targets...")
-    
-    # Read profile from environment
+    yield Response("📊 Calculating your nutritional targets (TDEE & macros)...")
+
     profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-    if not profile_results or not profile_results[0].objects:
-        yield Error("Profile not found in environment. Run profile_crud_tool first.")
+    profile = profile_results[0]["objects"][0] if profile_results and profile_results[0]["objects"] else None
+
+    if not profile:
+        defaults = build_default_macro_targets()
+        yield Result(name="targets", objects=[defaults], payload_type="generic", display=True)
+        yield Response("Using default WHO macro targets (profile not found).")
         return
-    
-    profile = profile_results[0].objects[0]
-    
-    # Calculate TDEE
-    tdee = calculate_harris_benedict_tdee(
-        age=profile["age"],
-        gender=profile["gender"],
-        weight_kg=profile["weight_kg"],
-        height_cm=profile["height_cm"],
-        activity_level=profile["activity_level"]
+
+    calorie_override = next(
+        (
+            profile.get(key)
+            for key in ("target_calories", "daily_calorie_target", "calorie_target", "tdee_kcal")
+            if profile.get(key) is not None
+        ),
+        None,
     )
-    
-    # Calculate macros (example: 30% protein, 30% fat, 40% carbs)
-    protein_g = (tdee * 0.30) / 4  # 4 kcal per gram
-    fat_g = (tdee * 0.30) / 9      # 9 kcal per gram
-    carb_g = (tdee * 0.40) / 4     # 4 kcal per gram
-    
-    targets = {
-        "tdee_kcal": tdee,
-        "protein_g": protein_g,
-        "fat_g": fat_g,
-        "carb_g": carb_g
-    }
-    
+
+    if calorie_override is not None:
+        base_tdee = float(calorie_override)
+    else:
+        base_tdee = calculate_tdee(
+            age=int(profile["age"]),
+            gender=str(profile["gender"]),
+            weight_kg=float(profile["weight_kg"]),
+            height_cm=float(profile["height_cm"]),
+            activity_level=str(profile["activity_level"]),
+        )
+
+    goal = profile.get("goal")
+    use_weight_based = isinstance(goal, str) and goal.lower() in ("muscle_gain", "gym")
+
+    targets = adjust_targets_by_goal(
+        tdee=base_tdee,
+        goal=goal,
+        weight_kg=float(profile["weight_kg"]),
+        age=int(profile["age"]),
+        gender=str(profile["gender"]),
+        height_cm=float(profile["height_cm"]),
+        protein_override=profile.get("protein_g"),
+        fat_override=profile.get("fat_g"),
+        carb_override=profile.get("carb_g"),
+        use_weight_based_protein=use_weight_based,
+    )
+
     yield Result(
-        objects=[targets],  # Required: list of dict objects
-        metadata={"calculated_from": profile.get("user_id")},  # Optional: metadata
-        payload_type="generic",  # Optional: result type identifier
-        name="targets",  # Optional: creates environment["macro_calc_tool"]["targets"]
-        display=True  # Optional: whether to display on frontend
+        name="targets",
+        objects=[targets],
+        metadata={"calculated_from": profile.get("user_id")},
+        payload_type="generic",
+        display=True,
     )
-    yield Response(f"Target: {tdee:.0f} kcal | {protein_g:.0f}g P | {fat_g:.0f}g F | {carb_g:.0f}g C")
+    yield Response(
+        f"✅ Your targets: {targets['tdee_kcal']:.0f} kcal | "
+        f"{targets['protein_g']:.0f}g protein | {targets['fat_g']:.0f}g fat | {targets['carb_g']:.0f}g carbs"
+    )
 ```
 
-**Harris-Benedict Utility** (`utils/nutrition.py`):
+**Mifflin-St Jeor Utilities** (`utils/nutrition.py`):
 ```python
-def calculate_harris_benedict_tdee(
-    age: int,
-    gender: str,
-    weight_kg: float,
-    height_cm: float,
-    activity_level: str
-) -> float:
-    """
-    Calculate Total Daily Energy Expenditure using Harris-Benedict equation.
-    
-    Activity levels:
-        - sedentary: BMR × 1.2
-        - light: BMR × 1.375
-        - moderate: BMR × 1.55
-        - very_active: BMR × 1.725
-        - extra_active: BMR × 1.9
-    """
-    # Calculate BMR
-    if gender.lower() == "male":
-        bmr = 88.362 + (13.397 * weight_kg) + (4.799 * height_cm) - (5.677 * age)
-    else:  # female
-        bmr = 447.593 + (9.247 * weight_kg) + (3.098 * height_cm) - (4.330 * age)
-    
-    # Apply activity multiplier
-    activity_multipliers = {
-        "sedentary": 1.2,
-        "light": 1.375,
-        "moderate": 1.55,
-        "very_active": 1.725,
-        "extra_active": 1.9
-    }
-    
-    multiplier = activity_multipliers.get(activity_level.lower(), 1.2)
-    tdee = bmr * multiplier
-    
-    return tdee
+def calculate_mifflin_st_jeor_bmr(age: int, gender: str, weight_kg: float, height_cm: float) -> float:
+    """BMR = (10 × W) + (6.25 × H) - (5 × A) + S (+5 for male, -161 for female)."""
+    ...
+
+def calculate_tdee(age: int, gender: str, weight_kg: float, height_cm: float, activity_level: str) -> float:
+    """TDEE = BMR × PAL (1.2 → 1.9 depending on activity level)."""
+    ...
 ```
 
 #### 2. Hybrid Search (search_and_rank_tool)

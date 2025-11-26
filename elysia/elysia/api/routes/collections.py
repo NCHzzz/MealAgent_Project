@@ -508,19 +508,41 @@ async def collection_metadata(
             if not await preprocessed_collection_exists_async(
                 collection_name, client_manager
             ):
-                raise Exception(
-                    f"Metadata collection for {collection_name} does not exist"
+                # Collection exists but hasn't been preprocessed yet
+                # Return default metadata instead of raising exception
+                logger.warning(
+                    f"Metadata collection for {collection_name} does not exist. "
+                    "Collection may not have been preprocessed yet. Returning default metadata."
                 )
+                properties = {
+                    "name": collection_name,
+                    "named_vectors": [],
+                    "description": "",
+                    "preprocessed": False,
+                }
+            else:
+                metadata_collection = client.collections.get(metadata_name)
+                metadata = await metadata_collection.query.fetch_objects(
+                    filters=Filter.by_property("name").equal(collection_name),
+                    limit=1,
+                )
+                if metadata.objects:
+                    properties = metadata.objects[0].properties
+                    format_dict_to_serialisable(properties)
+                else:
+                    # Metadata collection exists but no entry found
+                    logger.warning(
+                        f"Metadata entry for {collection_name} not found in metadata collection. "
+                        "Returning default metadata."
+                    )
+                    properties = {
+                        "name": collection_name,
+                        "named_vectors": [],
+                        "description": "",
+                        "preprocessed": False,
+                    }
 
-            metadata_collection = client.collections.get(metadata_name)
-            metadata = await metadata_collection.query.fetch_objects(
-                filters=Filter.by_property("name").equal(collection_name),
-                limit=1,
-            )
-            properties = metadata.objects[0].properties
-            format_dict_to_serialisable(properties)
-
-            if properties["named_vectors"] is None:
+            if properties.get("named_vectors") is None:
                 properties["named_vectors"] = []
 
     except Exception as e:

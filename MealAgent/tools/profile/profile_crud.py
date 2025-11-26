@@ -7,6 +7,7 @@ from elysia.util.client import ClientManager
 from elysia import tool
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.profile.macro_calc import macro_calc_tool
 
 
 REQUIRED_FIELDS = [
@@ -74,10 +75,14 @@ async def profile_crud_tool(
 
     Environment contract:
       Writes – `profile_crud_tool.profile` so every branch can reuse the latest profile snapshot.
+      Auto-triggers – After successful create/update, automatically calls `macro_calc_tool` to recalculate
+                      TDEE and macro targets based on the updated profile data.
 
     Decision hints:
       • If no profile data is provided (e.g., auto call), the tool emits a skip response instead of hard error.
       • Downstream tools should gate on `profile_crud_tool.profile` existence before executing.
+      • After profile create/update, `macro_calc_tool.targets` is automatically refreshed, so planning
+        and optimization tools will use the latest nutritional targets.
     """
     logging.info(f"profile_crud_tool: start (action={action})")
     action_icons = {
@@ -134,6 +139,25 @@ async def profile_crud_tool(
             )
             action_past = "created" if action == "create" else "updated"
             yield Response(f"✅ Profile {action_past} successfully for user {user_id}")
+            
+            # Auto-recalculate TDEE and macro targets after profile create/update
+            yield Response("🔄 Recalculating nutritional targets (TDEE & macros)...")
+            try:
+                async for result in macro_calc_tool(
+                    tree_data=tree_data,
+                    client_manager=client_manager,
+                    **kwargs,
+                ):
+                    # Forward all results from macro_calc_tool (Response, Result, Error)
+                    yield result
+            except Exception as e:
+                logging.warning(
+                    f"profile_crud_tool: Failed to auto-recalculate targets after {action}: {str(e)}"
+                )
+                yield Response(
+                    f"⚠️ Profile {action_past}, but target recalculation failed. "
+                    "You can manually recalculate targets later."
+                )
 
         else:  # read
             user_id = (

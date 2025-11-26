@@ -10,7 +10,10 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from MealAgent.tools.profile.profile_crud import profile_crud_tool
 from MealAgent.tools.profile.macro_calc import macro_calc_tool
-from MealAgent.utils.nutrition import calculate_harris_benedict_tdee
+from MealAgent.utils.nutrition import (
+    calculate_tdee,
+    calculate_mifflin_st_jeor_bmr,
+)
 from elysia.objects import Result, Response, Error
 
 
@@ -176,31 +179,40 @@ async def test_macro_calc_missing_profile(mock_tree_data, mock_client_manager):
 
 
 @pytest.mark.asyncio
-async def test_harris_benedict_male_sedentary():
-    """Test Harris-Benedict calculation for male, sedentary."""
-    tdee = calculate_harris_benedict_tdee(
+async def test_mifflin_st_jeor_bmr_male():
+    """Test Mifflin-St Jeor BMR calculation for male."""
+    bmr = calculate_mifflin_st_jeor_bmr(
         age=30,
         gender="male",
         weight_kg=80.0,
         height_cm=180.0,
-        activity_level="sedentary",
     )
-    # Expected BMR ≈ 1798, TDEE ≈ 2158 (1798 × 1.2)
-    assert 2100 < tdee < 2200
+    assert bmr == pytest.approx(1780.0, rel=0.01)
 
 
 @pytest.mark.asyncio
-async def test_harris_benedict_female_very_active():
-    """Test Harris-Benedict calculation for female, very active."""
-    tdee = calculate_harris_benedict_tdee(
+async def test_mifflin_st_jeor_bmr_female():
+    """Test Mifflin-St Jeor BMR calculation for female."""
+    bmr = calculate_mifflin_st_jeor_bmr(
         age=25,
         gender="female",
         weight_kg=60.0,
         height_cm=165.0,
-        activity_level="very_active",
     )
-    # Expected BMR ≈ 1379, TDEE ≈ 2379 (1379 × 1.725)
-    assert 2300 < tdee < 2400
+    assert bmr == pytest.approx(1345.25, rel=0.01)
+
+
+@pytest.mark.asyncio
+async def test_tdee_moderate_activity():
+    """Test TDEE calculation using Mifflin-St Jeor BMR."""
+    tdee = calculate_tdee(
+        age=32,
+        gender="male",
+        weight_kg=75.0,
+        height_cm=178.0,
+        activity_level="moderate",
+    )
+    assert tdee == pytest.approx(2643.0, rel=0.02)
 
 
 @pytest.mark.asyncio

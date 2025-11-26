@@ -771,7 +771,7 @@ npm run test -- --coverage
 ## Test Implementation Status
 
 ### Unit Tests Created ✅
-- **test_profile_tools.py**: Tests for `profile_crud_tool` (create, update, read, error cases) and `macro_calc_tool` (TDEE calculation, macro distribution, missing profile). Includes tests for `calculate_harris_benedict_tdee` utility function.
+- **test_profile_tools.py**: Tests for `profile_crud_tool` (create, update, read, error cases) and `macro_calc_tool` (TDEE calculation, macro distribution, missing profile). Includes tests for `calculate_mifflin_st_jeor_bmr` + `calculate_tdee` utilities.
 - **test_constraints_tools.py**: Tests for `constraints_guard_tool` (vegetarian + allergy, no allergens, max cooking time, missing profile).
 - **test_planning_helpers.py**: Tests for `_get_meal_macros`, `_validate_macro_targets`, `_validate_constraints` helper functions.
 

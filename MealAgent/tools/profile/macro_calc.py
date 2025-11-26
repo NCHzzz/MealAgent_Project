@@ -6,7 +6,25 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
-from MealAgent.utils.nutrition import build_default_macro_targets, calculate_harris_benedict_tdee
+from MealAgent.utils.nutrition import (
+    build_default_macro_targets,
+    calculate_tdee,
+    adjust_targets_by_goal,
+)
+
+
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 @tool
@@ -56,57 +74,72 @@ async def macro_calc_tool(
                 )
 
                 if calorie_override is not None:
-                    tdee = float(calorie_override)
+                    base_tdee = float(calorie_override)
                 else:
-                    tdee = calculate_harris_benedict_tdee(
-                        age=profile["age"],
-                        gender=profile["gender"],
-                        weight_kg=profile["weight_kg"],
-                        height_cm=profile["height_cm"],
-                        activity_level=profile["activity_level"],
+                    age_val = _safe_int(profile.get("age"))
+                    gender_val = str(profile.get("gender")) if profile.get("gender") else None
+                    weight_val = _safe_float(profile.get("weight_kg"))
+                    height_val = _safe_float(profile.get("height_cm"))
+                    activity_level = profile.get("activity_level")
+
+                    if None in (age_val, gender_val, weight_val, height_val) or not activity_level:
+                        raise ValueError("Profile missing required fields for TDEE calculation")
+
+                    # Use Mifflin-St Jeor for more accurate calculation
+                    base_tdee = calculate_tdee(
+                        age=age_val,
+                        gender=gender_val,
+                        weight_kg=weight_val,
+                        height_cm=height_val,
+                        activity_level=activity_level,
                     )
 
-                total = max(1e-6, float(protein_share) + float(fat_share) + float(carb_share))
-                p_share = float(protein_share) / total
-                f_share = float(fat_share) / total
-                c_share = float(carb_share) / total
-
-                protein_override = profile.get("protein_g")
-                fat_override = profile.get("fat_g")
-                carb_override = profile.get("carb_g")
-
-                protein_g = (
-                    float(protein_override)
-                    if isinstance(protein_override, (int, float))
-                    else (tdee * p_share) / 4.0
+                # Get goal from profile
+                goal = profile.get("goal")
+                goal_lower = goal.lower() if isinstance(goal, str) else None
+                weight_val = _safe_float(profile.get("weight_kg"))
+                height_val = _safe_float(profile.get("height_cm"))
+                age_val = _safe_int(profile.get("age"))
+                gender_val = str(profile.get("gender")) if profile.get("gender") else None
+                
+                # Use weight-based protein for gym/muscle_gain goals
+                use_weight_based = bool(goal_lower in ("muscle_gain", "gym") and weight_val)
+                
+                # Get macro overrides
+                protein_override = _safe_float(profile.get("protein_g"))
+                fat_override = _safe_float(profile.get("fat_g"))
+                carb_override = _safe_float(profile.get("carb_g"))
+                
+                # Adjust targets by goal (includes rounding)
+                targets = adjust_targets_by_goal(
+                    tdee=base_tdee,
+                    goal=goal,
+                    weight_kg=weight_val,
+                    age=age_val,
+                    gender=gender_val,
+                    height_cm=height_val,
+                    protein_override=protein_override,
+                    fat_override=fat_override,
+                    carb_override=carb_override,
+                    use_weight_based_protein=use_weight_based,
                 )
-                fat_g = (
-                    float(fat_override)
-                    if isinstance(fat_override, (int, float))
-                    else (tdee * f_share) / 9.0
-                )
-                carb_g = (
-                    float(carb_override)
-                    if isinstance(carb_override, (int, float))
-                    else (tdee * c_share) / 4.0
-                )
-
-                targets = {
-                    "tdee_kcal": float(tdee),
-                    "protein_g": float(protein_g),
-                    "fat_g": float(fat_g),
-                    "carb_g": float(carb_g),
-                    "split": {"protein": p_share, "fat": f_share, "carb": c_share},
-                }
             except (KeyError, ValueError, TypeError) as exc:
                 logging.warning("macro_calc_tool: falling back to WHO defaults (%s)", exc)
                 fallback_reason = "profile_missing_fields"
 
         if targets is None:
-            targets = build_default_macro_targets()
+            default_targets = build_default_macro_targets()
+            # Round default targets
+            targets = {
+                "tdee_kcal": round(default_targets["tdee_kcal"]),
+                "protein_g": round(default_targets["protein_g"], 1),
+                "fat_g": round(default_targets["fat_g"], 1),
+                "carb_g": round(default_targets["carb_g"], 1),
+                "split": default_targets["split"],
+            }
             fallback_reason = fallback_reason or "profile_unavailable"
 
-        summary_kcal = float(targets["tdee_kcal"])
+        summary_kcal = int(targets["tdee_kcal"])
         summary_protein = float(targets["protein_g"])
         summary_fat = float(targets["fat_g"])
         summary_carb = float(targets["carb_g"])
