@@ -54,7 +54,6 @@ async def _calculate_for_recipe(
             complex_lm=None,
             tree_data=tree_data,
             client_manager=client_manager,
-            recipe_id=str(food_id),
             base_lm=base_lm,
         ):
             if isinstance(event, Error):

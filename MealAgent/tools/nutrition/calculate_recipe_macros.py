@@ -245,7 +245,13 @@ def _pick_best_fdc_match(objects: List[Any], ingredient_clean: str, threshold: f
         score = 1.0
         metadata = getattr(obj, "metadata", None)
         if metadata:
-            score = float(getattr(metadata, "score", getattr(metadata, "distance", 1.0)))
+            raw_score = getattr(metadata, "score", None)
+            if raw_score is None:
+                raw_score = getattr(metadata, "distance", None)
+            try:
+                score = float(raw_score) if raw_score is not None else score
+            except (TypeError, ValueError):
+                score = 1.0
         description = str(props.get("description", "")).lower()
         if ingredient_clean in description:
             score = max(score, 0.9)

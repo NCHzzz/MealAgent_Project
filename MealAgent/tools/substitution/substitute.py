@@ -349,7 +349,6 @@ async def substitute_tool(
                             complex_lm=None,
                             tree_data=tree_data,
                             client_manager=client_manager,
-                            recipe_id=food_id,
                             base_lm=kwargs.get("base_lm"),
                         ):
                             if isinstance(result, Error):

@@ -409,7 +409,6 @@ async def plan_week_e2e_tool(
                                 complex_lm=None,
                                 tree_data=tree_data,
                                 client_manager=client_manager,
-                                recipe_id=str(food_id),
                                 base_lm=effective_base_lm,
                             ):
                                 if isinstance(result, Result) and result.name == "macros" and result.objects:

@@ -228,7 +228,6 @@ async def _ensure_recipe_macros_cached(
     tree_data: TreeData,
     client_manager: ClientManager,
     base_lm,
-    tool_kwargs: Dict[str, Any] | None = None,
 ) -> Dict[str, float] | None:
     macros = recipe.get("macros_per_serving")
     if isinstance(macros, dict) and macros.get("kcal"):
@@ -240,14 +239,11 @@ async def _ensure_recipe_macros_cached(
 
     # Try full VN→EN macro calculation first
     try:
-        call_kwargs = tool_kwargs.copy() if isinstance(tool_kwargs, dict) else {}
-        call_kwargs.setdefault("inputs", {"recipe_id": str(food_id)})
-        call_kwargs.setdefault("complex_lm", None)
         async for result in calculate_recipe_macros_tool(
-            **call_kwargs,
+            inputs={"recipe_id": str(food_id)},
+            complex_lm=None,
             tree_data=tree_data,
             client_manager=client_manager,
-            recipe_id=str(food_id),
             base_lm=base_lm,
         ):
             if isinstance(result, Error):
@@ -371,7 +367,6 @@ async def plan_day_e2e_tool(
                         tree_data,
                         client_manager,
                         effective_base_lm,
-                        tool_kwargs={"inputs": {"recipe_id": str(recipe.get("food_id", ""))}, "complex_lm": None},
                     )
                     if macros and macros.get("kcal"):
                         calculated_count += 1
@@ -546,10 +541,6 @@ async def plan_day_e2e_tool(
                 tree_data=tree_data,
                 client_manager=client_manager,
                 base_lm=base_lm,
-                tool_kwargs={
-                    "inputs": {"recipe_id": str(recipe_obj.get("food_id", ""))},
-                    "complex_lm": None,
-                },
             )
             macros = meal_data.get("recipe", {}).get("macros_per_serving", {})
             if not macros or not macros.get("kcal"):

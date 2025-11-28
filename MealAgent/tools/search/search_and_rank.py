@@ -374,7 +374,6 @@ async def search_and_rank_tool(
                                 complex_lm=None,
                                 tree_data=tree_data,
                                 client_manager=client_manager,
-                                recipe_id=str(food_id),
                                 base_lm=kwargs.get("base_lm"),
                             ):
                                 if isinstance(result, Result) and result.name == "macros" and result.objects:
