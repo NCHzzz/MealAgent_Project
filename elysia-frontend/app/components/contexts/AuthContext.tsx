@@ -1,0 +1,200 @@
+"use client";
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  AuthSuccessResponse,
+  LoginPayload,
+  RegisterPayload,
+  ProfileUpdatePayload,
+  fetchProfile,
+  loginUser,
+  logoutUser,
+  registerUser,
+  updateProfile,
+  UserProfileResponse,
+} from "@/app/api/auth/signup";
+import { ToastContext } from "./ToastContext";
+
+type AuthUser = {
+  user_id: string;
+  email: string;
+  display_name?: string;
+  token: string;
+};
+
+type AuthContextValue = {
+  authUser: AuthUser | null;
+  profile: UserProfileResponse | null;
+  isAuthenticated: boolean;
+  loading: boolean;
+  register: (payload: RegisterPayload) => Promise<boolean>;
+  login: (payload: LoginPayload) => Promise<boolean>;
+  logout: () => void;
+  saveProfile: (payload: ProfileUpdatePayload) => Promise<boolean>;
+  refreshProfile: () => Promise<void>;
+  activeUserId: string | null;
+};
+
+const STORAGE_KEY = "elysia_auth_user";
+
+export const AuthContext = createContext<AuthContextValue>({
+  authUser: null,
+  profile: null,
+  isAuthenticated: false,
+  loading: true,
+  register: async () => false,
+  login: async () => false,
+  logout: () => {},
+  saveProfile: async () => false,
+  refreshProfile: async () => {},
+  activeUserId: null,
+});
+
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const { showErrorToast, showSuccessToast } = useContext(ToastContext);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [profile, setProfile] = useState<UserProfileResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const cached = window.localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as AuthUser;
+        setAuthUser(parsed);
+      } catch (err) {
+        console.error(err);
+        window.localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!authUser?.token) {
+      setProfile(null);
+      return;
+    }
+    void refreshProfile();
+  }, [authUser?.token]);
+
+  const persistUser = (user: AuthUser | null) => {
+    if (typeof window === "undefined") return;
+    if (user) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
+    } else {
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
+  };
+
+  const handleAuthSuccess = useCallback(
+    (resp: AuthSuccessResponse) => {
+      const user: AuthUser = {
+        user_id: resp.user_id,
+        email: resp.email,
+        display_name: resp.display_name,
+        token: resp.token,
+      };
+      setAuthUser(user);
+      setProfile(resp.profile || null);
+      persistUser(user);
+      return user;
+    },
+    []
+  );
+
+  const registerHandler = useCallback(
+    async (payload: RegisterPayload) => {
+      const resp = await registerUser(payload);
+      if ("user_id" in resp && resp.error === "") {
+        handleAuthSuccess(resp);
+        showSuccessToast("Account created", "Your MealAgent profile is ready.");
+        return true;
+      }
+      showErrorToast("Registration failed", resp.error || "Unable to register.");
+      return false;
+    },
+    [handleAuthSuccess, showErrorToast, showSuccessToast]
+  );
+
+  const loginHandler = useCallback(
+    async (payload: LoginPayload) => {
+      const resp = await loginUser(payload);
+      if ("user_id" in resp && resp.error === "") {
+        handleAuthSuccess(resp);
+        showSuccessToast("Welcome back!", "You are now signed in.");
+        return true;
+      }
+      showErrorToast("Login failed", resp.error || "Unable to login.");
+      return false;
+    },
+    [handleAuthSuccess, showErrorToast, showSuccessToast]
+  );
+
+  const logoutHandler = useCallback(() => {
+    if (authUser?.token) {
+      void logoutUser(authUser.token);
+    }
+    setAuthUser(null);
+    setProfile(null);
+    persistUser(null);
+    showSuccessToast("Signed out", "You have been signed out.");
+  }, [authUser?.token, showSuccessToast]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!authUser?.token) return;
+    const resp = await fetchProfile(authUser.token);
+    if (resp.error) {
+      showErrorToast("Profile error", resp.error);
+      return;
+    }
+    setProfile(resp.profile || null);
+  }, [authUser?.token, showErrorToast]);
+
+  const saveProfile = useCallback(
+    async (payload: ProfileUpdatePayload) => {
+      if (!authUser?.token) {
+        showErrorToast("Not authenticated", "Please login to update profile.");
+        return false;
+      }
+      const resp = await updateProfile(authUser.token, payload);
+      if (resp.error) {
+        showErrorToast("Failed to update profile", resp.error);
+        return false;
+      }
+      setProfile(resp.profile || null);
+      showSuccessToast("Profile updated", "Your preferences have been saved.");
+      return true;
+    },
+    [authUser?.token, showErrorToast, showSuccessToast]
+  );
+
+  const value = useMemo(
+    () => ({
+      authUser,
+      profile,
+      isAuthenticated: Boolean(authUser?.token),
+      loading,
+      register: registerHandler,
+      login: loginHandler,
+      logout: logoutHandler,
+      saveProfile,
+      refreshProfile,
+      activeUserId: authUser?.user_id || null,
+    }),
+    [
+      authUser,
+      profile,
+      loading,
+      registerHandler,
+      loginHandler,
+      logoutHandler,
+      saveProfile,
+      refreshProfile,
+    ]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+

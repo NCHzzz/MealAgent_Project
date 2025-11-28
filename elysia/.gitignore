@@ -154,11 +154,11 @@ __pycache__/
 
 uv.lock
 
-# Frontend
-elysia-frontend
-elysia-frontend/
-elysia-frontend/* 
-elysia-frontend/.git/* 
+# # Frontend
+# # elysia-frontend
+# # elysia-frontend/
+# # elysia-frontend/* 
+# elysia-frontend/.git/* 
 
 # elysia/api/static/*
 

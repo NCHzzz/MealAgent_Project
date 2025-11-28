@@ -155,10 +155,11 @@ __pycache__/
 uv.lock
 
 # Frontend
-elysia-frontend
-elysia-frontend/
-elysia-frontend/* 
-elysia-frontend/.git/* 
+# Remove these ignore rules if frontend should be tracked inside this repo.
+# elysia-frontend
+# elysia-frontend/
+# elysia-frontend/*
+# elysia-frontend/.git/*
 
 # elysia/api/static/*
 
