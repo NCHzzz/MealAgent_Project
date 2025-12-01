@@ -23,7 +23,7 @@ import { FaGithub } from "react-icons/fa";
 import { FaLinkedin } from "react-icons/fa";
 import { FaYoutube } from "react-icons/fa";
 
-import { RiRobot2Line } from "react-icons/ri";
+import { RiRobot2Line, RiCalendarTodoLine } from "react-icons/ri";
 import { FiUser } from "react-icons/fi";
 
 
@@ -88,6 +88,12 @@ const SidebarComponent: React.FC = () => {
         mode: ["profile"],
         icon: <FiUser />,
         onClick: () => changePage("profile", {}, true, unsavedChanges),
+      },
+      {
+        title: "Meal History",
+        mode: ["mealHistory"],
+        icon: <RiCalendarTodoLine />,
+        onClick: () => changePage("mealHistory", {}, true, unsavedChanges),
       },
       {
         title: "Data",
