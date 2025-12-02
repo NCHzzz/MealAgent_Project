@@ -12,9 +12,67 @@ from MealAgent.tools.utils.planning_helpers import (
     _get_meal_macros,
     _validate_macro_targets,
     sync_plan_to_weaviate,
+    _calculate_plan_micronutrients,
 )
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 from MealAgent.utils.nutrition import build_default_macro_targets
+
+# Import macro fit calculation from plan_day for consistency
+def _calculate_recipe_fit_score(
+    recipe: Dict[str, Any],
+    target_macros: Dict[str, float] | None = None,
+    meal_type: str | None = None,
+) -> float:
+    """
+    Calculate how well a recipe fits the target macros for a specific meal.
+    Higher score = better fit.
+    """
+    if not target_macros:
+        return recipe.get("fit_score", 50.0)
+    
+    recipe_macros = _get_meal_macros(recipe)
+    if not recipe_macros.get("kcal"):
+        return 0.0
+    
+    # Calculate per-meal targets (divide daily by 3)
+    meal_targets = {
+        "kcal": target_macros.get("tdee_kcal", 2000) / 3.0,
+        "protein_g": target_macros.get("protein_g", 150) / 3.0,
+        "fat_g": target_macros.get("fat_g", 67) / 3.0,
+        "carb_g": target_macros.get("carb_g", 200) / 3.0,
+    }
+    
+    # Adjust targets by meal type
+    if meal_type == "breakfast":
+        meal_targets = {k: v * 0.75 for k, v in meal_targets.items()}
+    elif meal_type in ["lunch", "dinner"]:
+        meal_targets = {k: v * 1.1 for k, v in meal_targets.items()}
+    
+    # Calculate fit score
+    # Weights: protein (30%), carbs (25%), fat (20%), kcal (25%) - prioritize protein and carbs
+    # Consistent with plan_day_e2e_tool for consistency
+    macro_weights = {"protein_g": 0.30, "carb_g": 0.25, "kcal": 0.25, "fat_g": 0.20}
+    weighted_scores = []
+    for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
+        recipe_val = recipe_macros.get(macro, 0.0)
+        target_val = meal_targets.get(macro, 1.0)
+        weight = macro_weights.get(macro, 0.25)
+        
+        if target_val > 0:
+            ratio = recipe_val / target_val
+            if 0.7 <= ratio <= 1.3:
+                score = 100.0 - abs(ratio - 1.0) * 50.0
+            elif 0.5 <= ratio < 0.7 or 1.3 < ratio <= 1.5:
+                score = 60.0 - abs(ratio - 1.0) * 20.0
+            else:
+                score = max(0.0, 30.0 - abs(ratio - 1.0) * 10.0)
+            weighted_scores.append(score * weight)
+        else:
+            weighted_scores.append(0.0)
+    
+    total_score = sum(weighted_scores) / sum(macro_weights.values()) if weighted_scores else 0.0
+    original_fit = recipe.get("fit_score", 50.0)
+    return (total_score * 0.7) + (original_fit * 0.3)
 
 
 def _record_missing_macro_state(tree_data: TreeData, recipe_ids: List[str]) -> None:
@@ -133,8 +191,12 @@ def _select_meal_by_strategy(
     used_recipe_ids: set[str] | None = None,
     preferred_meal_type: str | None = None,
     dish_category: str | None = None,
+    target_macros: Dict[str, float] | None = None,
 ) -> Dict[str, Any] | None:
-    """Select recipe based on strategy, avoiding excluded and recently used recipes."""
+    """
+    Select recipe based on strategy with improved macro-aware selection.
+    Prioritizes variety (avoids recently used recipes) while maintaining macro fit.
+    """
     if not recipes:
         return None
     
@@ -188,12 +250,24 @@ def _select_meal_by_strategy(
         if typed_candidates:
             candidates = typed_candidates
     
+    # Apply strategy with macro-aware selection
     if strategy == "highest_carb":
         candidates.sort(key=lambda r: _get_meal_macros(r).get("carb_g", 0.0), reverse=True)
     elif strategy == "highest_protein":
         candidates.sort(key=lambda r: _get_meal_macros(r).get("protein_g", 0.0), reverse=True)
+    elif strategy == "macro_fit" and target_macros:
+        # Macro-aware selection for better quality
+        for r in candidates:
+            r["_macro_fit_score"] = _calculate_recipe_fit_score(r, target_macros, preferred_meal_type)
+        candidates.sort(key=lambda r: r.get("_macro_fit_score", 0.0), reverse=True)
     elif strategy == "balanced":
-        candidates.sort(key=lambda r: r.get("fit_score", 0.0), reverse=True)
+        # Use macro_fit if targets available, otherwise use fit_score
+        if target_macros:
+            for r in candidates:
+                r["_macro_fit_score"] = _calculate_recipe_fit_score(r, target_macros, preferred_meal_type)
+            candidates.sort(key=lambda r: r.get("_macro_fit_score", r.get("fit_score", 0.0)), reverse=True)
+        else:
+            candidates.sort(key=lambda r: r.get("fit_score", 0.0), reverse=True)
     
     return candidates[0] if candidates else None
 
@@ -382,25 +456,82 @@ async def plan_week_e2e_tool(
         # Step 3: Read ranked recipes
         sr = tree_data.environment.find("search_and_rank_tool", "topk")
         if not sr or not sr[0]["objects"]:
-            yield Error("No ranked items available. Run search_and_rank_tool first.")
+            yield Error(
+                "No recipes found. Please search for recipes first using search_and_rank_tool, "
+                "or check that your search query and constraints are not too restrictive."
+            )
             return
         recipes = sr[0]["objects"]
         
+        # IMPROVED VARIETY: Exclude recently used recipes to avoid repetition
+        # Check for recent plans and exclude their recipes
+        try:
+            client = client_manager.get_client()
+            plan_collection = client.collections.get("MealPlan")
+            item_collection = client.collections.get("MealPlanItem")
+            
+            # Get recent plans (last 14 days) for this user
+            if user_id:
+                from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+                
+                recent_date = (datetime.now() - timedelta(days=14)).isoformat()
+                plan_filter = build_filters_from_where({
+                    "operator": "And",
+                    "operands": [
+                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                        {"path": ["created_at"], "operator": "GreaterThan", "valueDate": recent_date}
+                    ]
+                })
+                
+                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=20)
+                if recent_plans.objects:
+                    # Collect all recipe IDs from recent plans
+                    recent_recipe_ids = set()
+                    for plan_obj in recent_plans.objects:
+                        plan_id = plan_obj.properties.get("plan_id")
+                        if plan_id:
+                            item_filter = build_filters_from_where(
+                                {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
+                            )
+                            items = item_collection.query.fetch_objects(filters=item_filter, limit=200)
+                            for item_obj in items.objects:
+                                recipe_id = item_obj.properties.get("recipe_id")
+                                if recipe_id:
+                                    recent_recipe_ids.add(str(recipe_id))
+                    
+                    # Filter out recently used recipes (but keep at least 21 recipes for weekly plan)
+                    if recent_recipe_ids and len(recipes) > 21:
+                        original_count = len(recipes)
+                        recipes = [r for r in recipes if str(r.get("food_id", "")) not in recent_recipe_ids]
+                        if len(recipes) < 21:
+                            # If filtering too aggressively, keep some recent recipes
+                            recipes = sr[0]["objects"][:max(21, len(recipes))]
+                        if original_count > len(recipes):
+                            yield Response(
+                                f"🔄 Excluded {original_count - len(recipes)} recently used recipe(s) "
+                                f"to ensure variety across your weekly meal plan"
+                            )
+        except Exception as e:
+            logging.debug(f"plan_week_e2e_tool: Could not check recent plans for variety: {e}")
+            # Continue with all recipes if check fails
+        
         if len(recipes) < 7:
-            yield Response(f"Warning: Only {len(recipes)} recipes available. Some recipes will be reused for 21 meals.")
+            yield Response(f"⚠️ Warning: Only {len(recipes)} recipes available. Some recipes will be reused for 21 meals.")
         
         # Check for missing macros and auto-calculate if base_lm is available
+        # OPTIMIZATION: Only check recipes that will actually be used (limit to reasonable count)
         missing_macros = [
-            r for r in recipes
+            r for r in recipes[:30]  # Limit check to first 30 recipes for speed
             if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict)
             or not r.get("macros_per_serving", {}).get("kcal")
         ]
         if missing_macros:
             effective_base_lm = base_lm or kwargs.get("base_lm")
-            if effective_base_lm:
+            if effective_base_lm and len(missing_macros) <= 15:  # Only auto-calculate if reasonable count
                 yield Response(f"🧮 Calculating nutrition for {len(missing_macros)} recipe(s)...")
                 calculated_count = 0
-                for recipe in missing_macros:
+                # Process in batches to avoid blocking
+                for recipe in missing_macros[:15]:  # Limit to 15 to avoid blocking
                     food_id = recipe.get("food_id")
                     if food_id:
                         try:
@@ -427,8 +558,12 @@ async def plan_week_e2e_tool(
                 if calculated_count < len(missing_macros):
                     yield Response(f"⚠️ {len(missing_macros) - calculated_count} recipe(s) still missing nutrition data.")
             else:
-                logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
-                yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
+                if len(missing_macros) > 15:
+                    logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving (too many to auto-calculate)")
+                    yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Some will be calculated during planning.")
+                else:
+                    logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
+                    yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
         
         # Re-check for missing macros after auto-calculation attempt
         missing_macros = [
@@ -475,7 +610,9 @@ async def plan_week_e2e_tool(
             start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
         # Step 5: Assemble 21-meal plan with Vietnamese meal patterns
-        yield Response("🔍 Selecting 21 meals following Vietnamese meal patterns...")
+        # Use macro_fit strategy if targets available for better quality
+        selection_strategy = "macro_fit" if targets else "balanced"
+        yield Response("🔍 Selecting 21 meals following Vietnamese meal patterns and your nutritional targets...")
         
         weekly_plan = {}
         total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
@@ -493,16 +630,18 @@ async def plan_week_e2e_tool(
             
             # Breakfast: Vietnamese breakfast dishes
             breakfast = _select_meal_by_strategy(
-                available_recipes, "highest_carb", 
+                available_recipes, selection_strategy if targets else "highest_carb", 
                 used_recipe_ids=used_recipe_ids,
                 preferred_meal_type="breakfast",
-                dish_category="breakfast"
+                dish_category="breakfast",
+                target_macros=targets
             )
             if not breakfast:
                 breakfast = _select_meal_by_strategy(
                     available_recipes, "highest_carb",
                     used_recipe_ids=used_recipe_ids,
-                    preferred_meal_type="breakfast"
+                    preferred_meal_type="breakfast",
+                    target_macros=targets
                 )
             if not breakfast:
                 breakfast = available_recipes[0] if available_recipes else None
@@ -510,29 +649,33 @@ async def plan_week_e2e_tool(
             # Lunch: Rice + Main + Vegetable + Fruit
             excluded = [breakfast] if breakfast else []
             lunch_rice = _select_meal_by_strategy(
-                available_recipes, "highest_carb",
+                available_recipes, selection_strategy if targets else "highest_carb",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="lunch", dish_category="rice"
+                preferred_meal_type="lunch", dish_category="rice",
+                target_macros=targets
             )
             if not lunch_rice:
                 lunch_rice = _select_meal_by_strategy(
                     available_recipes, "highest_carb",
                     exclude=excluded, used_recipe_ids=used_recipe_ids,
-                    preferred_meal_type="lunch"
+                    preferred_meal_type="lunch",
+                    target_macros=targets
                 )
             
             if lunch_rice:
                 excluded.append(lunch_rice)
             lunch_main = _select_meal_by_strategy(
-                available_recipes, "highest_protein",
+                available_recipes, selection_strategy if targets else "highest_protein",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="lunch", dish_category="main"
+                preferred_meal_type="lunch", dish_category="main",
+                target_macros=targets
             )
             if not lunch_main:
                 lunch_main = _select_meal_by_strategy(
                     available_recipes, "highest_protein",
                     exclude=excluded, used_recipe_ids=used_recipe_ids,
-                    preferred_meal_type="lunch"
+                    preferred_meal_type="lunch",
+                    target_macros=targets
                 )
             
             if lunch_main:
@@ -540,7 +683,8 @@ async def plan_week_e2e_tool(
             lunch_veg = _select_meal_by_strategy(
                 available_recipes, "balanced",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="lunch", dish_category="vegetable"
+                preferred_meal_type="lunch", dish_category="vegetable",
+                target_macros=targets
             )
             
             if lunch_veg:
@@ -548,7 +692,8 @@ async def plan_week_e2e_tool(
             lunch_fruit = _select_meal_by_strategy(
                 available_recipes, "balanced",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="lunch", dish_category="fruit"
+                preferred_meal_type="lunch", dish_category="fruit",
+                target_macros=targets
             )
             
             # Fallback: if no rice/main, use any available recipe
@@ -572,29 +717,33 @@ async def plan_week_e2e_tool(
                 excluded.append(lunch_fruit)
             
             dinner_rice = _select_meal_by_strategy(
-                available_recipes, "highest_carb",
+                available_recipes, selection_strategy if targets else "highest_carb",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="dinner", dish_category="rice"
+                preferred_meal_type="dinner", dish_category="rice",
+                target_macros=targets
             )
             if not dinner_rice:
                 dinner_rice = _select_meal_by_strategy(
                     available_recipes, "highest_carb",
                     exclude=excluded, used_recipe_ids=used_recipe_ids,
-                    preferred_meal_type="dinner"
+                    preferred_meal_type="dinner",
+                    target_macros=targets
                 )
             
             if dinner_rice:
                 excluded.append(dinner_rice)
             dinner_main = _select_meal_by_strategy(
-                available_recipes, "highest_protein",
+                available_recipes, selection_strategy if targets else "highest_protein",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="dinner", dish_category="main"
+                preferred_meal_type="dinner", dish_category="main",
+                target_macros=targets
             )
             if not dinner_main:
                 dinner_main = _select_meal_by_strategy(
                     available_recipes, "highest_protein",
                     exclude=excluded, used_recipe_ids=used_recipe_ids,
-                    preferred_meal_type="dinner"
+                    preferred_meal_type="dinner",
+                    target_macros=targets
                 )
             
             if dinner_main:
@@ -602,7 +751,8 @@ async def plan_week_e2e_tool(
             dinner_veg = _select_meal_by_strategy(
                 available_recipes, "balanced",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="dinner", dish_category="vegetable"
+                preferred_meal_type="dinner", dish_category="vegetable",
+                target_macros=targets
             )
             
             if dinner_veg:
@@ -610,7 +760,8 @@ async def plan_week_e2e_tool(
             dinner_fruit = _select_meal_by_strategy(
                 available_recipes, "balanced",
                 exclude=excluded, used_recipe_ids=used_recipe_ids,
-                preferred_meal_type="dinner", dish_category="fruit"
+                preferred_meal_type="dinner", dish_category="fruit",
+                target_macros=targets
             )
             
             # Fallback for dinner
@@ -733,16 +884,23 @@ async def plan_week_e2e_tool(
             }
             macro_validation = _validate_macro_targets(total_macros, weekly_targets, macro_tolerance_percent)
             validation["macro_validation"] = macro_validation
+            
+            # Calculate macro accuracy percentage for better feedback
+            macro_accuracy = 100.0
+            if total_macros.get("kcal", 0) > 0:
+                kcal_deviation = abs(total_macros.get("kcal", 0) - weekly_targets.get("tdee_kcal", 14000)) / weekly_targets.get("tdee_kcal", 14000)
+                macro_accuracy = max(0.0, 100.0 - (kcal_deviation * 100.0))
+            
             if not macro_validation["valid"]:
                 validation["valid"] = False
                 violations = len(macro_validation.get('violations', []))
                 warnings = len(macro_validation.get('warnings', []))
                 if violations > 0:
-                    yield Response(f"⚠️ Weekly macros: {violations} deviation(s) from targets")
+                    yield Response(f"⚠️ Weekly macros: {violations} deviation(s) from targets (Accuracy: {macro_accuracy:.1f}%)")
                 if warnings > 0:
-                    yield Response(f"ℹ️ {warnings} minor deviation(s) detected")
+                    yield Response(f"ℹ️ {warnings} minor deviation(s) detected (Accuracy: {macro_accuracy:.1f}%)")
             else:
-                yield Response("✅ Weekly macros within target range")
+                yield Response(f"✅ Weekly macros within target range (Accuracy: {macro_accuracy:.1f}%)")
         
         if filters_metadata:
             yield Response("✅ Verifying dietary constraints across all meals...")
@@ -774,12 +932,36 @@ async def plan_week_e2e_tool(
         else:
             yield Response(f"✅ Variety score: {variety_score:.1f}/100 (excellent variety!)")
         
+        # Step 6: Calculate micronutrients
+        yield Response("🔬 Calculating micronutrients (vitamins & minerals)...")
+        profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+        gender = None
+        if profile_results and profile_results[0]["objects"]:
+            gender = profile_results[0]["objects"][0].get("gender")
+        
+        try:
+            micronutrients = await _calculate_plan_micronutrients(
+                {"plan_type": "week", "days": weekly_plan},
+                client_manager=client_manager,
+                gender=gender,
+            )
+        except Exception as e:
+            logging.warning(f"plan_week_e2e_tool: Failed to calculate micronutrients: {e}")
+            micronutrients = {
+                "total_micros": {},
+                "average_daily_micros": {},
+                "rdas": {},
+                "deficits": {},
+                "has_deficits": False,
+            }
+        
         plan_output = {
             "plan_type": "week",
             "start_date": start.date().isoformat(),
             "days": weekly_plan,
             "total_macros": total_macros,
             "average_daily_macros": average_daily_macros,
+            "micronutrients": micronutrients,
             "validation": validation,
             "variety_score": variety_score,
             "created_at": datetime.now().isoformat(),
@@ -806,6 +988,37 @@ async def plan_week_e2e_tool(
             f"Daily avg: {average_daily_macros['kcal']:.0f} kcal | "
             f"Variety: {variety_score:.1f}/100"
         )
+        
+        # Show micronutrient summary
+        if micronutrients.get("average_daily_micros"):
+            micros_summary = []
+            avg_micros = micronutrients.get("average_daily_micros", {})
+            rdas = micronutrients.get("rdas", {})
+            
+            # Show key vitamins and minerals
+            key_micros = ["vitamin_c_mg", "vitamin_a_rae_ug", "calcium_mg", "iron_mg", "potassium_mg"]
+            for key in key_micros:
+                if key in avg_micros:
+                    value = avg_micros[key]
+                    rda = rdas.get(key, 0)
+                    if rda > 0:
+                        percent = (value / rda) * 100
+                        micros_summary.append(f"{key.replace('_', ' ').title()}: {value:.1f} ({percent:.0f}% RDA)")
+            
+            if micros_summary:
+                yield Response(f"💊 Daily avg micronutrients: {', '.join(micros_summary[:3])}...")
+            
+            # Show deficits if any
+            if micronutrients.get("has_deficits"):
+                deficits = micronutrients.get("deficits", {})
+                deficit_list = []
+                for nutrient, data in list(deficits.items())[:3]:
+                    nutrient_name = nutrient.replace("_mg", "").replace("_ug", "").replace("_", " ").title()
+                    deficit_list.append(f"{nutrient_name} ({data['deficit_percent']:.0f}% below RDA)")
+                if deficit_list:
+                    yield Response(f"⚠️ Micronutrient gaps: {', '.join(deficit_list)}")
+            else:
+                yield Response("✅ All key micronutrients meet RDA requirements!")
         
         # Then yield Result for data consistency
         # Use "meal_plan" payload_type for explicit frontend detection

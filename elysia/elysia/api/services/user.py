@@ -297,6 +297,7 @@ class UserManager:
         Initialises a tree for a user at user_id.
         Automatically initializes the user if they don't exist (graceful handling for race conditions).
         This is a wrapper for the TreeManager.add_tree() method.
+        If tree exists in Weaviate but not in memory, it will be loaded automatically.
 
         Args:
             user_id (str): Required. The unique identifier for the user.
@@ -312,11 +313,22 @@ class UserManager:
         
         local_user = await self.get_user_local(user_id)
         tree_manager: TreeManager = local_user["tree_manager"]
+        
+        # Check if tree exists in memory
         if not tree_manager.tree_exists(conversation_id):
-            tree_manager.add_tree(
-                conversation_id,
-                low_memory,
-            )
+            # Tree doesn't exist in memory - check if it exists in Weaviate
+            if await self.check_tree_exists_weaviate(user_id, conversation_id):
+                # Tree exists in Weaviate - load it
+                logger.debug(f"Tree {conversation_id} exists in Weaviate, loading for user {user_id}")
+                try:
+                    await self.load_tree(user_id, conversation_id)
+                except Exception as e:
+                    logger.warning(f"Failed to load tree {conversation_id} from Weaviate: {e}. Creating new tree.")
+                    tree_manager.add_tree(conversation_id, low_memory)
+            else:
+                # Tree doesn't exist anywhere - create new one
+                tree_manager.add_tree(conversation_id, low_memory)
+        
         return tree_manager.get_tree(conversation_id)
 
     async def save_tree(
@@ -576,15 +588,15 @@ class UserManager:
             return
 
         if self.check_tree_timeout(user_id, conversation_id):
+            # Tree timed out or doesn't exist in memory - try to load from Weaviate
             if await self.check_tree_exists_weaviate(user_id, conversation_id):
-                await self.load_tree(user_id, conversation_id)
-            else:
-                tree_timeout_error = TreeTimeoutError()
-                error_payload = await tree_timeout_error.to_frontend(
-                    user_id, conversation_id, query_id
-                )
-                yield error_payload
-                return
+                try:
+                    await self.load_tree(user_id, conversation_id)
+                    logger.debug(f"Loaded tree {conversation_id} from Weaviate for user {user_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to load tree {conversation_id} from Weaviate: {e}")
+                    # Continue anyway - tree will be created if needed
+            # If tree doesn't exist in Weaviate, it's a new conversation - continue normally
 
         local_user = await self.get_user_local(user_id)
         await self.update_user_last_request(user_id)

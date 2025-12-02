@@ -131,6 +131,36 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
                             )
                         )
 
+                    # Add token usage to completed payload
+                    if not tree.low_memory:
+                        token_usage = {
+                            "base_lm": {
+                                "calls": tree.tracker.get_num_calls("base_lm"),
+                                "input_tokens": tree.tracker.get_total_input_tokens("base_lm") or 0,
+                                "output_tokens": tree.tracker.get_total_output_tokens("base_lm") or 0,
+                                "total_tokens": (tree.tracker.get_total_input_tokens("base_lm") or 0) + (tree.tracker.get_total_output_tokens("base_lm") or 0),
+                                "cost": tree.tracker.get_total_cost("base_lm") or 0.0,
+                                "avg_input_tokens": tree.tracker.get_average_input_tokens("base_lm") or 0,
+                                "avg_output_tokens": tree.tracker.get_average_output_tokens("base_lm") or 0,
+                                "avg_cost": tree.tracker.get_average_cost("base_lm") or 0.0,
+                            },
+                            "complex_lm": {
+                                "calls": tree.tracker.get_num_calls("complex_lm"),
+                                "input_tokens": tree.tracker.get_total_input_tokens("complex_lm") or 0,
+                                "output_tokens": tree.tracker.get_total_output_tokens("complex_lm") or 0,
+                                "total_tokens": (tree.tracker.get_total_input_tokens("complex_lm") or 0) + (tree.tracker.get_total_output_tokens("complex_lm") or 0),
+                                "cost": tree.tracker.get_total_cost("complex_lm") or 0.0,
+                                "avg_input_tokens": tree.tracker.get_average_input_tokens("complex_lm") or 0,
+                                "avg_output_tokens": tree.tracker.get_average_output_tokens("complex_lm") or 0,
+                                "avg_cost": tree.tracker.get_average_cost("complex_lm") or 0.0,
+                            },
+                        }
+                        # Add token usage to payload if it exists
+                        if "payload" in yielded_result:
+                            yielded_result["payload"]["token_usage"] = token_usage
+                        else:
+                            yielded_result["token_usage"] = token_usage
+
                     # send the completed payload
                     await websocket.send_json(yielded_result)
 

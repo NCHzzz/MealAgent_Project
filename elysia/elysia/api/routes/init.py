@@ -97,6 +97,19 @@ async def initialise_user(
                             branch_initialisation=default_config.branch_initialisation,
                         )
                         logger.debug("Using default config")
+                    
+                    # Check if user has saved trees in Weaviate (user exists in database but not in memory)
+                    # This handles the case when server restarts and user logs back in
+                    try:
+                        saved_trees = await user_manager.get_saved_trees(
+                            user_id,
+                            user_manager.users[user_id]["frontend_config"].save_location_client_manager.wcd_url,
+                            user_manager.users[user_id]["frontend_config"].save_location_client_manager.wcd_api_key,
+                        )
+                        if saved_trees and len(saved_trees) > 0:
+                            logger.debug(f"User {user_id} has {len(saved_trees)} saved trees in Weaviate. Trees will be loaded when accessed.")
+                    except Exception as e:
+                        logger.debug(f"Could not check saved trees for user {user_id}: {e}")
             except Exception as e:
                 logger.exception(e)
                 logger.error("Error initialising user, removing user")

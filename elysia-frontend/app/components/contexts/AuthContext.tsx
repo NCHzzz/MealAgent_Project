@@ -163,11 +163,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         showErrorToast("Failed to update profile", resp.error);
         return false;
       }
+      // Update profile with response (includes recalculated nutritional targets)
       setProfile(resp.profile || null);
-      showSuccessToast("Profile updated", "Your preferences have been saved.");
+      
+      // Refresh profile to ensure we have the latest calculated values
+      // This ensures tdee_kcal, protein_g, fat_g, carb_g are up-to-date
+      try {
+        await refreshProfile();
+      } catch (err) {
+        // If refresh fails, use the response profile (should have calculated values)
+        console.warn("Failed to refresh profile after update:", err);
+      }
+      
+      showSuccessToast("Profile updated", "Your preferences and nutritional targets have been recalculated.");
       return true;
     },
-    [authUser?.token, showErrorToast, showSuccessToast]
+    [authUser?.token, showErrorToast, showSuccessToast, refreshProfile]
   );
 
   const value = useMemo(

@@ -82,10 +82,14 @@ Return JSON with:
     # Nutrition calc + profile update
     try:
         client = client_manager.get_client()
-        fdc_collection = client.collections.get("FdcFood")
-        portion_collection = client.collections.get("FdcPortion")
-        profile_collection = client.collections.get("UserProfile")
-        log_collection = client.collections.get("MealLogEntry")
+        try:
+            fdc_collection = client.collections.get("FdcFood")
+            portion_collection = client.collections.get("FdcPortion")
+            profile_collection = client.collections.get("UserProfile")
+            log_collection = client.collections.get("MealLogEntry")
+        except Exception as e:
+            yield Error(f"Required collections not found: {str(e)}. Please ensure collections are created.")
+            return
 
         # Validate ingredients against FDC
         validated_ingredients = []

@@ -101,7 +101,11 @@ async def substitute_tool(
         
         # Step 2: Get original ingredient macros
         client = client_manager.get_client()
-        fdc_collection = client.collections.get("FdcFood")
+        try:
+            fdc_collection = client.collections.get("FdcFood")
+        except Exception as e:
+            yield Error(f"FdcFood collection not found: {str(e)}. Please ensure collections are created.")
+            return
         
         original_fdc = None
         if original_fdc_id:
@@ -272,7 +276,11 @@ async def substitute_tool(
             yield Response(f"🔄 Applying substitute: {sub_name}")
             
             # Apply substitute to recipes in plan
+            try:
             recipe_collection = client.collections.get("Recipe")
+            except Exception as e:
+                yield Error(f"Recipe collection not found: {str(e)}. Please ensure collections are created.")
+                return
             updated_recipes = []
             
             # Find recipes in plan that use original ingredient

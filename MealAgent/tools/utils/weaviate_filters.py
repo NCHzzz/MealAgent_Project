@@ -21,6 +21,18 @@ _VALUE_KEYS_PRIORITY: tuple[str, ...] = (
 
 
 def _extract_value(where: dict[str, Any]) -> Any:
+    """
+    Extract the value from a where-clause dictionary.
+    
+    Args:
+        where: Dictionary containing a where-clause with value keys
+        
+    Returns:
+        The extracted value from the where-clause
+        
+    Raises:
+        ValueError: If no supported value key is found in the where-clause
+    """
     for key in _VALUE_KEYS_PRIORITY:
         if key in where:
             return where[key]
@@ -28,6 +40,16 @@ def _extract_value(where: dict[str, Any]) -> Any:
 
 
 def _build_property_filter(path: list[str]) -> Optional[_Filters]:
+    """
+    Build a Weaviate property filter from a path list.
+    
+    Args:
+        path: List of property names, optionally including reference paths
+              (e.g., ["Author", "Article", "title"] for nested references)
+        
+    Returns:
+        _Filters instance for the property, or None if path is empty
+    """
     if not path:
         return None
 
@@ -53,6 +75,17 @@ def _build_property_filter(path: list[str]) -> Optional[_Filters]:
 
 
 def _apply_operator(property_filter: _Filters, operator: str, value: Any) -> Optional[_Filters]:
+    """
+    Apply a comparison operator to a property filter.
+    
+    Args:
+        property_filter: The Weaviate property filter to apply operator to
+        operator: Operator name (e.g., "Equal", "LessThanEqual", "ContainsAny")
+        value: The value to compare against
+        
+    Returns:
+        _Filters instance with operator applied, or None if operator is unsupported
+    """
     op = operator or "Equal"
     op = op.capitalize()
 

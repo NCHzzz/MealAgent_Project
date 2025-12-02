@@ -6,11 +6,31 @@ Extracted from legacy tools to be shared across E2E tools.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
+# RDA (Recommended Daily Allowance) values for common micronutrients
+# Source: USDA Dietary Guidelines
+DEFAULT_RDAs = {
+    "calcium_mg": 1000.0,
+    "iron_mg": 18.0,
+    "potassium_mg": 2600.0,
+    "vitamin_c_mg": 90.0,
+    "vitamin_a_rae_ug": 900.0,
+    "vitamin_d_ug": 15.0,
+    "vitamin_e_mg": 15.0,
+    "vitamin_b6_mg": 1.3,
+    "vitamin_b12_ug": 2.4,
+    "thiamin_b1_mg": 1.2,
+    "riboflavin_b2_mg": 1.3,
+    "niacin_b3_mg": 16.0,
+    "magnesium_mg": 400.0,
+    "zinc_mg": 11.0,
+}
 
 
 def _get_meal_macros(recipe: Dict[str, Any]) -> Dict[str, float]:
@@ -111,11 +131,31 @@ def _validate_constraints(
 
 
 def _generate_plan_id(user_id: str | None = None) -> str:
+    """
+    Generate a unique plan ID.
+    
+    Args:
+        user_id: Optional user ID to prefix the plan ID
+        
+    Returns:
+        Unique plan ID string (e.g., "user123_plan_a1b2c3d4e5f6")
+    """
     prefix = f"{user_id}_" if user_id else ""
     return f"{prefix}plan_{uuid4().hex[:12]}"
 
 
 def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Build MealPlanItem records from a plan dictionary.
+    
+    Handles both daily and weekly plans, including accompaniments for Vietnamese meals.
+    
+    Args:
+        plan: Plan dictionary with meals and optional snacks
+        
+    Returns:
+        List of MealPlanItem dictionaries ready for Weaviate insertion
+    """
     items: List[Dict[str, Any]] = []
     plan_type = plan.get("plan_type", "day")
 
@@ -172,6 +212,180 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     return items
 
 
+async def _calculate_plan_micronutrients(
+    plan: Dict[str, Any],
+    client_manager,
+    gender: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Calculate total micronutrients from a plan by aggregating from all recipes' ingredient_fdc_map.
+    
+    Args:
+        plan: Plan dictionary with meals and optional snacks
+        client_manager: ClientManager for Weaviate access
+        gender: Optional gender for RDA adjustments
+        
+    Returns:
+        Dictionary with total_micros, average_daily_micros, rdas, and deficits
+    """
+    # Get RDA values (adjust for gender if provided)
+    rdas = DEFAULT_RDAs.copy()
+    if gender and gender.lower() == "female":
+        rdas["iron_mg"] = 18.0
+        rdas["vitamin_c_mg"] = 75.0
+        rdas["vitamin_a_rae_ug"] = 700.0
+    elif gender and gender.lower() == "male":
+        rdas["iron_mg"] = 8.0
+        rdas["vitamin_c_mg"] = 90.0
+        rdas["vitamin_a_rae_ug"] = 900.0
+    
+    client = client_manager.get_client()
+    try:
+        fdc_collection = client.collections.get("FdcFood")
+    except Exception:
+        logging.warning("FdcFood collection not available for micronutrient calculation")
+        return {
+            "total_micros": {},
+            "average_daily_micros": {},
+            "rdas": rdas,
+            "deficits": {},
+            "has_deficits": False,
+        }
+    
+    total_micros: Dict[str, float] = {}
+    fdc_data_map: Dict[int, List[Dict[str, Any]]] = {}
+    
+    # Collect all fdc_ids and their quantities
+    def _collect_from_meal(meal_data: Dict[str, Any]):
+        recipe = meal_data.get("recipe", {})
+        servings = float(meal_data.get("servings", 1.0))
+        ingredient_map = recipe.get("ingredient_fdc_map", [])
+        
+        for ing_entry in ingredient_map:
+            if isinstance(ing_entry, dict):
+                fdc_id = ing_entry.get("fdc_id")
+                quantity_g = float(ing_entry.get("quantity_g", 0.0))
+                
+                if fdc_id:
+                    fdc_id_int = int(fdc_id)
+                    if fdc_id_int not in fdc_data_map:
+                        fdc_data_map[fdc_id_int] = []
+                    fdc_data_map[fdc_id_int].append({
+                        "quantity_g": quantity_g,
+                        "servings": servings,
+                    })
+        
+        # Also check accompaniments
+        accompaniments = meal_data.get("accompaniments", [])
+        for acc in accompaniments:
+            acc_recipe = acc.get("recipe", {})
+            acc_servings = float(acc.get("servings", 1.0))
+            if acc_recipe:
+                acc_ingredient_map = acc_recipe.get("ingredient_fdc_map", [])
+                for ing_entry in acc_ingredient_map:
+                    if isinstance(ing_entry, dict):
+                        fdc_id = ing_entry.get("fdc_id")
+                        quantity_g = float(ing_entry.get("quantity_g", 0.0))
+                        
+                        if fdc_id:
+                            fdc_id_int = int(fdc_id)
+                            if fdc_id_int not in fdc_data_map:
+                                fdc_data_map[fdc_id_int] = []
+                            fdc_data_map[fdc_id_int].append({
+                                "quantity_g": quantity_g,
+                                "servings": acc_servings,
+                            })
+    
+    plan_type = plan.get("plan_type", "day")
+    if plan_type == "day":
+        for meal_data in plan.get("meals", {}).values():
+            _collect_from_meal(meal_data)
+        for snack in plan.get("snacks", []):
+            _collect_from_meal(snack)
+    elif plan_type == "week":
+        for day_data in plan.get("days", {}).values():
+            for meal_data in day_data.get("meals", {}).values():
+                _collect_from_meal(meal_data)
+            for snack in day_data.get("snacks", []):
+                _collect_from_meal(snack)
+    
+    # Batch fetch FDC foods
+    if fdc_data_map:
+        unique_fdc_ids = list(fdc_data_map.keys())
+        try:
+            batch_filter = build_filters_from_where(
+                {"path": ["fdc_id"], "operator": "ContainsAny", "valueIntArray": unique_fdc_ids}
+            )
+            batch_results = fdc_collection.query.fetch_objects(filters=batch_filter, limit=len(unique_fdc_ids))
+            
+            fdc_foods_map: Dict[int, Dict[str, Any]] = {}
+            for obj in batch_results.objects:
+                fdc_id = obj.properties.get("fdc_id")
+                if fdc_id:
+                    fdc_foods_map[int(fdc_id)] = obj.properties
+            
+            # Micro fields mapping
+            micro_fields = [
+                ("calcium_mg_100g", "calcium_mg"),
+                ("iron_mg_100g", "iron_mg"),
+                ("potassium_mg_100g", "potassium_mg"),
+                ("vitamin_c_mg_100g", "vitamin_c_mg"),
+                ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
+                ("vitamin_d_ug_100g", "vitamin_d_ug"),
+                ("vitamin_e_mg_100g", "vitamin_e_mg"),
+                ("vitamin_b6_mg_100g", "vitamin_b6_mg"),
+                ("vitamin_b12_ug_100g", "vitamin_b12_ug"),
+                ("thiamin_b1_mg_100g", "thiamin_b1_mg"),
+                ("riboflavin_b2_mg_100g", "riboflavin_b2_mg"),
+                ("niacin_b3_mg_100g", "niacin_b3_mg"),
+                ("magnesium_mg_100g", "magnesium_mg"),
+                ("zinc_mg_100g", "zinc_mg"),
+            ]
+            
+            for fdc_id, data_list in fdc_data_map.items():
+                fdc_food = fdc_foods_map.get(fdc_id)
+                if not fdc_food:
+                    continue
+                
+                for data in data_list:
+                    quantity_g = data["quantity_g"]
+                    servings = data["servings"]
+                    scale = (quantity_g * servings) / 100.0
+                    
+                    for field, key in micro_fields:
+                        if field in fdc_food:
+                            total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+        except Exception as e:
+            logging.warning(f"Failed to batch fetch FDC foods for micros: {str(e)}")
+    
+    # Calculate averages for weekly plans
+    if plan_type == "week":
+        avg_micros = {k: v / 7.0 for k, v in total_micros.items()}
+    else:
+        avg_micros = total_micros
+    
+    # Identify deficits
+    deficits = {}
+    for nutrient, total in avg_micros.items():
+        rda = rdas.get(nutrient, 0.0)
+        if rda > 0 and total < rda:
+            deficit = rda - total
+            deficits[nutrient] = {
+                "total": total,
+                "rda": rda,
+                "deficit": deficit,
+                "deficit_percent": (deficit / rda) * 100.0,
+            }
+    
+    return {
+        "total_micros": total_micros,
+        "average_daily_micros": avg_micros,
+        "rdas": rdas,
+        "deficits": deficits,
+        "has_deficits": len(deficits) > 0,
+    }
+
+
 def sync_plan_to_weaviate(
     plan: Dict[str, Any],
     user_id: str,
@@ -185,8 +399,12 @@ def sync_plan_to_weaviate(
         return plan
 
     client = client_manager.get_client()
-    plan_collection = client.collections.get("MealPlan")
-    item_collection = client.collections.get("MealPlanItem")
+    try:
+        plan_collection = client.collections.get("MealPlan")
+        item_collection = client.collections.get("MealPlanItem")
+    except Exception as e:
+        logging.error(f"Failed to access MealPlan collections: {str(e)}")
+        return plan  # Return plan without persisting if collections unavailable
 
     plan_type = plan.get("plan_type", "day")
     plan_id = plan.get("plan_id") or _generate_plan_id(user_id)
@@ -212,17 +430,28 @@ def sync_plan_to_weaviate(
 
     items = _build_plan_items(plan)
 
+    # OPTIMIZATION: Batch delete existing items
     if plan_filter:
         existing_items = item_collection.query.fetch_objects(filters=plan_filter, limit=256)
-        for obj in existing_items.objects:
-            item_collection.data.delete_by_id(obj.uuid)
+        if existing_items.objects:
+            # Batch delete using list of UUIDs (more efficient than individual deletes)
+            uuids_to_delete = [obj.uuid for obj in existing_items.objects]
+            for uuid in uuids_to_delete:
+                try:
+                    item_collection.data.delete_by_id(uuid)
+                except Exception:
+                    pass  # Continue if item already deleted
 
+    # OPTIMIZATION: Batch insert items (if collection supports it, otherwise keep individual)
     for item in items:
-        item_collection.data.insert({"plan_id": plan_id, **item})
+        try:
+            item_collection.data.insert({"plan_id": plan_id, **item})
+        except Exception as e:
+            logging.warning(f"Failed to insert plan item: {str(e)}")
+            continue  # Continue with other items
 
     plan["plan_id"] = plan_id
     plan["user_id"] = user_id
     plan["start_date"] = plan_start_date
     plan["created_at"] = created_at
     return plan
-

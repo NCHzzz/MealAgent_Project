@@ -23,7 +23,10 @@ def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) ->
     
     if fdc_id:
         try:
-            portion_collection = client.collections.get("FdcPortion")
+            try:
+                portion_collection = client.collections.get("FdcPortion")
+            except Exception:
+                return quantity  # Fallback: assume grams if collection unavailable
             portion_filter = build_filters_from_where(
                 {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
             )
@@ -245,8 +248,12 @@ async def pantry_diff_tool(
 
     try:
         client = client_manager.get_client()
+        try:
         shopping_list_collection = client.collections.get("ShoppingList")
         shopping_item_collection = client.collections.get("ShoppingItem")
+        except Exception as e:
+            yield Error(f"Shopping collections not found: {str(e)}. Please ensure collections are created.")
+            return
 
         # Build pantry lookup (by normalized ingredient name)
         pantry_lookup: Dict[str, Dict[str, Any]] = {}

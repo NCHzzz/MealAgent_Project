@@ -100,8 +100,12 @@ async def pantry_crud_tool(
 
     try:
         client = client_manager.get_client()
-        pantry_collection = client.collections.get("Pantry")
-        item_collection = client.collections.get("PantryItem")
+        try:
+            pantry_collection = client.collections.get("Pantry")
+            item_collection = client.collections.get("PantryItem")
+        except Exception as e:
+            yield Error(f"Pantry collections not found: {str(e)}. Please ensure collections are created.")
+            return
 
         if action == "read":
             # Get pantry (create if doesn't exist)

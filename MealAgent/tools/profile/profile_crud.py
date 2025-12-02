@@ -103,7 +103,11 @@ async def profile_crud_tool(
 
     try:
         client = client_manager.get_client()
-        collection = client.collections.get("UserProfile")
+        try:
+            collection = client.collections.get("UserProfile")
+        except Exception as e:
+            yield Error(f"UserProfile collection not found: {str(e)}. Please ensure collections are created.")
+            return
 
         if action in {"create", "update"}:
             error = _validate_profile_payload(profile_data)
@@ -200,5 +204,3 @@ async def profile_crud_tool(
         logging.error(f"profile_crud_tool: {error_msg}", exc_info=True)
         yield Error(error_msg)
         return
-
-

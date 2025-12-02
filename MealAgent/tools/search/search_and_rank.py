@@ -183,19 +183,33 @@ async def _search_with_custom_logic(
             return collection.query.fetch_objects(filters=filters, limit=limit)
 
         results = None
-        if query_text:
+        if query_text and query_text.strip():
+            # Has query text - try hybrid, then BM25
             try:
                 results = _hybrid()
             except Exception:
                 try:
                     results = _bm25()
                 except Exception:
-                    results = None
+                    # Fallback to fetch if both fail
+                    try:
+                        results = _fetch()
+                    except Exception:
+                        results = None
         else:
+            # No query text - fetch all (with filters if any)
             try:
                 results = _fetch()
             except Exception:
-                results = None
+                # If fetch fails, try without filters as last resort
+                try:
+                    if where:
+                        # Try without constraints
+                        results = collection.query.fetch_objects(limit=limit)
+                    else:
+                        results = None
+                except Exception:
+                    results = None
 
         if results is None or not results.objects:
             return None
@@ -207,19 +221,47 @@ async def _search_with_custom_logic(
 
 
 def _calculate_macro_fit_score(recipe_macros: Dict[str, float], target_per_meal: Dict[str, float]) -> float:
-    if not recipe_macros:
+    """
+    Calculate how well recipe macros match target per-meal macros.
+    Improved scoring: Prioritizes recipes that are close to targets (within 0.7-1.3x range).
+    """
+    if not recipe_macros or not recipe_macros.get("kcal"):
         return 0.0
-    deviations = []
+    
+    # Weight different macros by importance
+    macro_weights = {
+        "kcal": 0.4,      # Most important - total energy
+        "protein_g": 0.3, # Very important - muscle building/satiety
+        "carb_g": 0.2,    # Important - energy
+        "fat_g": 0.1,     # Less critical - but still important
+    }
+    
+    weighted_scores = []
     for key in ["kcal", "protein_g", "fat_g", "carb_g"]:
         recipe_val = recipe_macros.get(key, 0.0)
         target_val = target_per_meal.get(key, 1.0)
+        weight = macro_weights.get(key, 0.25)
+        
         if target_val > 0:
-            dev = abs(recipe_val - target_val) / target_val
-            deviations.append(dev)
+            ratio = recipe_val / target_val
+            # Optimal range: 0.7-1.3x target (best fit)
+            if 0.7 <= ratio <= 1.3:
+                # Score decreases as ratio deviates from 1.0
+                score = 100.0 - abs(ratio - 1.0) * 50.0
+            elif 0.5 <= ratio < 0.7 or 1.3 < ratio <= 1.5:
+                # Acceptable range: 0.5-0.7x or 1.3-1.5x
+                score = 60.0 - abs(ratio - 1.0) * 20.0
+            else:
+                # Poor fit: <0.5x or >1.5x
+                score = max(0.0, 30.0 - abs(ratio - 1.0) * 10.0)
+            
+            weighted_scores.append(score * weight)
         else:
-            deviations.append(1.0)
-    avg_dev = sum(deviations) / len(deviations) if deviations else 1.0
-    return max(0.0, 100.0 - (avg_dev * 100.0))
+            weighted_scores.append(0.0)
+    
+    # Return weighted average
+    total_score = sum(weighted_scores) / sum(macro_weights.values()) if weighted_scores else 0.0
+    return max(0.0, min(100.0, total_score))
 
 
 @tool
@@ -337,8 +379,12 @@ async def search_and_rank_tool(
                 diversity_score = diversity_ratio * 100.0
                 seen_ingredients.update(ings)
 
+            # IMPROVED SCORING: Prioritize macro fit when targets are available
+            # This ensures recipes that match user's profile get higher priority
             if has_targets and target_per_meal:
-                total_score = 0.6 * macro_score + 0.3 * semantic_score + 0.1 * diversity_score
+                # Increased weight for macro_score (70%) to prioritize profile matching
+                # Reduced semantic_score weight (20%) and diversity_score (10%)
+                total_score = 0.7 * macro_score + 0.2 * semantic_score + 0.1 * diversity_score
             else:
                 total_score = 0.7 * semantic_score + 0.3 * diversity_score
 
@@ -353,21 +399,84 @@ async def search_and_rank_tool(
             })
 
         scored_items.sort(key=lambda x: x.get("fit_score", 0.0), reverse=True)
-        top_items = scored_items[:top_k]
-
-        # Auto-calculate missing macros for top_k items if base_lm is available
-        # This ensures recipes have nutrition data before being used in meal planning
-        if collection_name == "Recipe" and kwargs.get("base_lm"):
-            from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+        
+        # IMPROVED VARIETY: Select diverse recipes to avoid repetition
+        # Strategy: Take top recipes but ensure variety by dish_name and ingredients
+        top_items = []
+        seen_dish_names: set[str] = set()
+        seen_ingredient_sets: set[frozenset] = set()
+        
+        for item in scored_items:
+            if len(top_items) >= top_k:
+                break
             
-            calculated_count = 0
-            failed_ids: list[str] = []
-            for item in top_items:
-                macros = item.get("macros_per_serving", {})
-                if not macros or not isinstance(macros, dict) or not macros.get("kcal"):
-                    # Missing macros - try to calculate
-                    food_id = item.get("food_id")
-                    if food_id:
+            dish_name = str(item.get("dish_name", "")).lower().strip()
+            # Check if we've seen this exact dish name
+            if dish_name and dish_name in seen_dish_names:
+                # Skip exact duplicates, but allow similar dishes
+                continue
+            
+            # Check ingredient overlap - avoid recipes with >80% same ingredients
+            ingredients = set(str(ing).lower().strip() for ing in item.get("ingredients", []))
+            if ingredients:
+                # Check if this recipe has too many overlapping ingredients with already selected recipes
+                max_overlap_ratio = 0.0
+                for seen_ings in seen_ingredient_sets:
+                    if seen_ings:
+                        overlap = len(ingredients & seen_ings)
+                        total = len(ingredients | seen_ings)
+                        if total > 0:
+                            overlap_ratio = overlap / total
+                            max_overlap_ratio = max(max_overlap_ratio, overlap_ratio)
+                
+                # If >80% overlap, skip to ensure variety
+                if max_overlap_ratio > 0.8:
+                    continue
+            
+            # Add to selected items
+            top_items.append(item)
+            if dish_name:
+                seen_dish_names.add(dish_name)
+            if ingredients:
+                seen_ingredient_sets.add(frozenset(ingredients))
+        
+        # If we don't have enough items after variety filtering, fill with remaining top items
+        if len(top_items) < top_k:
+            remaining = [item for item in scored_items if item not in top_items]
+            top_items.extend(remaining[:top_k - len(top_items)])
+
+        # Auto-calculate missing macros for top_k items if base_lm is available.
+        # OPTIMIZATION: Only calculate for items that will actually be used (top_k)
+        # and only when the number of missing recipes is small to avoid blocking.
+        missing_macros_count = 0
+        if collection_name == "Recipe" and kwargs.get("base_lm"):
+            missing_macros_count = sum(
+                1
+                for item in top_items
+                if not item.get("macros_per_serving")
+                or not isinstance(item.get("macros_per_serving"), dict)
+                or not item.get("macros_per_serving", {}).get("kcal")
+            )
+
+            # Only auto-calculate if missing count is reasonable (<= 5) to avoid blocking
+            if 0 < missing_macros_count <= 5:
+                from MealAgent.tools.nutrition.calculate_recipe_macros import (
+                    calculate_recipe_macros_tool,
+                )
+
+                calculated_count = 0
+                failed_ids: list[str] = []
+                for item in top_items:
+                    macros = item.get("macros_per_serving", {})
+                    if (
+                        not macros
+                        or not isinstance(macros, dict)
+                        or not macros.get("kcal")
+                    ):
+                        # Missing macros - try to calculate
+                        food_id = item.get("food_id")
+                        if not food_id:
+                            continue
                         try:
                             async for result in calculate_recipe_macros_tool(
                                 inputs={"recipe_id": str(food_id)},
@@ -376,7 +485,11 @@ async def search_and_rank_tool(
                                 client_manager=client_manager,
                                 base_lm=kwargs.get("base_lm"),
                             ):
-                                if isinstance(result, Result) and result.name == "macros" and result.objects:
+                                if (
+                                    isinstance(result, Result)
+                                    and result.name == "macros"
+                                    and result.objects
+                                ):
                                     item["macros_per_serving"] = result.objects[0]
                                     calculated_count += 1
                                     break
@@ -384,22 +497,37 @@ async def search_and_rank_tool(
                                     failed_ids.append(str(food_id))
                                     break
                         except Exception as e:
-                            logging.warning(f"Failed to auto-calculate macros for recipe {food_id}: {str(e)}")
+                            logging.warning(
+                                "Failed to auto-calculate macros for recipe %s: %s",
+                                food_id,
+                                str(e),
+                            )
                             failed_ids.append(str(food_id))
-                            continue
 
-            if calculated_count > 0:
-                yield Response(f"🧮 Calculated nutrition for {calculated_count} recipe(s).")
-            remaining_missing = [
-                item for item in top_items
-                if not isinstance(item.get("macros_per_serving"), dict)
-                or not item.get("macros_per_serving", {}).get("kcal")
-            ]
-            if remaining_missing:
-                sample_ids = ", ".join(str(item.get("food_id")) for item in remaining_missing[:5])
+                if calculated_count > 0:
+                    yield Response(
+                        f"🧮 Calculated nutrition for {calculated_count} recipe(s)."
+                    )
+
+                remaining_missing = [
+                    item
+                    for item in top_items
+                    if not isinstance(item.get("macros_per_serving"), dict)
+                    or not item.get("macros_per_serving", {}).get("kcal")
+                ]
+                if remaining_missing:
+                    sample_ids = ", ".join(
+                        str(item.get("food_id")) for item in remaining_missing[:5]
+                    )
+                    yield Response(
+                        f"⚠️ Still missing nutrition for {len(remaining_missing)} recipe(s) (e.g. {sample_ids}). "
+                        "Run calculate_recipe_macros_tool explicitly if needed."
+                    )
+            elif missing_macros_count > 5:
+                # Too many missing - skip auto-calculation to avoid blocking
                 yield Response(
-                    f"⚠️ Still missing nutrition for {len(remaining_missing)} recipe(s) (e.g. {sample_ids}). "
-                    "Run calculate_recipe_macros_tool explicitly if needed."
+                    f"ℹ️ {missing_macros_count} recipes missing nutrition data. "
+                    "Planning tool will handle calculation as needed."
                 )
 
         warn = ""

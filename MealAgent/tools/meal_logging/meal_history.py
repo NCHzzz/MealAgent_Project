@@ -23,18 +23,32 @@ async def meal_history_tool(
     """
     Retrieve meal log history for a user with optional date filtering.
 
-    Environment writes:
-      - environment["meal_history_tool"]["history"]
+    Environment contract:
+      Reads:
+        - `profile_crud_tool.profile` (optional) to get user_id if not provided
+      Writes:
+        - environment["meal_history_tool"]["history"]
     """
     yield Response("📊 Retrieving your meal history...")
 
+    # Try to get user_id from profile if not provided
     if not user_id:
-        yield Error("user_id is required")
+        profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+        if profile_results and profile_results[0]["objects"]:
+            profile = profile_results[0]["objects"][0]
+            user_id = profile.get("user_id", "")
+    
+    if not user_id:
+        yield Error("user_id is required. Please provide user_id or ensure profile exists in environment.")
         return
 
     try:
         client = client_manager.get_client()
-        log_collection = client.collections.get("MealLogEntry")
+        try:
+            log_collection = client.collections.get("MealLogEntry")
+        except Exception as e:
+            yield Error(f"MealLogEntry collection not found: {str(e)}. Please ensure collections are created.")
+            return
 
         # Build where clause
         where_conditions = [{"path": ["user_id"], "operator": "Equal", "valueString": user_id}]

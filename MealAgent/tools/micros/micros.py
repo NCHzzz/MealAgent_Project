@@ -44,7 +44,7 @@ def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) ->
                         portion_amount = portion.get("amount", 1.0)
                         return (quantity / portion_amount) * gram_weight
         except Exception:
-            pass
+            return quantity  # Fallback: assume grams if collection unavailable
 
     return quantity  # Fallback: assume grams
 
@@ -112,9 +112,16 @@ async def micros_tool(
         yield Response("📊 Aggregating micronutrients from all meals...")
         
         client = client_manager.get_client()
-        fdc_collection = client.collections.get("FdcFood")
+        try:
+            fdc_collection = client.collections.get("FdcFood")
+        except Exception as e:
+            yield Error(f"FdcFood collection not found: {str(e)}. Please ensure collections are created.")
+            return
         
         total_micros: Dict[str, float] = {}
+        
+        # Collect all fdc_ids and their quantities first (batch optimization)
+        fdc_data_map: Dict[int, List[Dict[str, Any]]] = {}
         
         if plan.get("plan_type") == "day":
             for meal_data in plan.get("meals", {}).values():
@@ -128,25 +135,13 @@ async def micros_tool(
                         quantity_g = float(ing_entry.get("quantity_g", 0.0))
                         
                         if fdc_id:
-                            fdc_filter = build_filters_from_where(
-                                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
-                            )
-                            fdc_results = fdc_collection.query.fetch_objects(filters=fdc_filter, limit=1)
-                            if fdc_results.objects:
-                                fdc_food = fdc_results.objects[0].properties
-                                scale = (quantity_g * servings) / 100.0
-                                
-                                # Get micronutrients from FdcFood (per-100g fields)
-                                micro_fields = [
-                                    ("calcium_mg_100g", "calcium_mg"),
-                                    ("iron_mg_100g", "iron_mg"),
-                                    ("potassium_mg_100g", "potassium_mg"),
-                                    ("vitamin_c_mg_100g", "vitamin_c_mg"),
-                                    ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
-                                ]
-                                for field, key in micro_fields:
-                                    if field in fdc_food:
-                                        total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+                            fdc_id_int = int(fdc_id)
+                            if fdc_id_int not in fdc_data_map:
+                                fdc_data_map[fdc_id_int] = []
+                            fdc_data_map[fdc_id_int].append({
+                                "quantity_g": quantity_g,
+                                "servings": servings,
+                            })
         
         elif plan.get("plan_type") == "week":
             for day_data in plan.get("days", {}).values():
@@ -161,24 +156,78 @@ async def micros_tool(
                             quantity_g = float(ing_entry.get("quantity_g", 0.0))
                             
                             if fdc_id:
-                                fdc_filter = build_filters_from_where(
-                                    {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
-                                )
-                                fdc_results = fdc_collection.query.fetch_objects(filters=fdc_filter, limit=1)
-                                if fdc_results.objects:
-                                    fdc_food = fdc_results.objects[0].properties
-                                    scale = (quantity_g * servings) / 100.0
-                                    
-                                    micro_fields = [
-                                        ("calcium_mg_100g", "calcium_mg"),
-                                        ("iron_mg_100g", "iron_mg"),
-                                        ("potassium_mg_100g", "potassium_mg"),
-                                        ("vitamin_c_mg_100g", "vitamin_c_mg"),
-                                        ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
-                                    ]
-                                    for field, key in micro_fields:
-                                        if field in fdc_food:
-                                            total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+                                fdc_id_int = int(fdc_id)
+                                if fdc_id_int not in fdc_data_map:
+                                    fdc_data_map[fdc_id_int] = []
+                                fdc_data_map[fdc_id_int].append({
+                                    "quantity_g": quantity_g,
+                                    "servings": servings,
+                                })
+        
+        # Batch fetch all FDC foods at once
+        if fdc_data_map:
+            unique_fdc_ids = list(fdc_data_map.keys())
+            # Batch fetch using ContainsAny filter (more efficient than multiple queries)
+            try:
+                batch_filter = build_filters_from_where(
+                    {"path": ["fdc_id"], "operator": "ContainsAny", "valueIntArray": unique_fdc_ids}
+                )
+                batch_results = fdc_collection.query.fetch_objects(filters=batch_filter, limit=len(unique_fdc_ids))
+                
+                # Create lookup map
+                fdc_foods_map: Dict[int, Dict[str, Any]] = {}
+                for obj in batch_results.objects:
+                    fdc_id = obj.properties.get("fdc_id")
+                    if fdc_id:
+                        fdc_foods_map[int(fdc_id)] = obj.properties
+                
+                # Process all collected data
+                micro_fields = [
+                    ("calcium_mg_100g", "calcium_mg"),
+                    ("iron_mg_100g", "iron_mg"),
+                    ("potassium_mg_100g", "potassium_mg"),
+                    ("vitamin_c_mg_100g", "vitamin_c_mg"),
+                    ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
+                ]
+                
+                for fdc_id, data_list in fdc_data_map.items():
+                    fdc_food = fdc_foods_map.get(fdc_id)
+                    if not fdc_food:
+                        continue
+                    
+                    for data in data_list:
+                        quantity_g = data["quantity_g"]
+                        servings = data["servings"]
+                        scale = (quantity_g * servings) / 100.0
+                        
+                        for field, key in micro_fields:
+                            if field in fdc_food:
+                                total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+            except Exception as e:
+                logging.warning(f"Batch fetch failed, falling back to individual queries: {str(e)}")
+                # Fallback to individual queries if batch fails
+                for fdc_id, data_list in fdc_data_map.items():
+                    try:
+                        fdc_filter = build_filters_from_where(
+                            {"path": ["fdc_id"], "operator": "Equal", "valueInt": fdc_id}
+                        )
+                        fdc_results = fdc_collection.query.fetch_objects(filters=fdc_filter, limit=1)
+                        if fdc_results.objects:
+                            fdc_food = fdc_results.objects[0].properties
+                            micro_fields = [
+                                ("calcium_mg_100g", "calcium_mg"),
+                                ("iron_mg_100g", "iron_mg"),
+                                ("potassium_mg_100g", "potassium_mg"),
+                                ("vitamin_c_mg_100g", "vitamin_c_mg"),
+                                ("vitamin_a_rae_ug_100g", "vitamin_a_rae_ug"),
+                            ]
+                            for data in data_list:
+                                scale = (data["quantity_g"] * data["servings"]) / 100.0
+                                for field, key in micro_fields:
+                                    if field in fdc_food:
+                                        total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+                    except Exception:
+                        continue
         
         # Calculate averages for weekly plans
         if plan.get("plan_type") == "week":

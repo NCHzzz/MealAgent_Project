@@ -112,18 +112,26 @@ async def auto_calculate_macros_tool(
 
     if missing_ids:
         try:
-            recipe_collection = client_manager.get_client().collections.get("Recipe")
-            for rid in missing_ids[:max_recipes]:
-                try:
-                    filters = Filter.by_property("food_id").equal(str(rid))
-                    fetched = recipe_collection.query.fetch_objects(
-                        filters=filters,
-                        limit=1,
-                    )
-                    if fetched.objects:
-                        candidates.append(fetched.objects[0].properties)
-                except Exception as exc:
-                    logger.debug("auto_calculate_macros_tool: failed fetching recipe %s (%s)", rid, exc)
+            client = client_manager.get_client()
+            try:
+                recipe_collection = client.collections.get("Recipe")
+            except Exception as e:
+                logger.warning(f"Recipe collection not found: {str(e)}")
+                # Continue without fetching missing recipes
+                recipe_collection = None
+            
+            if recipe_collection:
+                for rid in missing_ids[:max_recipes]:
+                    try:
+                        filters = Filter.by_property("food_id").equal(str(rid))
+                        fetched = recipe_collection.query.fetch_objects(
+                            filters=filters,
+                            limit=1,
+                        )
+                        if fetched.objects:
+                            candidates.append(fetched.objects[0].properties)
+                    except Exception as exc:
+                        logger.debug("auto_calculate_macros_tool: failed fetching recipe %s (%s)", rid, exc)
         except Exception as exc:
             logger.debug("auto_calculate_macros_tool: unable to query Recipe collection (%s)", exc)
 

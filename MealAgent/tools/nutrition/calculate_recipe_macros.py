@@ -13,6 +13,7 @@ from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 PIECE_UNIT_DEFAULT_G = {
@@ -138,6 +139,195 @@ def _sanitize_ingredient_query(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+COOKING_METHOD_HEURISTICS = [
+    {
+        "label": "deep-fried",
+        "keywords": [
+            "chiên giòn",
+            "rán",
+            "deep fry",
+            "deep-fry",
+            "fried",
+            "khoai lang chiên",
+            "tempura",
+        ],
+        "oil_per_serving_g": 18.0,  # ≈160 kcal extra fat per serving
+    },
+    {
+        "label": "pan-fried",
+        "keywords": [
+            "chiên",
+            "áp chảo",
+            "pan fry",
+            "pan-fry",
+            "seared",
+            "rán áp chảo",
+            "lá nướng chảo",
+        ],
+        "oil_per_serving_g": 12.0,
+    },
+    {
+        "label": "stir-fried",
+        "keywords": [
+            "xào",
+            "stir fry",
+            "stir-fry",
+            "sauté",
+            "phi thơm",
+            "rang",
+        ],
+        "oil_per_serving_g": 9.0,
+    },
+]
+
+
+SAUCE_RICH_HEURISTICS = [
+    {
+        "label": "creamy/cheesy sauce",
+        "keywords": [
+            "sốt kem",
+            "sốt phô mai",
+            "cream sauce",
+            "cheese sauce",
+            "alfredo",
+            "carbonara",
+            "béo ngậy",
+        ],
+        "extra_fat_per_serving_g": 10.0,  # ≈90 kcal
+    },
+    {
+        "label": "mayonnaise / rich dressing",
+        "keywords": [
+            "sốt mayo",
+            "mayonnaise",
+            "sốt trứng béo",
+            "salad dressing",
+            "ranch",
+            "caesar",
+        ],
+        "extra_fat_per_serving_g": 8.0,
+    },
+]
+
+
+SWEET_DESSERT_HEURISTICS = [
+    {
+        "label": "sweet dessert / chè",
+        "keywords": [
+            "chè",
+            "tráng miệng",
+            "dessert",
+            "bánh ngọt",
+            "bánh kem",
+            "pudding",
+            "mousse",
+            "custard",
+            "sữa đặc",
+        ],
+        "extra_carb_per_serving_g": 20.0,  # ≈80 kcal
+    },
+    {
+        "label": "sweet drink / sữa / trà sữa",
+        "keywords": [
+            "trà sữa",
+            "sữa tươi đường",
+            "sinh tố",
+            "smoothie",
+            "frappe",
+        ],
+        "extra_carb_per_serving_g": 15.0,
+    },
+]
+
+
+def _detect_cooking_method(
+    recipe_obj: Dict[str, Any],
+    translated: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Inspect recipe metadata and translated ingredients to infer cooking method."""
+    text_blobs: List[str] = []
+
+    for key in ("dish_name", "description", "cooking_method", "instructions"):
+        value = recipe_obj.get(key)
+        if isinstance(value, list):
+            text_blobs.extend([str(item) for item in value])
+        elif isinstance(value, str):
+            text_blobs.append(value)
+
+    for field in ("ingredients_with_qty", "ingredients"):
+        value = recipe_obj.get(field)
+        if isinstance(value, list):
+            text_blobs.extend([str(item) for item in value])
+        elif isinstance(value, str):
+            text_blobs.append(value)
+
+    for entry in translated:
+        text_blobs.append(entry.get("vn", ""))
+        text_blobs.append(entry.get("en", ""))
+
+    merged_text = " ".join(text_blobs).lower()
+
+    for heuristic in COOKING_METHOD_HEURISTICS:
+        if any(keyword in merged_text for keyword in heuristic["keywords"]):
+            return heuristic
+
+    return None
+
+
+def _detect_rich_sauce(
+    recipe_obj: Dict[str, Any],
+    translated: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Heuristically detect rich/creamy sauces that likely add extra fat."""
+    text_blobs: List[str] = []
+
+    for key in ("dish_name", "description", "cooking_method", "instructions"):
+        value = recipe_obj.get(key)
+        if isinstance(value, list):
+            text_blobs.extend([str(item) for item in value])
+        elif isinstance(value, str):
+            text_blobs.append(value)
+
+    for entry in translated:
+        text_blobs.append(entry.get("vn", ""))
+        text_blobs.append(entry.get("en", ""))
+
+    merged_text = " ".join(text_blobs).lower()
+
+    for heuristic in SAUCE_RICH_HEURISTICS:
+        if any(keyword in merged_text for keyword in heuristic["keywords"]):
+            return heuristic
+
+    return None
+
+
+def _detect_sugary_dessert(
+    recipe_obj: Dict[str, Any],
+    translated: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Heuristically detect very sweet desserts / drinks that likely under-report carbs."""
+    text_blobs: List[str] = []
+
+    for key in ("dish_name", "description", "cooking_method"):
+        value = recipe_obj.get(key)
+        if isinstance(value, list):
+            text_blobs.extend([str(item) for item in value])
+        elif isinstance(value, str):
+            text_blobs.append(value)
+
+    for entry in translated:
+        text_blobs.append(entry.get("vn", ""))
+        text_blobs.append(entry.get("en", ""))
+
+    merged_text = " ".join(text_blobs).lower()
+
+    for heuristic in SWEET_DESSERT_HEURISTICS:
+        if any(keyword in merged_text for keyword in heuristic["keywords"]):
+            return heuristic
+
+    return None
+
+
 async def _translate_ingredients_vn_to_en(
     ingredients_vn: List[str],
     base_lm,
@@ -146,6 +336,18 @@ async def _translate_ingredients_vn_to_en(
     """Translate Vietnamese ingredients to English using LLM."""
     if not ingredients_vn:
         return []
+
+    if base_lm is None:
+        logger.warning(
+            "Ingredient translation: no base_lm configured, using rule-based fallback only "
+            f"for {len(ingredients_vn)} ingredient(s)."
+        )
+    else:
+        logger.warning(
+            "Ingredient translation: using LM (%s) for %d ingredient(s).",
+            getattr(getattr(base_lm, 'model', None), 'name', None) or getattr(base_lm, 'model', None) or "unknown-model",
+            len(ingredients_vn),
+        )
 
     try:
         class TranslationPrompt(dspy.Signature):
@@ -212,12 +414,20 @@ async def _translate_ingredients_vn_to_en(
                 )
 
         if cleaned:
+            logger.warning(
+                "Ingredient translation: LM produced %d structured row(s), proceeding with FDC lookup.",
+                len(cleaned),
+            )
             return cleaned
         logger.warning("Ingredient translation returned no structured rows, using fallback.")
     except Exception as exc:
         logger.warning("Ingredient translation failed (%s), using fallback.", exc)
 
     # Fallback: return original names as English
+    logger.warning(
+        "Ingredient translation: falling back to heuristic parser for %d ingredient(s).",
+        len(ingredients_vn),
+    )
     fallback_entries: List[Dict[str, Any]] = []
     for ing in ingredients_vn:
         qty, cleaned_name = _extract_quantity_from_text(str(ing))
@@ -301,6 +511,16 @@ async def _find_fdc_food(
     return None
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert value to float safely, falling back to default on None/invalid."""
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _calculate_macros_from_fdc(
     fdc_food: Dict[str, Any],
     quantity_g: float,
@@ -310,10 +530,10 @@ def _calculate_macros_from_fdc(
     scale = quantity_g / 100.0
 
     return {
-        "kcal": float(fdc_food.get("energy_kcal_100g", 0.0)) * scale,
-        "protein_g": float(fdc_food.get("protein_g_100g", 0.0)) * scale,
-        "fat_g": float(fdc_food.get("fat_g_100g", 0.0)) * scale,
-        "carb_g": float(fdc_food.get("carbohydrate_g_100g", 0.0)) * scale,
+        "kcal": _safe_float(fdc_food.get("energy_kcal_100g"), 0.0) * scale,
+        "protein_g": _safe_float(fdc_food.get("protein_g_100g"), 0.0) * scale,
+        "fat_g": _safe_float(fdc_food.get("fat_g_100g"), 0.0) * scale,
+        "carb_g": _safe_float(fdc_food.get("carbohydrate_g_100g"), 0.0) * scale,
     }
 
 
@@ -329,6 +549,109 @@ def _record_status(tree_data: TreeData, status: str, payload: Dict[str, Any]) ->
         logger.debug("Failed to write nutrition status to environment: %s", exc)
 
 
+async def _estimate_recipe_macros_with_lm(
+    recipe_obj: Dict[str, Any],
+    translated_ingredients: List[Dict[str, Any]],
+    base_lm,
+    tree_data: TreeData | None = None,
+) -> Optional[Dict[str, float]]:
+    """
+    Fallback: ask the LM (e.g. Gemini) to estimate macros per serving when FDC lookup fails.
+
+    This is used when:
+      - No ingredient could be mapped to FDC, or
+      - Aggregated macros from FDC end up as zero/invalid.
+    """
+    if base_lm is None:
+        return None
+
+    dish_name = str(recipe_obj.get("dish_name") or recipe_obj.get("food_name") or "").strip()
+    serving_size = float(recipe_obj.get("serving_size", 1.0) or 1.0)
+
+    # Build a compact ingredient description for the prompt
+    ing_summary = []
+    for item in translated_ingredients:
+        vn = item.get("vn") or ""
+        en = item.get("en") or ""
+        qty = item.get("quantity") or ""
+        unit = item.get("unit") or ""
+        label = en or vn
+        ing_summary.append(f"- {label} ({vn}) ~ {qty} {unit}".strip())
+
+    try:
+        class MacroEstimateSignature(dspy.Signature):
+            """
+            Given a Vietnamese dish and its ingredients, estimate realistic nutrition per serving.
+
+            Return a JSON-like object with numeric fields:
+              - kcal: total kilocalories per serving
+              - protein_g: grams of protein per serving
+              - fat_g: grams of fat per serving
+              - carb_g: grams of carbohydrates per serving
+
+            Be conservative and avoid extreme values; use typical Vietnamese home-cooking portions.
+            """
+
+            dish_name = dspy.InputField(description="Name of the dish (Vietnamese).")
+            servings = dspy.InputField(description="Number of servings for the recipe.")
+            ingredients = dspy.InputField(description="List of ingredients with rough quantity and unit.")
+            reasoning = dspy.OutputField(description="Short explanation of how the macros were estimated.")
+            macros = dspy.OutputField(
+                description=(
+                    "Estimated macros per serving as an object: "
+                    '{"kcal": float, "protein_g": float, "fat_g": float, "carb_g": float}'
+                )
+            )
+
+        cot = ElysiaChainOfThought(
+            MacroEstimateSignature,
+            tree_data=tree_data,
+            reasoning=True,
+            impossible=False,
+            message_update=False,
+        )
+
+        pred = await cot.aforward(
+            lm=base_lm,
+            dish_name=dish_name,
+            servings=serving_size,
+            ingredients="\n".join(ing_summary),
+        )
+
+        macros = getattr(pred, "macros", None)
+        if isinstance(macros, str):
+            try:
+                macros = json.loads(macros)
+            except json.JSONDecodeError as exc:
+                logger.warning("LM macro estimate returned invalid JSON: %s", exc)
+                macros = None
+
+        if not isinstance(macros, dict):
+            return None
+
+        est = {
+            "kcal": _safe_float(macros.get("kcal"), 0.0),
+            "protein_g": _safe_float(macros.get("protein_g"), 0.0),
+            "fat_g": _safe_float(macros.get("fat_g"), 0.0),
+            "carb_g": _safe_float(macros.get("carb_g"), 0.0),
+        }
+
+        # Basic sanity check: require strictly positive kcal
+        if est["kcal"] <= 0:
+            return None
+
+        logger.info(
+            "LM macro fallback used for recipe %s: %.0f kcal, %.1fg protein",
+            recipe_obj.get("food_id"),
+            est["kcal"],
+            est["protein_g"],
+        )
+        return est
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("LM macro fallback failed: %s", exc)
+        return None
+
+
 @tool
 async def calculate_recipe_macros_tool(
     tree_data: TreeData,
@@ -336,6 +659,7 @@ async def calculate_recipe_macros_tool(
     base_lm,  # LLM for VN→EN translation
     recipe_id: Optional[str] = None,
     recipe: Optional[Dict[str, Any]] = None,
+    force_recalculate: bool = False,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -363,7 +687,11 @@ async def calculate_recipe_macros_tool(
 
     try:
         client = client_manager.get_client()
-        collection = client.collections.get("Recipe")
+        try:
+            collection = client.collections.get("Recipe")
+        except Exception as e:
+            yield Error(f"Recipe collection not found: {str(e)}. Please ensure collections are created.")
+            return
 
         # Get recipe
         recipe_obj = recipe
@@ -373,7 +701,10 @@ async def calculate_recipe_macros_tool(
             )
             results = collection.query.fetch_objects(filters=recipe_filter, limit=1)
             if not results.objects:
-                yield Error(f"Recipe not found: {recipe_id}")
+                yield Error(
+                    f"Recipe not found: {recipe_id}. "
+                    "Please check that the recipe exists in the Recipe collection."
+                )
                 return
             recipe_obj = results.objects[0].properties
             recipe_uuid = results.objects[0].uuid
@@ -388,9 +719,14 @@ async def calculate_recipe_macros_tool(
             yield Error("Either recipe_id or recipe must be provided")
             return
 
-        # Check if macros already cached
+        # Check if macros already cached (unless caller explicitly forces recalculation)
         macros = recipe_obj.get("macros_per_serving")
-        if macros and isinstance(macros, dict) and macros.get("kcal"):
+        if (
+            not force_recalculate
+            and macros
+            and isinstance(macros, dict)
+            and macros.get("kcal")
+        ):
             yield Result(
                 name="macros",
                 objects=[macros],
@@ -404,12 +740,17 @@ async def calculate_recipe_macros_tool(
         # Need to calculate: translate ingredients
         ingredients_vn = recipe_obj.get("ingredients_with_qty", []) or recipe_obj.get("ingredients", [])
         if not ingredients_vn:
-            yield Error("Recipe has no ingredients to calculate macros from")
+            yield Error(
+                "Cannot calculate nutrition: Recipe has no ingredients. "
+                "Please ensure the recipe has ingredients_with_qty or ingredients fields populated."
+            )
             return
 
         translated = await _translate_ingredients_vn_to_en(ingredients_vn, base_lm, tree_data)
 
         # Find FDC foods and calculate macros
+        # OPTIMIZATION: Cache lookups to avoid duplicate searches
+        fdc_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
         ingredient_map = []
         found_count = 0
@@ -418,9 +759,26 @@ async def calculate_recipe_macros_tool(
         for item in translated:
             ingredient_en = item.get("en", "")
             ingredient_vn = item.get("vn", "")
-            quantity_g = float(item.get("quantity", 100.0))
+            quantity_raw = item.get("quantity")
+            # Handle None explicitly - default to 100g if quantity is None or invalid
+            try:
+                quantity_g = float(quantity_raw) if quantity_raw is not None else 100.0
+            except (TypeError, ValueError) as e:
+                logger.warning(
+                    f"Invalid quantity '{quantity_raw}' for ingredient '{ingredient_vn or ingredient_en}'. "
+                    f"Using default 100g. Error: {str(e)}"
+                )
+                quantity_g = 100.0
 
-            fdc_food = await _find_fdc_food(ingredient_en, client)
+            # Check cache first
+            cache_key = ingredient_en.lower().strip()
+            if cache_key in fdc_cache:
+                fdc_food = fdc_cache[cache_key]
+            else:
+                fdc_food = await _find_fdc_food(ingredient_en, client)
+                if fdc_food:
+                    fdc_cache[cache_key] = fdc_food
+            
             if fdc_food:
                 ingredient_macros = _calculate_macros_from_fdc(fdc_food, quantity_g)
                 for key in total_macros:
@@ -437,24 +795,38 @@ async def calculate_recipe_macros_tool(
             else:
                 not_found_ingredients.append(ingredient_vn or ingredient_en)
 
+        serving_size = float(recipe_obj.get("serving_size", 1.0) or 1.0)
+        if serving_size <= 0:
+            serving_size = 1.0
+
         # Check if we found any FDC foods - if not, don't update with zeros
         if found_count == 0:
-            message = (
-                "Could not find nutrition data for any ingredients. "
-                "Please ensure ingredients are in English or check FDC database. "
-                f"Ingredients tried: {', '.join(not_found_ingredients[:5])}"
+            # Try LM-based fallback before giving up
+            lm_macros = await _estimate_recipe_macros_with_lm(
+                recipe_obj, translated, base_lm, tree_data
             )
-            _record_status(
-                tree_data,
-                "error",
-                {
-                    "recipe_id": recipe_obj.get("food_id"),
-                    "reason": "no_fdc_match",
-                    "ingredients": not_found_ingredients[:10],
-                },
-            )
-            yield Error(message)
-            return
+            if not lm_macros:
+                message = (
+                    "Could not find nutrition data for any ingredients and LM fallback failed. "
+                    "Please ensure ingredients are in English or check FDC database. "
+                    f"Ingredients tried: {', '.join(not_found_ingredients[:5])}"
+                )
+                _record_status(
+                    tree_data,
+                    "error",
+                    {
+                        "recipe_id": recipe_obj.get("food_id"),
+                        "reason": "no_fdc_match",
+                        "ingredients": not_found_ingredients[:10],
+                    },
+                )
+                yield Error(message)
+                return
+
+            # Use LM-estimated macros directly per serving
+            macros_per_serving = lm_macros
+            ingredient_map = []  # no FDC mapping in this path
+            not_found_ingredients = translated  # all ingredients effectively unmatched
 
         # Warn if some ingredients were not found
         if not_found_ingredients:
@@ -464,32 +836,71 @@ async def calculate_recipe_macros_tool(
                 f"Calculated macros may be incomplete."
             )
 
-        # Divide by serving_size to get per-serving macros
-        serving_size = float(recipe_obj.get("serving_size", 1.0))
-        if serving_size > 0:
-            macros_per_serving = {k: v / serving_size for k, v in total_macros.items()}
-        else:
-            macros_per_serving = total_macros
+        if "macros_per_serving" not in locals():
+            # Heuristic 1: cooking oil for fried / stir-fried dishes
+            method_heuristic = _detect_cooking_method(recipe_obj, translated)
+            if method_heuristic:
+                oil_total_g = method_heuristic["oil_per_serving_g"] * serving_size
+                if oil_total_g > 0:
+                    total_macros["fat_g"] += oil_total_g
+                    total_macros["kcal"] += oil_total_g * 9.0
+                    yield Response(
+                        f"ℹ️ Detected {method_heuristic['label']} preparation — "
+                        f"adding ~{method_heuristic['oil_per_serving_g']:.0f}g cooking oil per serving "
+                        "to better reflect calories/fats."
+                    )
 
-        # Only update if macros are non-zero (at least kcal > 0)
-        if macros_per_serving.get("kcal", 0) <= 0:
-            message = (
-                "Calculated macros are zero or invalid. "
-                f"Found FDC data for {found_count}/{len(translated)} ingredients. "
-                "Please check ingredient names and FDC database."
-            )
-            _record_status(
-                tree_data,
-                "error",
-                {
-                    "recipe_id": recipe_obj.get("food_id"),
-                    "reason": "zero_macros",
-                    "found_count": found_count,
-                    "ingredient_count": len(translated),
-                },
-            )
-            yield Error(message)
-            return
+            # Heuristic 2: rich/creamy sauces (extra fat)
+            sauce_heuristic = _detect_rich_sauce(recipe_obj, translated)
+            if sauce_heuristic:
+                extra_fat_total_g = sauce_heuristic["extra_fat_per_serving_g"] * serving_size
+                if extra_fat_total_g > 0:
+                    total_macros["fat_g"] += extra_fat_total_g
+                    total_macros["kcal"] += extra_fat_total_g * 9.0
+                    yield Response(
+                        f"ℹ️ Detected {sauce_heuristic['label']} — "
+                        f"adding ~{sauce_heuristic['extra_fat_per_serving_g']:.0f}g sauce fat per serving."
+                    )
+
+            # Heuristic 3: very sweet desserts / drinks (extra carbs)
+            sweet_heuristic = _detect_sugary_dessert(recipe_obj, translated)
+            if sweet_heuristic:
+                extra_carb_total_g = sweet_heuristic["extra_carb_per_serving_g"] * serving_size
+                if extra_carb_total_g > 0:
+                    total_macros["carb_g"] += extra_carb_total_g
+                    total_macros["kcal"] += extra_carb_total_g * 4.0
+                    yield Response(
+                        f"ℹ️ Detected {sweet_heuristic['label']} — "
+                        f"adding ~{sweet_heuristic['extra_carb_per_serving_g']:.0f}g sugars per serving."
+                    )
+
+            macros_per_serving = {k: v / serving_size for k, v in total_macros.items()}
+
+            # Only update if macros are non-zero (at least kcal > 0); otherwise fallback to LM
+            if macros_per_serving.get("kcal", 0) <= 0:
+                lm_macros = await _estimate_recipe_macros_with_lm(
+                    recipe_obj, translated, base_lm, tree_data
+                )
+                if not lm_macros:
+                    message = (
+                        "Calculated macros are zero or invalid and LM fallback failed. "
+                        f"Found FDC data for {found_count}/{len(translated)} ingredients. "
+                        "Please check ingredient names and FDC database."
+                    )
+                    _record_status(
+                        tree_data,
+                        "error",
+                        {
+                            "recipe_id": recipe_obj.get("food_id"),
+                            "reason": "zero_macros",
+                            "found_count": found_count,
+                            "ingredient_count": len(translated),
+                        },
+                    )
+                    yield Error(message)
+                    return
+
+                macros_per_serving = lm_macros
 
         # Update Recipe in Weaviate with deduplicated ingredient_fdc_map
         if recipe_uuid:
