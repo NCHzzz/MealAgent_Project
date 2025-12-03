@@ -52,7 +52,13 @@ const config: Config = {
         alt_color_a: "hsl(var(--alt_color_a))",
         alt_color_b: "hsl(var(--alt_color_b))",
 
-        // Currently unused
+        // MealAgent specific colors
+        meal: {
+          orange: "hsl(28 85% 55%)",
+          amber: "hsl(45 90% 55%)",
+          coral: "hsl(16 75% 55%)",
+          gold: "hsl(40 90% 50%)",
+        },
 
         card: {
           DEFAULT: "hsl(var(--card))",
@@ -95,6 +101,10 @@ const config: Config = {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+      },
+      boxShadow: {
+        'meal': '0 4px 20px -2px hsl(28 85% 55% / 0.15)',
+        'meal-lg': '0 10px 40px -3px hsl(28 85% 55% / 0.2)',
       },
     },
   },

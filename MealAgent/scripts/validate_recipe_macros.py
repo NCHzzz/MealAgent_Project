@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-Script to audit existing recipe macros using Gemini (or whichever base model
-Elysia is configured with) and optionally rewrite macros_per_serving when the
-LLM flags them as unrealistic.
+Script to audit and correct recipe macros using the configured LLM.
+
+This script:
+  1. Fetches recipes from Weaviate (including ones missing or with invalid macros)
+  2. Groups them into batches (default 100 recipes per batch)
+  3. Calls the LLM once per batch to:
+       - detect macros that look unrealistic, and
+       - fill in missing macros_per_serving when needed
+  4. Optionally writes the LLM‑adjusted macros back to Weaviate
 
 Usage:
-    python -m MealAgent.scripts.validate_recipe_macros --limit 50 --batch-size 10
+    python -m MealAgent.scripts.validate_recipe_macros --limit 200 --batch-size 100 --dry-run
 
 Options:
     --limit N       : Maximum number of recipes to inspect (default: all)
-    --batch-size N  : Recipes per batch (default: 10)
+    --batch-size N  : Recipes per LLM batch (default: 100)
     --dry-run       : Only report what would change, do not update Weaviate
 """
 
@@ -171,7 +177,15 @@ async def fetch_recipes(
     client_manager: ClientManager,
     limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    logger.info("Fetching recipes with existing macros from Weaviate...")
+    """
+    Fetch recipes from Weaviate.
+
+    NOTE:
+    - Unlike the original version, this now returns *all* recipes, including those
+      with missing or zero/invalid macros so that the LLM can both validate and
+      *fill in* nutrition when absent.
+    """
+    logger.info("Fetching recipes from Weaviate (including those missing macros)...")
     all_recipes: List[Dict[str, Any]] = []
     offset = 0
     batch_size = 100
@@ -187,15 +201,10 @@ async def fetch_recipes(
             for obj in results.objects:
                 recipe = obj.properties
                 recipe["_uuid"] = obj.uuid
-                macros = recipe.get("macros_per_serving")
-                if (
-                    not macros
-                    or not isinstance(macros, dict)
-                    or not macros.get("kcal")
-                    or macros.get("kcal") <= 0
-                ):
-                    continue
 
+                # Do NOT filter here. We want:
+                #   - recipes with existing macros (for validation)
+                #   - recipes missing or with invalid macros (for LLM to fill in)
                 all_recipes.append(recipe)
                 if limit and len(all_recipes) >= limit:
                     break
@@ -215,6 +224,10 @@ async def _validate_macros_with_lm(
     base_lm: Optional[LM],
     tree_data: TreeData,
 ) -> Optional[Dict[str, Any]]:
+    """
+    Legacy per‑recipe validator (kept for reference / potential reuse).
+    Current implementation uses the new batch validator below.
+    """
     if base_lm is None:
         return None
 
@@ -292,6 +305,167 @@ async def _validate_macros_with_lm(
     }
 
 
+async def _batch_validate_macros_with_lm(
+    recipes: List[Dict[str, Any]],
+    base_lm: Optional[LM],
+    tree_data: TreeData,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Validate a batch of recipes with a *single* LLM call.
+
+    The LLM is instructed to return a strict JSON array so that we can
+    reliably parse and apply the suggested macros.
+    """
+    if base_lm is None or not recipes:
+        return {}
+
+    import json
+
+    # Build a compact, LLM‑friendly summary for each recipe.
+    recipe_summaries: List[Dict[str, Any]] = []
+    for r in recipes:
+        macros = r.get("macros_per_serving") or {}
+        servings = float(r.get("serving_size", 1.0) or 1.0)
+        if servings <= 0:
+            servings = 1.0
+
+        ingredients = r.get("ingredients_with_qty") or r.get("ingredients", [])
+        cooking_notes = r.get("cooking_method") or r.get("instructions", "")
+
+        summary = {
+            "id": r.get("_uuid") or r.get("food_id") or "",
+            "food_id": r.get("food_id") or "",
+            "dish_name": r.get("dish_name") or "",
+            "servings": servings,
+            "ingredients": [str(item) for item in ingredients],
+            "cooking_notes": str(cooking_notes),
+            # Macros can be missing or invalid; LLM should propose values when needed.
+            "macros_per_serving": {
+                "kcal": macros.get("kcal"),
+                "protein_g": macros.get("protein_g"),
+                "fat_g": macros.get("fat_g"),
+                "carb_g": macros.get("carb_g"),
+            }
+            if isinstance(macros, dict)
+            else None,
+        }
+        recipe_summaries.append(summary)
+
+    class MacroAuditBatchSignature(dspy.Signature):
+        """
+        Review whether the provided macros per serving are realistic for each recipe.
+
+        You are given a list of recipes. For *each* recipe:
+          - If macros look reasonable and are present, mark verdict "ok".
+          - If macros look wrong OR are missing/invalid, mark verdict "adjust" and
+            provide corrected macros_per_serving PER SERVING.
+
+        STRICT RESPONSE FORMAT (VERY IMPORTANT):
+          - Respond with a single JSON array (no surrounding text, no comments).
+          - Each element MUST be an object:
+              {
+                "id": "<the id from input>",          // REQUIRED
+                "verdict": "ok" | "adjust",           // REQUIRED
+                "reason": "<short explanation>",      // REQUIRED
+                "macros_adjusted": {                  // REQUIRED when verdict=="adjust"
+                  "kcal": <number>,
+                  "protein_g": <number>,
+                  "fat_g": <number>,
+                  "carb_g": <number>
+                }
+              }
+        """
+
+        recipes = dspy.InputField(
+            description=(
+                "JSON array of recipes, each with fields: id, food_id, dish_name, "
+                "servings, ingredients, cooking_notes, macros_per_serving."
+            )
+        )
+        batch_result_json = dspy.OutputField(
+            description=(
+                "STRICT JSON array as described above, with NO extra keys or text."
+            )
+        )
+
+    cot = ElysiaChainOfThought(
+        MacroAuditBatchSignature,
+        tree_data=tree_data,
+        reasoning=False,
+        impossible=False,
+        message_update=False,
+    )
+
+    raw_recipes_json = json.dumps(recipe_summaries, ensure_ascii=False)
+
+    pred = await cot.aforward(
+        lm=base_lm,
+        recipes=raw_recipes_json,
+    )
+
+    raw_output = (pred.batch_result_json or "").strip()
+    if not raw_output:
+        logger.warning("Batch LLM validation returned empty output.")
+        return {}
+
+    # Try to robustly extract the JSON array even if the model adds stray text.
+    try:
+        # If the model followed instructions, this should succeed directly.
+        parsed = json.loads(raw_output)
+    except Exception:
+        try:
+            start = raw_output.find("[")
+            end = raw_output.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                parsed = json.loads(raw_output[start : end + 1])
+            else:
+                raise ValueError("No JSON array brackets found in LLM output.")
+        except Exception as exc:
+            logger.error("Failed to parse batch LLM JSON output: %s", exc)
+            logger.debug("Raw LLM output: %s", _sanitize_text(raw_output))
+            return {}
+
+    if not isinstance(parsed, list):
+        logger.error("Batch LLM JSON output is not a list. Got type: %s", type(parsed))
+        return {}
+
+    results_by_id: Dict[str, Dict[str, Any]] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+
+        rid = str(item.get("id") or "").strip()
+        verdict = (str(item.get("verdict") or "")).strip().lower() or "unknown"
+        reason = str(item.get("reason") or "").strip()
+        macros_adjusted_raw = item.get("macros_adjusted")
+
+        macros_adjusted: Optional[Dict[str, float]] = None
+        if isinstance(macros_adjusted_raw, dict) and verdict == "adjust":
+            try:
+                macros_adjusted = {
+                    "kcal": float(macros_adjusted_raw.get("kcal", 0.0)),
+                    "protein_g": float(macros_adjusted_raw.get("protein_g", 0.0)),
+                    "fat_g": float(macros_adjusted_raw.get("fat_g", 0.0)),
+                    "carb_g": float(macros_adjusted_raw.get("carb_g", 0.0)),
+                }
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid macros_adjusted values for id %s in batch response.", rid
+                )
+                macros_adjusted = None
+
+        if not rid:
+            continue
+
+        results_by_id[rid] = {
+            "verdict": verdict,
+            "reason": reason,
+            "macros_adjusted": macros_adjusted,
+        }
+
+    return results_by_id
+
+
 async def _update_recipe_macros(
     recipe: Dict[str, Any],
     macros: Dict[str, float],
@@ -330,7 +504,7 @@ async def process_recipes(
     recipes: List[Dict[str, Any]],
     client_manager: ClientManager,
     base_lm: Optional[LM],
-    batch_size: int = 10,
+    batch_size: int = 100,
     dry_run: bool = False,
 ) -> Dict[str, int]:
     stats = {
@@ -351,7 +525,11 @@ async def process_recipes(
         environment=environment,
     )
 
-    logger.info("Validating %d recipes in batches of %d...", len(recipes), batch_size)
+    logger.info(
+        "Validating %d recipes in batches of %d (one LLM call per batch)...",
+        len(recipes),
+        batch_size,
+    )
 
     for batch_idx in range(0, len(recipes), batch_size):
         batch = recipes[batch_idx : batch_idx + batch_size]
@@ -361,6 +539,13 @@ async def process_recipes(
         logger.info("\n%s", "=" * 60)
         logger.info("Batch %d/%d (%d recipes)", batch_num, total_batches, len(batch))
         logger.info("%s", "=" * 60)
+
+        # Single LLM call for the entire batch.
+        batch_results = await _batch_validate_macros_with_lm(
+            batch,
+            base_lm,
+            tree_data,
+        )
 
         for recipe in batch:
             stats["processed"] += 1
@@ -374,15 +559,13 @@ async def process_recipes(
                 food_id,
             )
 
-            macros = recipe.get("macros_per_serving")
-            if not macros:
-                logger.warning("  Skipping: no macros stored.")
-                stats["skipped"] += 1
-                continue
+            rid = recipe.get("_uuid") or recipe.get("food_id") or ""
+            result = batch_results.get(str(rid))
 
-            result = await _validate_macros_with_lm(recipe, base_lm, tree_data)
             if not result:
-                logger.info("  No LM verdict available, treated as OK.")
+                logger.info(
+                    "  No LLM verdict available for this recipe, treated as OK/unchanged."
+                )
                 stats["ok"] += 1
                 continue
 
@@ -390,8 +573,13 @@ async def process_recipes(
             reason = result["reason"]
             macros_adjusted = result["macros_adjusted"]
 
+            # If macros are considered OK (including cases where they were originally
+            # missing but LLM still decided they are fine), we only log.
             if verdict != "adjust" or not macros_adjusted:
-                logger.info("  ✅ LLM verdict: OK (%s)", reason or "no issues found")
+                logger.info(
+                    "  ✅ LLM verdict: OK / no change (%s)",
+                    reason or "no issues found",
+                )
                 stats["ok"] += 1
                 continue
 
@@ -430,8 +618,8 @@ async def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=10,
-        help="Recipes per batch (default: 10).",
+        default=100,
+        help="Recipes per LLM batch (default: 100 recipes per single LLM call).",
     )
     parser.add_argument(
         "--dry-run",
@@ -468,7 +656,7 @@ async def main():
 
     recipes = await fetch_recipes(client_manager, limit=args.limit)
     if not recipes:
-        logger.info("No recipes with macros available. Exiting.")
+        logger.info("No recipes available for validation. Exiting.")
         await client_manager.close_clients()
         return
 

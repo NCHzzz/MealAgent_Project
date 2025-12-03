@@ -517,11 +517,11 @@ const sidebarMenuButtonVariants = cva(
     variants: {
       variant: {
         default: "text-secondary",
-        active: "bg-foreground text-primary",
+        active: "bg-accent/15 text-accent border-l-2 border-accent",
         coolActive: "bg-backgorund_alt text-primary cool-active",
         warning: "text-warning",
         outline:
-          "bg-background shadow-[0_0_0_1px_hsl(var(--secondary))] hover:bg-foreground_alt hover:text-primary",
+          "bg-background shadow-[0_0_0_1px_hsl(var(--accent)/0.3)] hover:bg-accent/10 hover:text-accent",
       },
       size: {
         default: "h-10 text-sm",

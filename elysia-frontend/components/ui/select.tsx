@@ -19,7 +19,7 @@ const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-foreground_alt bg-background text-primary px-3 py-2 text-sm shadow-sm ring-offset-background data-[placeholder]:text-secondary focus:outline-none focus:ring-1 focus:ring-ring focus:border-primary disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 hover:bg-foreground_alt hover:border-primary transition-colors",
+      "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-lg border border-foreground_alt bg-background text-primary px-3 py-2 text-sm shadow-sm ring-offset-background data-[placeholder]:text-secondary focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 hover:bg-foreground_alt hover:border-accent/30 transition-colors",
       className
     )}
     {...props}
@@ -118,14 +118,14 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-primary outline-none hover:bg-foreground_alt focus:bg-foreground data-[state=checked]:bg-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 transition-colors",
+      "relative flex w-full cursor-default select-none items-center rounded-md py-1.5 pl-2 pr-8 text-sm text-primary outline-none hover:bg-accent/10 hover:text-accent focus:bg-accent/10 focus:text-accent data-[state=checked]:bg-accent/15 data-[state=checked]:text-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50 transition-colors",
       className
     )}
     {...props}
   >
     <span className="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
       <SelectPrimitive.ItemIndicator>
-        <Check className="h-4 w-4" />
+        <Check className="h-4 w-4 text-accent" />
       </SelectPrimitive.ItemIndicator>
     </span>
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>

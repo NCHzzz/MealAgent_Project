@@ -34,8 +34,8 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Elysia",
-  description: "Your AI Platform",
+  title: "MealAgent",
+  description: "Your Smart Nutrition & Meal Planning Assistant",
 };
 
 export default function RootLayout({

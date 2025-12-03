@@ -192,7 +192,7 @@ export default function ChatPage() {
             />
           </div>
         </div>
-        <p className="text-primary text-xl shine">Loading Elysia...</p>
+        <p className="text-primary text-xl shine">Loading MealAgent...</p>
       </div>
     );
   }
@@ -327,7 +327,7 @@ export default function ChatPage() {
             <div className="absolute flex flex-col justify-center items-center w-full h-full gap-3 fade-in">
               <div className="flex items-center gap-4">
                 <p className="text-primary text-3xl font-semibold">
-                  Ask Elysia
+                  Ask MealAgent
                 </p>
                 <Button
                   variant="default"

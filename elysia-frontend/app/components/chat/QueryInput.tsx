@@ -84,12 +84,16 @@ const QueryInput: React.FC<QueryInputProps> = ({
             <button
               className="btn-round text-secondary rounded-full"
               onClick={() => setRoute("")}
+              title="Clear route"
+              aria-label="Clear route"
             >
               <FaTrash size={12} />
             </button>
             <button
               className="btn-round text-secondary rounded-full"
               onClick={() => setShowRoute(false)}
+              title="Close route panel"
+              aria-label="Close route panel"
             >
               <IoClose size={12} />
             </button>
@@ -100,7 +104,7 @@ const QueryInput: React.FC<QueryInputProps> = ({
         className={`w-full flex gap-2 rounded-xl text-primary placeholder:text-secondary`}
       >
         <div
-          className={`flex w-full bg-background_alt border border-foreground_alt p-2 rounded-xl items-center flex-col`}
+          className={`flex w-full bg-background_alt border border-accent/20 p-2 rounded-xl items-center flex-col shadow-meal`}
         >
           <textarea
             placeholder={
@@ -108,8 +112,7 @@ const QueryInput: React.FC<QueryInputProps> = ({
                 ? "Ask a follow up question..."
                 : "What will you ask today?"
             }
-            className={`w-full p-2 bg-transparent placeholder:text-secondary outline-none text-sm leading-tight min-h-[5vh] max-h-[10vh] rounded-xl flex items-center justify-center"
-            }`}
+            className={`w-full p-2 bg-transparent placeholder:text-secondary outline-none text-sm leading-tight min-h-[5vh] max-h-[10vh] rounded-xl flex items-center justify-center resize-none ${query_length === 0 ? 'pt-2' : 'pt-1.5'}`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -117,12 +120,6 @@ const QueryInput: React.FC<QueryInputProps> = ({
                 e.preventDefault();
                 triggerQuery(query);
               }
-            }}
-            style={{
-              paddingTop: query_length === 0 ? "8px" : "6px",
-              display: "flex",
-              alignItems: "center",
-              resize: "none",
             }}
           />
           <div className="flex justify-end gap-1 w-full">
@@ -153,9 +150,10 @@ const QueryInput: React.FC<QueryInputProps> = ({
             )}
             <CollectionSelection />
             <Button
-              variant="ghost"
+              variant="accept"
               size={"icon"}
               onClick={() => triggerQuery(query)}
+              className="hover:bg-accent hover:text-background"
             >
               <IoArrowUpCircleSharp size={16} />
             </Button>

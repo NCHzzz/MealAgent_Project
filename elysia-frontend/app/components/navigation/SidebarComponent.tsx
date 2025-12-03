@@ -22,6 +22,7 @@ import { IoNewspaperOutline } from "react-icons/io5";
 import { FaGithub } from "react-icons/fa";
 import { FaLinkedin } from "react-icons/fa";
 import { FaYoutube } from "react-icons/fa";
+import { GiMeal } from "react-icons/gi";
 
 import { RiRobot2Line, RiCalendarTodoLine } from "react-icons/ri";
 import { FiUser } from "react-icons/fi";
@@ -133,12 +134,8 @@ const SidebarComponent: React.FC = () => {
       <SidebarHeader>
         <div className={`flex items-center gap-2 w-full justify-between p-2`}>
           <div className="flex items-center gap-2">
-            <img
-              src={`${public_path}logo.svg`}
-              alt="Elysia"
-              className="w-5 h-5 stext-primary"
-            />
-            <p className="text-sm font-bold text-primary">Elysia</p>
+            <GiMeal className="w-6 h-6 text-accent" />
+            <p className="text-sm font-bold text-primary">MealAgent</p>
           </div>
           <div className="flex items-center justify-center gap-1">
             {socketOnline ? (
@@ -208,7 +205,7 @@ const SidebarComponent: React.FC = () => {
         <SidebarMenu>
           {authUser && (
             <SidebarMenuItem>
-              <div className="w-full border border-secondary/10 rounded-lg p-3 bg-background_alt">
+              <div className="w-full border border-accent/20 rounded-lg p-3 bg-background_alt">
                 <p className="text-xs text-secondary uppercase">Signed in as</p>
                 <p className="text-sm font-semibold truncate">
                   {authUser.display_name || authUser.email}
@@ -216,7 +213,7 @@ const SidebarComponent: React.FC = () => {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="mt-2 w-full"
+                  className="mt-2 w-full hover:bg-accent hover:text-background"
                   onClick={logout}
                 >
                   Logout
@@ -243,75 +240,10 @@ const SidebarComponent: React.FC = () => {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton>
-                  <img
-                    src={`${public_path}weaviate-logo.svg`}
-                    alt="Weaviate"
-                    className="w-4 h-4"
-                  />
-                  <p>Powered by Weaviate</p>
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                side="top"
-                className="w-[--radix-popper-anchor-width]"
-              >
-                <DropdownMenuItem
-                  onClick={() => openNewTab("https://weaviate.io/")}
-                >
-                  <CgWebsite />
-                  <span>Website</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() =>
-                    openNewTab("https://weaviate.io/product/query-agent")
-                  }
-                >
-                  <RiRobot2Line />
-                  <span>Weaviate Query Agent</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => openNewTab("https://newsletter.weaviate.io/")}
-                >
-                  <IoNewspaperOutline />
-                  <span>Newsletter</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() =>
-                    openNewTab("https://github.com/weaviate/weaviate")
-                  }
-                >
-                  <FaGithub />
-                  <span>GitHub</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() =>
-                    openNewTab(
-                      "https://www.linkedin.com/company/weaviate-io/posts/?feedView=all"
-                    )
-                  }
-                >
-                  <FaLinkedin />
-                  <span>LinkedIn</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => openNewTab("https://x.com/weaviate_io")}
-                >
-                  <FaSquareXTwitter />
-                  <span>X</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() =>
-                    openNewTab("https://www.youtube.com/@Weaviate")
-                  }
-                >
-                  <FaYoutube />
-                  <span>YouTube</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex items-center gap-2 px-2 py-2 text-xs text-secondary">
+              <GiMeal className="w-4 h-4 text-accent" />
+              <p>MealAgent - Smart Nutrition</p>
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

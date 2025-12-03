@@ -1,116 +1,58 @@
 # MealAgent Scripts
 
-Scripts for maintaining and processing MealAgent data.
-
 ## precompute_recipe_macros.py
 
-Precomputes nutrition macros for all recipes in Weaviate to improve system performance.
+Calculates macros for recipes stored in Weaviate, optionally enriches metadata, and can run a light LLM validation pass in the same run.
 
-### Usage
+### Quick start
 
 ```bash
-# Process all recipes missing macros
-python -m MealAgent.scripts.precompute_recipe_macros
-
-# Process only first 50 recipes
-python -m MealAgent.scripts.precompute_recipe_macros --limit 50
-
-# Process in smaller batches (default: 10)
-python -m MealAgent.scripts.precompute_recipe_macros --batch-size 5
-
-# Skip recipes that already have macros (recommended)
+# Recompute macros for everything missing data (safe defaults)
 python -m MealAgent.scripts.precompute_recipe_macros --resume
 
-# Dry run to see what would be done
-python -m MealAgent.scripts.precompute_recipe_macros --dry-run
+# Test on a small slice
+python -m MealAgent.scripts.precompute_recipe_macros --limit 50 --resume
 
-# Specify LM model + API key (overrides env/settings)
-python -m MealAgent.scripts.precompute_recipe_macros --resume --lm-model gpt-4o-mini --lm-api-key <YOUR_KEY>
+# Skip metadata calls
+python -m MealAgent.scripts.precompute_recipe_macros --resume --no-enrich-metadata
 
-# Combine options
-python -m MealAgent.scripts.precompute_recipe_macros --limit 100 --batch-size 5 --resume --lm-model gpt-4o-mini
+# Validate macros every 50 recipes during the same run
+python -m MealAgent.scripts.precompute_recipe_macros --resume --validate-every 50
 ```
 
 ### Options
 
-- `--limit N`: Maximum number of recipes to process (default: all)
-- `--batch-size N`: Number of recipes to process in each batch (default: 10)
-- `--resume`: Skip recipes that already have `macros_per_serving` (recommended)
-- `--dry-run`: Show what would be done without actually updating Weaviate
-- `--lm-model`: Override the LM model used for ingredient translation
-- `--lm-api-key`: Provide the API key for the LM (if not already set via environment)
+- `--limit N`: cap how many recipes to fetch
+- `--batch-size N`: recipes per batch (default 10)
+- `--resume`: skip recipes that already have macros
+- `--dry-run`: log actions without writing to Weaviate
+- `--no-enrich-metadata`: avoid Gemini/OpenRouter calls for diet/allergen/device tags
+- `--metadata-every N`: only enrich metadata every N recipes (default 50 to keep costs down)
+- `--validate-every N`: automatically run the LLM macro audit after every N processed recipes (default: disabled)
+- `--validate`: after calculation is done, run a separate LLM validation pass over cached macros
 
-### Requirements
+Everything else (parallelism, rate limiting, error handling) is fixed inside the script so you don’t have to tune dozens of flags.
 
-- Weaviate must be running and accessible
-- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` environment variable set (for ingredient translation)
-- Recipes must have `ingredients_with_qty` or `ingredients` fields populated
+### Rate-limit friendly workflow
 
-### Output
+1. Keep `--metadata-every 50` (or larger) so only every 50th recipe calls the LLM.
+2. Use `--validate-every 50` (or 100) if you want inline validation without hammering the API.
+3. Use `--no-enrich-metadata` when you only care about macros.
+4. Let the script's built-in token report (every 100 recipes) tell you how expensive the run is.
+5. Run with `--limit 50` first to confirm credentials and output.
+6. Use `--resume` to continue later without reprocessing old recipes.
 
-- Progress logs to console
-- Detailed log file: `precompute_macros_YYYYMMDD_HHMMSS.log`
-- Summary statistics at the end
+### Validation-only helper
 
-### Example Output
+`python -m MealAgent.scripts.validate_recipe_macros` is a standalone helper if you want to use the LLM to **audit and correct macros** without recalculating them via tools.
 
-```text
-2025-12-02 12:00:00 - INFO - Recipe Macros Precomputation Script
-2025-12-02 12:00:01 - INFO - Fetched 150 recipes to process
-2025-12-02 12:00:02 - INFO - Processing batch 1/15 (10 recipes)
-2025-12-02 12:00:05 - INFO - [1/150] Processing: Phở Bò (ID: 3257)
-2025-12-02 12:00:08 - INFO -   ✅ Success! Macros: 450 kcal, 25.5g protein
-...
-2025-12-02 12:15:00 - INFO - FINAL SUMMARY
-2025-12-02 12:15:00 - INFO - Total recipes: 150
-2025-12-02 12:15:00 - INFO - Successfully processed: 142
-2025-12-02 12:15:00 - INFO - Failed: 5
-2025-12-02 12:15:00 - INFO - Skipped: 3
-2025-12-02 12:15:00 - INFO - Time taken: 900.0 seconds (15.0 minutes)
-```
+It:
+- fetches recipes from Weaviate (kể cả các recipe đang thiếu hoặc macros_per_serving không hợp lý),
+- gom mỗi batch (mặc định 100 recipe) và gọi LLM **một lần cho cả batch**,
+- yêu cầu LLM trả về JSON chuẩn cho từng recipe (verdict, reason, macros_adjusted),
+- và có thể cập nhật lại `macros_per_serving` theo đề xuất của LLM.
 
-### Notes
-
-- The script processes recipes sequentially to avoid overwhelming the API
-- Recipes without ingredients are automatically skipped
-- Failed calculations are logged but don't stop the process
-- Use `--resume` to safely re-run the script and only process new recipes
-
-## validate_recipe_macros.py
-
-Audits existing `macros_per_serving` entries with Gemini (or whichever base model Elysia is using). When the LLM flags a recipe as unrealistic, it proposes updated macros and the script writes them back to Weaviate.
-
-### Usage
-
-```bash
-# Review all recipes with cached macros
-python -m MealAgent.scripts.validate_recipe_macros
-
-# Limit to 25 recipes, 5 at a time
-python -m MealAgent.scripts.validate_recipe_macros --limit 25 --batch-size 5
-
-# Dry run (only reports issues, no updates)
-python -m MealAgent.scripts.validate_recipe_macros --dry-run
-
-# Override LM if needed
-python -m MealAgent.scripts.validate_recipe_macros --lm-model gpt-4o-mini --lm-api-key <YOUR_KEY>
-```
-
-### Options
-
-- `--limit N`: Max recipes to inspect (default: all recipes with macros)
-- `--batch-size N`: Recipes per batch (default: 10)
-- `--dry-run`: Only log proposed changes
-- `--lm-model`, `--lm-api-key`: Optional overrides; by default the script reuses the same LM configuration as MealAgent
-
-### What it does
-
-1. Fetches recipes that already have `macros_per_serving`.
-2. Sends dish name, ingredients, macros, and cooking notes to the LLM.
-3. If the verdict is `adjust`, the script writes the LLM-proposed macros back to Weaviate (unless `--dry-run`).
-4. Adds `macro_validation_note` and `macro_validated_at` metadata so you can track why/when an adjustment took place.
-
-### Logs
-
-- Output is streamed to console and stored in `validate_macros_YYYYMMDD_HHMMSS.log`.
-- Final summary includes token usage so you can track how expensive a validation pass was.
+Flags chính:
+- `--limit N`: giới hạn số recipe sẽ audit
+- `--batch-size N`: số recipe cho mỗi lần gọi LLM (mặc định 100)
+- `--dry-run`: chỉ log đề xuất, **không** ghi lại vào Weaviate
