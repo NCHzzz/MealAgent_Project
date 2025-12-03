@@ -249,8 +249,8 @@ async def pantry_diff_tool(
     try:
         client = client_manager.get_client()
         try:
-        shopping_list_collection = client.collections.get("ShoppingList")
-        shopping_item_collection = client.collections.get("ShoppingItem")
+            shopping_list_collection = client.collections.get("ShoppingList")
+            shopping_item_collection = client.collections.get("ShoppingItem")
         except Exception as e:
             yield Error(f"Shopping collections not found: {str(e)}. Please ensure collections are created.")
             return

@@ -206,7 +206,7 @@ async def gap_fill_tool(
         try:
             client = client_manager.get_client()
             try:
-            recipe_collection = client.collections.get("Recipe")
+                recipe_collection = client.collections.get("Recipe")
             except Exception as e:
                 yield Error(f"Recipe collection not found: {str(e)}. Please ensure collections are created.")
                 return

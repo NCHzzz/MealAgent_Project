@@ -277,7 +277,7 @@ async def substitute_tool(
             
             # Apply substitute to recipes in plan
             try:
-            recipe_collection = client.collections.get("Recipe")
+                recipe_collection = client.collections.get("Recipe")
             except Exception as e:
                 yield Error(f"Recipe collection not found: {str(e)}. Please ensure collections are created.")
                 return
