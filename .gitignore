@@ -180,3 +180,5 @@ rundocs.sh
 runpy.sh
 
 
+weaviate_backup.tar
+*.tar
