@@ -332,6 +332,12 @@ def build_meal_agent_tree(
         low_memory=low_memory,
         use_elysia_collections=use_elysia_collections,
     )
+
+    # Persist identifiers for downstream tools (plan_day, logging, etc.)
+    if user_id:
+        tree.tree_data.environment.hidden_environment["user_id"] = user_id
+    if conversation_id:
+        tree.tree_data.environment.hidden_environment["conversation_id"] = conversation_id
     
     # Optimize tool loading based on user intent
     # Note: Tool optimization feature is planned for future enhancement.
@@ -374,7 +380,7 @@ def build_meal_agent_tree(
         },
         "search": {
             "instruction": "Discover candidate recipes using hybrid search and guardrails.",
-            "description": "Provides ranked recipe lists for planning/optimization steps.",
+            "description": "Use when the user wants to browse recipes or get a list of dishes, not a full day/week plan.",
             "status": "Searching recipes...",
         },
         "nutrition": {
@@ -383,8 +389,12 @@ def build_meal_agent_tree(
             "status": "Calculating nutrition...",
         },
         "planning": {
-            "instruction": "Assemble daily/weekly plans using validated recipes and targets.",
-            "description": "Requires profile, search results, and nutrition data.",
+            "instruction": "Assemble daily/weekly meal plans that meet the user's nutritional targets and preferences.",
+            "description": (
+                "Choose this branch when the user asks for meal suggestions or a 'thực đơn' for today/this week. "
+                "Reads profile/targets, constraints, and search results and produces a structured plan "
+                "(`plan_day_e2e_tool.plan` or `plan_week_e2e_tool.plan`)."
+            ),
             "status": "Planning meals...",
         },
         "optimization": {

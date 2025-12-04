@@ -94,13 +94,19 @@ async def macro_calc_tool(
                         activity_level=activity_level,
                     )
 
-                # Get goal from profile
+                # Get goal and timeline from profile
                 goal = profile.get("goal")
                 goal_lower = goal.lower() if isinstance(goal, str) else None
                 weight_val = _safe_float(profile.get("weight_kg"))
                 height_val = _safe_float(profile.get("height_cm"))
                 age_val = _safe_int(profile.get("age"))
                 gender_val = str(profile.get("gender")) if profile.get("gender") else None
+                timeline_months = profile.get("timeline_months")
+                # Default to 3 months if not specified
+                if timeline_months is None:
+                    timeline_months = 3
+                else:
+                    timeline_months = int(timeline_months)
                 
                 # Use weight-based protein for gym/muscle_gain goals
                 use_weight_based = bool(goal_lower in ("muscle_gain", "gym") and weight_val)
@@ -122,6 +128,7 @@ async def macro_calc_tool(
                     fat_override=fat_override,
                     carb_override=carb_override,
                     use_weight_based_protein=use_weight_based,
+                    timeline_months=timeline_months,
                 )
             except (KeyError, ValueError, TypeError) as exc:
                 logging.warning("macro_calc_tool: falling back to WHO defaults (%s)", exc)

@@ -395,7 +395,7 @@ async def plan_week_e2e_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Weekly end-to-end planner: targets → constraints → search → 21-meal assembly → validation → variety check.
+    Weekly end-to-end planner: combine ranked recipes and targets into a 7‑day (21‑meal) plan.
 
     Environment contract:
       Reads
@@ -407,6 +407,7 @@ async def plan_week_e2e_tool(
         • `plan_week_e2e_tool.missing_macros` – blocking recipe IDs (emptied via `_clear_missing_macro_state` once solved).
 
     Decision hints:
+      • Use this tool when the user asks for a **weekly meal plan** (e.g. “lên thực đơn cả tuần”), not for ad‑hoc recipe lists.
       • `plan_week_e2e_tool.plan` existing implies success; consult metadata.valid & variety_score.
       • Non-empty `missing_macros` tells the agent to call nutrition tools before retrying planning.
     """

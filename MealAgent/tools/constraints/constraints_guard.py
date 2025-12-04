@@ -20,6 +20,12 @@ def _combine_operands(operands: List[Dict]) -> Dict | None:
     return {"operator": "And", "operands": operands}
 
 
+from MealAgent.tools.utils.profile_targets import (
+    ensure_profile_loaded,
+    resolve_user_id,
+)
+
+
 @tool
 async def constraints_guard_tool(
     tree_data: TreeData,
@@ -29,24 +35,44 @@ async def constraints_guard_tool(
     max_cooking_time: int | None = None,
     required_device: str | None = None,
     exclude_devices: list[str] | None = None,
+    user_id: str | None = None,
+    base_lm=None,
+    complex_lm=None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Merge diet/allergen/time/equipment preferences into a single Weaviate where-clause.
+    Merge diet/allergen/time/equipment preferences into a single Weaviate `where` clause.
 
     Environment contract:
-      Reads – `profile_crud_tool.profile` for defaults.
-      Writes – `constraints_guard_tool.filters` (objects + metadata used by search/planning).
+      Reads
+        • `profile_crud_tool.profile` for default diet type, allergens, max cooking time, devices.
+      Writes
+        • `constraints_guard_tool.filters`
+            - `objects[0].where`: Weaviate `where` payload (may be `{}` when no constraints).
+            - `metadata`: derived parameters (`diet_types`, `exclude_allergens`, `max_cooking_time`, etc.).
+
+    Behaviour:
+      • If profile data is available, use it as defaults; explicit arguments override profile values.
+      • If no constraints are resolved, the tool still writes an empty `where` object and `has_filters=False`.
 
     Decision hints:
-      • If `filters` doesn't exist, search should assume no constraints.
-      • Metadata exposes derived parameters so the agent can debug/explain constraint logic.
+      • Planning and search tools should **not fail** when `filters` is missing; treat it as “no constraints”.
+      • Frontend should ignore `constraints_guard_tool.filters` objects (they are for internal use only, `display=False`).
     """
     yield Response("🔒 Applying dietary constraints and preferences...")
 
-    # Read profile for defaults
-    profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-    profile = profile_results[0]["objects"][0] if (profile_results and profile_results[0]["objects"]) else {}
+    resolved_user_id = resolve_user_id(tree_data, user_id)
+    profile, profile_loaded = await ensure_profile_loaded(
+        tree_data,
+        client_manager,
+        user_id=resolved_user_id,
+        base_lm=base_lm,
+        complex_lm=complex_lm,
+        **kwargs,
+    )
+    if profile_loaded:
+        yield Response("👤 Loaded your saved profile to personalize dietary filters.")
+    profile = profile or {}
 
     # Input resolution (kwargs fallback)
     diet_types = diet_types or kwargs.get("diet_types") or (
@@ -101,7 +127,7 @@ async def constraints_guard_tool(
             "exclude_devices": exclude_devices,
         },
         payload_type="generic",
-        display=True,
+        display=False,
     )
     if operands:
         yield Response("✅ Constraints applied successfully")

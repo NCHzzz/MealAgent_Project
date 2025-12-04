@@ -25,6 +25,7 @@ USER_PROFILE_SCHEMA = {
         Property(name="height_cm", data_type=DataType.NUMBER),
         Property(name="activity_level", data_type=DataType.TEXT),  # "sedentary", "light", "moderate", "very_active", "extra_active"
         Property(name="goal", data_type=DataType.TEXT),  # "weight_loss", "weight_gain", "muscle_gain", "maintenance"
+        Property(name="timeline_months", data_type=DataType.INT),  # Goal timeline: 3 (faster) or 6 (sustainable) months, default 3
         
         # Dietary Constraints
         Property(name="diet_type", data_type=DataType.TEXT),

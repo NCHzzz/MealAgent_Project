@@ -7,6 +7,11 @@ from elysia.util.client import ClientManager
 from elysia import tool
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.profile_targets import (
+    ensure_macro_targets,
+    ensure_profile_loaded,
+    resolve_user_id,
+)
 
 # Try to import Elysia Query tool
 try:
@@ -19,7 +24,7 @@ except ImportError:
 # Defaults
 DEFAULT_SEARCH_LIMIT = 50
 DEFAULT_HYBRID_ALPHA = 0.5
-DEFAULT_TOP_K = 20
+DEFAULT_TOP_K = 50
 
 
 def _merge_where_clauses(clauses: list[Dict | None]) -> Dict | None:
@@ -274,25 +279,35 @@ async def search_and_rank_tool(
     alpha: float = DEFAULT_HYBRID_ALPHA,
     top_k: int = DEFAULT_TOP_K,
     use_elysia_query: bool = False,  # Option to use Elysia Query tool for LLM-driven optimization
+    user_id: str | None = None,
+    base_lm=None,
+    complex_lm=None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    Hybrid recipe retrieval with constraint-aware filters, diversity scoring, and macro-fit ranking.
+    Hybrid recipe retrieval with constraint-aware filters, diversity scoring, and optional macro-fit ranking.
 
     Modes:
       1. `ElysiaQuery` (LLM-optimized) when `use_elysia_query=True` and models are available.
       2. Deterministic custom Weaviate hybrid/BM25 fetch (default), honoring filters + macro targets.
-
+    
     Environment contract:
       Reads
-        • `constraints_guard_tool.filters` for user diet/allergen/time guardrails.
-        • `macro_calc_tool.targets` (optional) to bias scoring toward per-meal targets.
+        • `constraints_guard_tool.filters` (optional) – merged diet/allergen/time/device filters.
+        • `macro_calc_tool.targets` (optional) – when present, used to bias scores toward per-meal targets.
       Writes
-        • `search_and_rank_tool.topk` – normalized candidate list used by planning/search displays.
+        • `search_and_rank_tool.topk`
+            - `objects`: normalized, de-duplicated items for the chosen collection.
+            - `metadata`: `top_k`, `total_scored`, `has_targets`, `collection`, `query`.
+
+    Behaviour:
+      • Never mutates profile or targets; it only reads environment state (profile/targets are owned by profile tools).
+      • If no items are found, yields an `Error` and does not write `topk`.
 
     Decision hints:
-      • Lack of `search_and_rank_tool.topk` means downstream planning tools must not run.
-      • Metadata includes `has_targets` so the agent knows whether nutrition-aware scoring ran.
+      • If `search_and_rank_tool.topk` is **absent or empty**, planning tools must not attempt to build a plan.
+      • Use this tool for “gợi ý món ăn / danh sách công thức”; use `plan_day_e2e_tool` / `plan_day_workflow_tool`
+        when the user asks for a complete **thực đơn** (daily plan).
     """
     logging.info(f"search_and_rank_tool: start (use_elysia_query={use_elysia_query})")
     collection_display = "recipes" if collection_name == "Recipe" else collection_name.lower()
@@ -305,12 +320,42 @@ async def search_and_rank_tool(
         yield Error("alpha must be between 0.0 and 1.0")
         return
 
+    resolved_user_id = resolve_user_id(tree_data, user_id)
+    tool_kwargs = dict(kwargs)
+    tool_kwargs.setdefault("base_lm", base_lm)
+    tool_kwargs.setdefault("complex_lm", complex_lm)
+    profile, profile_loaded = await ensure_profile_loaded(
+        tree_data,
+        client_manager,
+        user_id=resolved_user_id,
+        base_lm=base_lm,
+        complex_lm=complex_lm,
+        **kwargs,
+    )
+    if profile_loaded:
+        yield Response("👤 Loaded your profile to personalize search results.")
+
+    targets, targets_refreshed = await ensure_macro_targets(
+        tree_data,
+        client_manager,
+        user_id=resolved_user_id,
+        base_lm=base_lm,
+        complex_lm=complex_lm,
+        **kwargs,
+    )
+    if targets_refreshed and targets:
+        yield Response(
+            f"📊 Personalized targets ready: {targets.get('tdee_kcal', 0):.0f} kcal | "
+            f"{targets.get('protein_g', 0):.0f}g protein | "
+            f"{targets.get('carb_g', 0):.0f}g carbs"
+        )
+
     try:
         # Option 1: Use Elysia Query tool for LLM-driven query optimization
-        if use_elysia_query and ELYSIA_QUERY_AVAILABLE and kwargs.get("base_lm"):
+        if use_elysia_query and ELYSIA_QUERY_AVAILABLE and base_lm:
             yield Response("🤖 Using AI-powered search optimization...")
             items = await _search_with_elysia_query(
-                tree_data, client_manager, query_text, collection_name, limit, alpha, kwargs
+                tree_data, client_manager, query_text, collection_name, limit, alpha, tool_kwargs
             )
             if items is None:
                 # Fallback to custom search if Elysia Query fails
@@ -334,7 +379,7 @@ async def search_and_rank_tool(
 
         # Targets (optional)
         targets_results = tree_data.environment.find("macro_calc_tool", "targets")
-        targets = targets_results[0]["objects"][0] if (targets_results and targets_results[0]["objects"]) else None
+        targets = targets_results[0]["objects"][0] if (targets_results and targets_results[0]["objects"]) else targets
         has_targets = bool(targets)
         target_per_meal = None
         if has_targets:
@@ -449,7 +494,7 @@ async def search_and_rank_tool(
         # OPTIMIZATION: Only calculate for items that will actually be used (top_k)
         # and only when the number of missing recipes is small to avoid blocking.
         missing_macros_count = 0
-        if collection_name == "Recipe" and kwargs.get("base_lm"):
+        if collection_name == "Recipe" and base_lm:
             missing_macros_count = sum(
                 1
                 for item in top_items
@@ -483,7 +528,7 @@ async def search_and_rank_tool(
                                 complex_lm=None,
                                 tree_data=tree_data,
                                 client_manager=client_manager,
-                                base_lm=kwargs.get("base_lm"),
+                                base_lm=base_lm,
                             ):
                                 if (
                                     isinstance(result, Result)

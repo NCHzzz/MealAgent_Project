@@ -570,6 +570,7 @@ async def plan_day_e2e_tool(
     Environment:
         Reads: macro_calc_tool.targets, constraints_guard_tool.filters, search_and_rank_tool.topk
         Writes: plan_day_e2e_tool.plan
+
     """
     yield Response("Planning daily meals...")
     

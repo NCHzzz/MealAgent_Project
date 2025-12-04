@@ -1,6 +1,6 @@
 from typing import AsyncGenerator, Dict, Any, List
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -13,9 +13,15 @@ from MealAgent.tools.utils.planning_helpers import (
     _validate_constraints,
     sync_plan_to_weaviate,
     _calculate_plan_micronutrients,
+    ensure_rfc3339_datetime,
 )
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 from MealAgent.utils.nutrition import build_default_macro_targets
+from MealAgent.tools.utils.profile_targets import (
+    ensure_macro_targets,
+    ensure_profile_loaded,
+    resolve_user_id,
+)
 
 
 def _record_missing_macro_state(tree_data: TreeData, recipe_ids: List[str]) -> None:
@@ -242,6 +248,7 @@ def _select_meal_by_strategy(
     recipes: List[Dict[str, Any]],
     strategy: str,
     exclude: List[Dict[str, Any]] | None = None,
+    used_recipe_ids: set[str] | None = None,
     preferred_meal_type: str | None = None,
     dish_category: str | None = None,
     target_macros: Dict[str, float] | None = None,
@@ -253,6 +260,7 @@ def _select_meal_by_strategy(
         recipes: List of recipe candidates
         strategy: Selection strategy (highest_carb, highest_protein, balanced, macro_fit)
         exclude: Recipes to exclude
+        used_recipe_ids: Recently used recipe IDs to avoid for variety
         preferred_meal_type: Preferred meal type (breakfast/lunch/dinner)
         dish_category: Specific dish category (rice/main/vegetable/fruit/breakfast)
         target_macros: Target macros for better selection (optional)
@@ -260,9 +268,11 @@ def _select_meal_by_strategy(
     if not recipes:
         return None
     exclude_ids = {r.get("food_id") for r in (exclude or []) if r.get("food_id")}
+    if used_recipe_ids:
+        exclude_ids.update(str(rid) for rid in used_recipe_ids)
     candidates = [r for r in recipes if r.get("food_id") not in exclude_ids]
     if not candidates:
-        return None
+        candidates = recipes
 
     # Filter by dish category if specified
     if dish_category:
@@ -358,6 +368,7 @@ async def plan_day_e2e_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
     base_lm=None,
+    complex_lm=None,
     query_text: str = "",
     collection_name: str = "Recipe",
     macro_tolerance_percent: float = 0.15,
@@ -367,36 +378,62 @@ async def plan_day_e2e_tool(
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
-    End-to-end daily planning (profile → targets → constraints → search → plan → validation).
+    End-to-end **daily planner**: consume ranked recipes and nutritional targets to build a 3-meal plan.
 
     Environment contract:
       Reads
-        • `macro_calc_tool.targets` for individualized macro goals.
-        • `constraints_guard_tool.filters` for merged diet/allergen/time filters.
-        • `search_and_rank_tool.topk` for ranked candidate recipes (must include macros).
+        • `macro_calc_tool.targets` – individualized macro goals (TDEE-based).
+        • `constraints_guard_tool.filters` (optional) – used only for validation/explanation, not retrieval.
+        • `search_and_rank_tool.topk` – ranked candidate recipes (ideally with `macros_per_serving`).
       Writes
-        • `plan_day_e2e_tool.plan` – canonical day plan payload rendered in the UI.
-        • `plan_day_e2e_tool.missing_macros` – list of recipe IDs that blocked planning (empty when resolved).
+        • `plan_day_e2e_tool.plan`
+            - canonical day-plan payload used by the UI and downstream tools.
+        • `plan_day_e2e_tool.missing_macros`
+            - list of `recipe_ids` that blocked planning because macros were missing.
+
+    Behaviour:
+      • Does **not** own profile CRUD; it expects profile/targets/search results to be present (or will fall back to defaults).
+      • When `missing_macros` is non-empty, planning still returns a best-effort plan but signals that nutrition tools
+        (e.g. `calculate_recipe_macros_tool`) should be run before trusting macro accuracy.
 
     Decision hints:
-      • Presence of `plan_day_e2e_tool.plan` means planning succeeded; inspect metadata.valid for status.
-      • Non-empty `plan_day_e2e_tool.missing_macros` instructs the agent to call nutrition tools first.
+      • Use this tool when the user asks for a **daily meal plan** (e.g. “Gợi ý bữa ăn ngày hôm nay cho tôi”),
+        not just a list of recipes.
+      • Presence of `plan_day_e2e_tool.plan` with `metadata.valid=True` means planning succeeded.
+      • Non-empty `plan_day_e2e_tool.missing_macros` tells the agent to prioritize nutrition backfill on subsequent runs.
     """
     logging.info("plan_day_e2e_tool: start")
     yield Response("🍽️ Planning your daily meals (breakfast, lunch, dinner)...")
 
     try:
-        if not user_id:
-            profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-            if profile_results and profile_results[0]["objects"]:
-                user_id = profile_results[0]["objects"][0].get("user_id")
+        hidden_store = tree_data.environment.hidden_environment
+        resolved_user_id = resolve_user_id(tree_data, user_id)
+        if resolved_user_id:
+            hidden_store["user_id"] = resolved_user_id
+        user_id = resolved_user_id
 
-        # Step 1: Resolve targets (for validation)
-        targets = None
-        macro_results = tree_data.environment.find("macro_calc_tool", "targets")
-        if macro_results and macro_results[0]["objects"]:
-            targets = macro_results[0]["objects"][0]
-        
+        profile, profile_loaded = await ensure_profile_loaded(
+            tree_data=tree_data,
+            client_manager=client_manager,
+            user_id=resolved_user_id,
+            base_lm=base_lm,
+            complex_lm=complex_lm,
+            **kwargs,
+        )
+        if profile_loaded and profile and resolved_user_id:
+            yield Response(f"✅ Profile loaded for user {resolved_user_id}")
+
+        targets, targets_refreshed = await ensure_macro_targets(
+            tree_data=tree_data,
+            client_manager=client_manager,
+            user_id=resolved_user_id,
+            base_lm=base_lm,
+            complex_lm=complex_lm,
+            **kwargs,
+        )
+        if targets_refreshed and targets:
+            yield Response("🧮 Recalculating nutritional targets from your profile...")
+
         if targets:
             yield Response(
                 f"📊 Using your targets: {targets.get('tdee_kcal', 0):.0f} kcal | "
@@ -428,30 +465,50 @@ async def plan_day_e2e_tool(
 
         # Step 3: Read ranked recipes or auto-search if not available
         sr = tree_data.environment.find("search_and_rank_tool", "topk")
-        if not sr or not sr[0]["objects"]:
+        recipes: list[Dict[str, Any]] = []
+        if sr:
+            # Prefer the most recent non-empty result
+            for entry in reversed(sr):
+                objs = entry.get("objects") or []
+                if objs:
+                    recipes = objs
+                    break
+
+        if not recipes:
             # Auto-search for recipes if not available
             yield Response("🔍 No recipes found. Searching for recipes automatically...")
             try:
                 from MealAgent.tools.search.search_and_rank import search_and_rank_tool
                 from MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
-                
+
                 # First, ensure constraints are set up
                 constraints_results = tree_data.environment.find("constraints_guard_tool", "filters")
                 if not constraints_results or not constraints_results[0]["objects"]:
                     # Set up constraints (empty if no profile)
                     async for result in constraints_guard_tool(
                         tree_data=tree_data,
+                        inputs={},
+                        base_lm=base_lm,
+                        complex_lm=complex_lm,
                         client_manager=client_manager,
                         **kwargs,
                     ):
                         if isinstance(result, Error):
-                            logging.warning(f"plan_day_e2e_tool: constraints_guard_tool failed: {result.message}")
+                            logging.warning(
+                                "plan_day_e2e_tool: constraints_guard_tool failed: %s",
+                                result.message,
+                            )
                             break
-                
-                # Now search for recipes
+
+                # Now search for recipes. Note: internal tool calls do NOT automatically
+                # persist Results into the environment, so we must capture them here.
                 search_query = query_text if query_text else "Vietnamese recipes"
+                auto_recipes: list[Dict[str, Any]] = []
                 async for result in search_and_rank_tool(
                     tree_data=tree_data,
+                    inputs={},
+                    base_lm=base_lm,
+                    complex_lm=complex_lm,
                     client_manager=client_manager,
                     query_text=search_query,
                     collection_name=collection_name,
@@ -465,29 +522,44 @@ async def plan_day_e2e_tool(
                             "Please try searching manually first."
                         )
                         return
-                    # Forward progress messages
                     if isinstance(result, Response):
+                        # Forward progress messages to the user
                         yield result
-                
-                # Re-check for recipes after search
-                sr = tree_data.environment.find("search_and_rank_tool", "topk")
-                if not sr or not sr[0]["objects"]:
+                    elif isinstance(result, Result) and result.objects:
+                        # Capture the ranked recipes from this internal call
+                        auto_recipes = list(result.objects)
+
+                # Prefer recipes captured from the internal call; environment may not be updated
+                if auto_recipes:
+                    recipes = auto_recipes
+                else:
+                    # Fallback: try reading from environment in case the runtime persisted it
+                    sr = tree_data.environment.find("search_and_rank_tool", "topk")
+                    recipes = []
+                    if sr:
+                        for entry in reversed(sr):
+                            objs = entry.get("objects") or []
+                            if objs:
+                                recipes = objs
+                                break
+
+                if not recipes:
                     yield Error(
                         "No recipes found after automatic search. "
                         "Please check your search query or try a different query."
                     )
                     return
-                recipes = sr[0]["objects"]
+
                 yield Response(f"✅ Found {len(recipes)} recipe(s) for planning.")
-            except Exception as e:
-                logging.error(f"plan_day_e2e_tool: Auto-search failed: {e}")
+            except Exception as e:  # pragma: no cover - defensive
+                logging.error("plan_day_e2e_tool: Auto-search failed: %s", e)
                 yield Error(
                     f"Failed to automatically search for recipes: {str(e)}. "
                     "Please search for recipes first using search_and_rank_tool."
                 )
                 return
-        else:
-            recipes = sr[0]["objects"]
+
+        # At this point, `recipes` must be non-empty
         
         # IMPROVED VARIETY: Exclude recently used recipes to avoid repetition
         # Check for recent plans and exclude their recipes
@@ -498,10 +570,11 @@ async def plan_day_e2e_tool(
             
             # Get recent plans (last 7 days) for this user
             if user_id:
-                from datetime import datetime, timedelta
                 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
                 
-                recent_date = (datetime.now() - timedelta(days=7)).isoformat()
+                recent_date = ensure_rfc3339_datetime(
+                    datetime.now(timezone.utc) - timedelta(days=7)
+                )
                 plan_filter = build_filters_from_where({
                     "operator": "And",
                     "operands": [
@@ -639,7 +712,9 @@ async def plan_day_e2e_tool(
             
             if user_id:
                 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
-                recent_date = (datetime.now() - timedelta(days=7)).isoformat()
+                recent_date = ensure_rfc3339_datetime(
+                    datetime.now(timezone.utc) - timedelta(days=7)
+                )
                 plan_filter = build_filters_from_where({
                     "operator": "And",
                     "operands": [
@@ -1049,10 +1124,7 @@ async def plan_day_e2e_tool(
 
         # Step 6: Calculate micronutrients
         yield Response("🔬 Calculating micronutrients (vitamins & minerals)...")
-        profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-        gender = None
-        if profile_results and profile_results[0]["objects"]:
-            gender = profile_results[0]["objects"][0].get("gender")
+        gender = (profile or {}).get("gender")
         
         try:
             micronutrients = await _calculate_plan_micronutrients(
@@ -1070,18 +1142,24 @@ async def plan_day_e2e_tool(
                 "has_deficits": False,
             }
         
+        now_utc = datetime.now(timezone.utc)
         plan_output = {
             "plan_type": "day",
             "meals": plan,
             "total_macros": total_macros,
             "micronutrients": micronutrients,
             "validation": validation,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": ensure_rfc3339_datetime(now_utc),
         }
         if plan_id:
             plan_output["plan_id"] = plan_id
-        if start_date:
-            plan_output["start_date"] = start_date
+
+        normalized_start_date = (
+            ensure_rfc3339_datetime(start_date, date_only=True)
+            if start_date
+            else ensure_rfc3339_datetime(now_utc, date_only=True)
+        )
+        plan_output["start_date"] = normalized_start_date
 
         if user_id:
             plan_output = sync_plan_to_weaviate(

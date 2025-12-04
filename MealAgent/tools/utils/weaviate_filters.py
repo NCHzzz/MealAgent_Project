@@ -10,13 +10,22 @@ logger = logging.getLogger(__name__)
 _VALUE_KEYS_PRIORITY: tuple[str, ...] = (
     "valueTextArray",
     "valueText",
+    "valueStringArray",
     "valueString",
+    "valueBooleanArray",
     "valueBoolean",
+    "valueInt64Array",
+    "valueInt64",
+    "valueIntArray",
     "valueInt",
+    "valueNumberArray",
     "valueNumber",
+    "valueFloatArray",
     "valueFloat",
+    "valueDateArray",
     "valueDate",
     "valueGeoRange",
+    "value",
 )
 
 

@@ -6,6 +6,7 @@ export type UserProfile = {
   height_cm: number;
   activity_level: "sedentary" | "light" | "moderate" | "very_active" | "extra_active";
   goal?: "weight_loss" | "weight_gain" | "muscle_gain" | "gym" | "maintenance" | null;
+  timeline_months?: 3 | 6 | null;  // Goal timeline: 3 (faster) or 6 (sustainable) months
   diet_type?: string | null;
   allergens?: string[];
   preferences?: string[];

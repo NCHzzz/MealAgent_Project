@@ -69,6 +69,7 @@ export type ProfileUpdatePayload = {
   height_cm?: number;
   activity_level?: string;
   goal?: "weight_loss" | "weight_gain" | "muscle_gain" | "gym" | "maintenance";
+  timeline_months?: 3 | 6;  // Goal timeline: 3 (faster) or 6 (sustainable) months
   diet_type?: string;
   allergens?: string[];
   preferences?: string[];

@@ -8,7 +8,7 @@ Reference: https://weaviate.github.io/elysia/Reference/Preprocessor/
 """
 
 from typing import List
-import os
+import argparse
 from elysia.preprocessing.collection import (
     preprocess,
     preprocessed_collection_exists,
@@ -23,31 +23,23 @@ from elysia.util.async_util import asyncio_run
 
 
 # All MealAgent collections that need preprocessing
-TARGET_COLLECTIONS: List[str] = [
-    # Core data collections (with data)
-    "Recipe",
-    "FdcFood",
-    "FdcNutrient",
-    "FdcPortion",
-    # User and planning collections (may be empty initially)
+# Default preprocessing knobs (script mode)
+DEFAULT_MIN_SAMPLE_SIZE = 10
+DEFAULT_MAX_SAMPLE_SIZE: int | None = None
+DEFAULT_NUM_SAMPLE_TOKENS = 30_000
+DEFAULT_FORCE = False
+
+# Default MealAgent-targeted collections (excludes Recipe + FDC data sources)
+DEFAULT_COLLECTIONS: list[str] = [
     "UserProfile",
     "MealPlan",
     "MealPlanItem",
     "MealLogEntry",
-    # Pantry and shopping collections (may be empty initially)
     "Pantry",
     "PantryItem",
     "ShoppingList",
     "ShoppingItem",
 ]
-
-
-def _collections_from_env(defaults: List[str]) -> List[str]:
-    env_val = os.getenv("MEAL_AGENT_PREPROCESS_COLLECTIONS", "").strip()
-    if not env_val:
-        return defaults
-    return [c.strip() for c in env_val.split(",") if c.strip()]
-
 
 def _create_generic_mapping(collection_name: str, properties: dict) -> dict[str, str]:
     """
@@ -82,27 +74,33 @@ def _create_generic_mapping(collection_name: str, properties: dict) -> dict[str,
         mapping["timestamp"] = ""
         
     elif collection_name == "UserProfile":
+        # Primary card: show who the profile belongs to and their goal
         mapping["title"] = "display_name" if "display_name" in properties else ("user_id" if "user_id" in properties else "")
         mapping["subtitle"] = "goal" if "goal" in properties else ""
-        mapping["content"] = ""  # UserProfile is structured data, not content
+        mapping["content"] = ""  # Structured profile; no single free-text content field
         mapping["id"] = "user_id" if "user_id" in properties else ""
         mapping["author"] = "user_id" if "user_id" in properties else ""
-        mapping["tags"] = "allergens" if "allergens" in properties else ("preferences" if "preferences" in properties else "")
-        mapping["category"] = "diet_type" if "diet_type" in properties else ""
-        mapping["subcategory"] = "activity_level" if "activity_level" in properties else ""
-        mapping["timestamp"] = "created_at" if "created_at" in properties else ("updated_at" if "updated_at" in properties else "")
+        # Tags reflect constraints & preferences for quick scanning
+        mapping["tags"] = "preferences" if "preferences" in properties else ("allergens" if "allergens" in properties else "")
+        # Category/subcategory align with MealAgent semantics: what they’re aiming for and how they eat
+        mapping["category"] = "goal" if "goal" in properties else ""
+        mapping["subcategory"] = "diet_type" if "diet_type" in properties else ""
+        mapping["timestamp"] = "updated_at" if "updated_at" in properties else ("created_at" if "created_at" in properties else "")
         
     elif collection_name == "MealPlan":
-        mapping["title"] = "plan_id" if "plan_id" in properties else ""
-        mapping["subtitle"] = "plan_type" if "plan_type" in properties else ""
+        # Show plan type first (day/week) and keep ID for linking
+        mapping["title"] = "plan_type" if "plan_type" in properties else ("plan_id" if "plan_id" in properties else "")
+        mapping["subtitle"] = "start_date" if "start_date" in properties else ""
         mapping["id"] = "plan_id" if "plan_id" in properties else ""
         mapping["author"] = "user_id" if "user_id" in properties else ""
         mapping["category"] = "plan_type" if "plan_type" in properties else ""
         mapping["timestamp"] = "created_at" if "created_at" in properties else ("start_date" if "start_date" in properties else "")
         
     elif collection_name == "MealPlanItem":
-        mapping["title"] = "recipe_id" if "recipe_id" in properties else ""
-        mapping["subtitle"] = "meal_type" if "meal_type" in properties else ""
+        # Emphasise meal type (breakfast/lunch/dinner/snack) and recipe linkage
+        mapping["title"] = "meal_type" if "meal_type" in properties else ("recipe_id" if "recipe_id" in properties else "")
+        mapping["subtitle"] = "recipe_id" if "recipe_id" in properties else ""
+        mapping["content"] = "recipe_id" if "recipe_id" in properties else ""
         mapping["id"] = "plan_id" if "plan_id" in properties else ""
         mapping["category"] = "meal_type" if "meal_type" in properties else ""
         mapping["subcategory"] = "day_index" if "day_index" in properties else ""
@@ -119,34 +117,41 @@ def _create_generic_mapping(collection_name: str, properties: dict) -> dict[str,
         mapping["timestamp"] = "logged_at" if "logged_at" in properties else ""
         
     elif collection_name == "Pantry":
+        # One pantry per user – treat as a profile-style card
         mapping["title"] = "user_id" if "user_id" in properties else ""
         mapping["id"] = "user_id" if "user_id" in properties else ""
         mapping["author"] = "user_id" if "user_id" in properties else ""
         mapping["timestamp"] = "updated_at" if "updated_at" in properties else ""
         
     elif collection_name == "PantryItem":
+        # Show ingredient name + unit, and use tags for quick filtering
         mapping["title"] = "ingredient_name" if "ingredient_name" in properties else ""
         mapping["subtitle"] = "unit" if "unit" in properties else ""
         mapping["content"] = "ingredient_name" if "ingredient_name" in properties else ""
         mapping["id"] = "fdc_id" if "fdc_id" in properties else ""
         mapping["author"] = "user_id" if "user_id" in properties else ""
+        mapping["tags"] = "ingredient_name" if "ingredient_name" in properties else ""
         mapping["category"] = ""  # Could be derived from ingredient but not in schema
         mapping["timestamp"] = "expiry_date" if "expiry_date" in properties else ""
         
     elif collection_name == "ShoppingList":
+        # List card: show list id and link back to the originating plan
         mapping["title"] = "list_id" if "list_id" in properties else ""
         mapping["subtitle"] = "plan_id" if "plan_id" in properties else ""
         mapping["id"] = "list_id" if "list_id" in properties else ""
         mapping["author"] = "user_id" if "user_id" in properties else ""
+        mapping["tags"] = "plan_id" if "plan_id" in properties else ""
         mapping["timestamp"] = "created_at" if "created_at" in properties else ""
         
     elif collection_name == "ShoppingItem":
+        # Item row within a list: emphasise ingredient and category
         mapping["title"] = "ingredient_name" if "ingredient_name" in properties else ""
         mapping["subtitle"] = "category" if "category" in properties else ""
         mapping["content"] = "ingredient_name" if "ingredient_name" in properties else ""
         mapping["id"] = "list_id" if "list_id" in properties else ""
         mapping["category"] = "category" if "category" in properties else ""
         mapping["subcategory"] = "unit" if "unit" in properties else ""
+        mapping["tags"] = "category" if "category" in properties else ""
         mapping["timestamp"] = ""
         
     elif collection_name == "FdcNutrient":
@@ -190,6 +195,7 @@ def _get_field_descriptions(collection_name: str, properties: dict) -> dict[str,
             "height_cm": "User's height in centimeters. Used for TDEE calculation.",
             "activity_level": "Activity level: 'sedentary', 'light', 'moderate', 'very_active', or 'extra_active'. Used for TDEE calculation.",
             "goal": "Fitness goal: 'weight_loss', 'weight_gain', 'muscle_gain', or 'maintenance'. Affects macro targets.",
+            "timeline_months": "Goal timeline in months (e.g., 3 for aggressive, 6 for sustainable). Used to pace macro adjustments.",
             "diet_type": "Dietary preference (e.g., 'vegetarian', 'vegan', 'keto', 'paleo'). Used for recipe filtering.",
             "allergens": "Array of allergens to avoid (e.g., ['peanuts', 'dairy', 'gluten']). Used for recipe filtering.",
             "preferences": "Array of liked cuisines or ingredients. Used for recipe ranking.",
@@ -216,7 +222,7 @@ def _get_field_descriptions(collection_name: str, properties: dict) -> dict[str,
             "meal_type": "Type of meal: 'breakfast', 'lunch', 'dinner', or 'snack'.",
             "recipe_id": "ID of the recipe for this meal. Links to Recipe collection.",
             "servings": "Number of servings (portion multiplier) for this meal.",
-            "actual_macros": "Calculated macros for this meal portion as JSON object: {kcal, protein_g, fat_g, carb_g}.",
+            "actual_macros": "Calculated macros for this meal portion stored as JSON string: {kcal, protein_g, fat_g, carb_g}.",
         },
         "MealLogEntry": {
             "log_id": "Unique identifier for the meal log entry.",
@@ -736,43 +742,88 @@ async def _create_minimal_metadata(
 
 
 
+def _parse_cli_args() -> argparse.Namespace:
+    """Parse CLI arguments for the standalone script."""
+    parser = argparse.ArgumentParser(
+        description="Preprocess MealAgent collections (metadata generation)."
+    )
+    parser.add_argument(
+        "--min-sample",
+        type=int,
+        default=DEFAULT_MIN_SAMPLE_SIZE,
+        help="Minimum number of objects sampled per collection.",
+    )
+    parser.add_argument(
+        "--max-sample",
+        type=int,
+        default=DEFAULT_MAX_SAMPLE_SIZE,
+        help="Maximum number of objects sampled per collection (omit for dynamic).",
+    )
+    parser.add_argument(
+        "--num-tokens",
+        type=int,
+        default=DEFAULT_NUM_SAMPLE_TOKENS,
+        help="Approximate token budget per collection summary.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=DEFAULT_FORCE,
+        help="Re-run even if metadata already exists.",
+    )
+    parser.add_argument(
+        "--collections",
+        nargs="*",
+        default=None,
+        help="Collections to preprocess; default targets the MealAgent collections (excluding Recipe/FDC).",
+    )
+    return parser.parse_args()
+
+
 def run() -> None:
     """
-    Run preprocessing for all MealAgent collections.
+    Run preprocessing for all MealAgent collections **except** the core FDC/Recipe
+    data sources (FdcFood, FdcNutrient, FdcPortion, Recipe).
     
-    Handles both collections with data (uses standard preprocessor) and
-    empty collections (creates minimal metadata from schema).
+    This is tailored to the MealAgent system:
+    - We assume the four base data collections are either already preprocessed
+      via the official Elysia preprocessor or are managed separately.
+    - Here we focus on user/profile/planning/logging/pantry/shopping collections
+      that power the MealAgent workflows.
     """
-    collections = _collections_from_env(TARGET_COLLECTIONS)
+    args = _parse_cli_args()
+    collections: list[str] = args.collections if args.collections else list(DEFAULT_COLLECTIONS)
+    if len(collections) == 0:
+        print("⚠ No collections specified; nothing to preprocess.")
+        return
     client_manager = ClientManager()
     
-    min_sample_size = int(os.getenv("PREPROCESS_MIN_SAMPLE", "10"))
-    max_sample_size = (
-            int(os.getenv("PREPROCESS_MAX_SAMPLE"))
-            if os.getenv("PREPROCESS_MAX_SAMPLE")
-            else None
-    )
-    num_sample_tokens = int(os.getenv("PREPROCESS_NUM_TOKENS", "30000"))
-    force = os.getenv("PREPROCESS_FORCE", "false").lower() in ("1", "true", "yes")
+    min_sample_size = args.min_sample
+    max_sample_size = args.max_sample
+    num_sample_tokens = args.num_tokens
+    force = args.force
     
     print(f"🚀 Starting preprocessing for {len(collections)} collections...")
     print(f"Collections: {', '.join(collections)}\n")
     
     async def _run_async():
-        for collection_name in collections:
-            try:
-                await _preprocess_collection_safe(
-                    collection_name=collection_name,
-        client_manager=client_manager,
-                    min_sample_size=min_sample_size,
-                    max_sample_size=max_sample_size,
-                    num_sample_tokens=num_sample_tokens,
-                    force=force,
-                )
-            except Exception as e:
-                print(f"❌ Error preprocessing {collection_name}: {e}")
-                raise
-        print(f"\n✅ Preprocessing complete for all collections!")
+        try:
+            for collection_name in collections:
+                try:
+                    await _preprocess_collection_safe(
+                        collection_name=collection_name,
+                        client_manager=client_manager,
+                        min_sample_size=min_sample_size,
+                        max_sample_size=max_sample_size,
+                        num_sample_tokens=num_sample_tokens,
+                        force=force,
+                    )
+                except Exception as e:
+                    print(f"❌ Error preprocessing {collection_name}: {e}")
+                    raise
+            print(f"\n✅ Preprocessing complete for all collections!")
+        finally:
+            await client_manager.close_clients()
     
     asyncio_run(_run_async())
 

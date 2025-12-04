@@ -332,8 +332,13 @@ async def _batch_validate_macros_with_lm(
         ingredients = r.get("ingredients_with_qty") or r.get("ingredients", [])
         cooking_notes = r.get("cooking_method") or r.get("instructions", "")
 
+        # Convert UUID to string if it's a Weaviate UUID object
+        uuid_value = r.get("_uuid")
+        if uuid_value is not None:
+            uuid_value = str(uuid_value)
+        
         summary = {
-            "id": r.get("_uuid") or r.get("food_id") or "",
+            "id": uuid_value or r.get("food_id") or "",
             "food_id": r.get("food_id") or "",
             "dish_name": r.get("dish_name") or "",
             "servings": servings,
@@ -414,15 +419,21 @@ async def _batch_validate_macros_with_lm(
         parsed = json.loads(raw_output)
     except Exception:
         try:
+            # Try to find JSON array in the output
             start = raw_output.find("[")
             end = raw_output.rfind("]")
             if start != -1 and end != -1 and end > start:
-                parsed = json.loads(raw_output[start : end + 1])
+                json_str = raw_output[start : end + 1]
+                parsed = json.loads(json_str)
             else:
                 raise ValueError("No JSON array brackets found in LLM output.")
         except Exception as exc:
             logger.error("Failed to parse batch LLM JSON output: %s", exc)
-            logger.debug("Raw LLM output: %s", _sanitize_text(raw_output))
+            # Log first 500 chars of output for debugging
+            output_preview = _sanitize_text(raw_output[:500])
+            logger.error("LLM output preview (first 500 chars): %s", output_preview)
+            if len(raw_output) > 500:
+                logger.error("... (output truncated, total length: %d chars)", len(raw_output))
             return {}
 
     if not isinstance(parsed, list):
@@ -559,8 +570,9 @@ async def process_recipes(
                 food_id,
             )
 
-            rid = recipe.get("_uuid") or recipe.get("food_id") or ""
-            result = batch_results.get(str(rid))
+            uuid_val = recipe.get("_uuid")
+            rid = str(uuid_val) if uuid_val is not None else (recipe.get("food_id") or "")
+            result = batch_results.get(rid)
 
             if not result:
                 logger.info(
@@ -576,16 +588,18 @@ async def process_recipes(
             # If macros are considered OK (including cases where they were originally
             # missing but LLM still decided they are fine), we only log.
             if verdict != "adjust" or not macros_adjusted:
+                safe_reason = _sanitize_text(reason or "no issues found")
                 logger.info(
-                    "  ✅ LLM verdict: OK / no change (%s)",
-                    reason or "no issues found",
+                    "  [OK] LLM verdict: OK / no change (%s)",
+                    safe_reason,
                 )
                 stats["ok"] += 1
                 continue
 
+            safe_reason = _sanitize_text(reason)
             logger.warning(
-                "  ⚠️ LLM suggests adjustment (%s). New macros: %s",
-                reason,
+                "  [ADJUST] LLM suggests adjustment (%s). New macros: %s",
+                safe_reason,
                 macros_adjusted,
             )
 
@@ -601,7 +615,7 @@ async def process_recipes(
                 client_manager,
             )
             if success:
-                logger.info("  ✅ Updated recipe %s with LLM-adjusted macros.", food_id)
+                logger.info("  [SUCCESS] Updated recipe %s with LLM-adjusted macros.", food_id)
                 stats["adjusted"] += 1
             else:
                 logger.warning("  FAILED to update recipe %s.", food_id)

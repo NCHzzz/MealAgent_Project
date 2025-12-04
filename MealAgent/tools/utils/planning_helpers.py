@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
@@ -144,6 +144,43 @@ def _generate_plan_id(user_id: str | None = None) -> str:
     return f"{prefix}plan_{uuid4().hex[:12]}"
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def ensure_rfc3339_datetime(value: datetime | str | None, *, date_only: bool = False) -> str:
+    """
+    Normalize any datetime/date input into an RFC3339 string (UTC, 'Z' suffixed).
+    """
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value:
+        normalized = value.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(normalized)
+        except ValueError:
+            if date_only and len(value) == 10:
+                dt = datetime.fromisoformat(f"{value}T00:00:00")
+            else:
+                raise
+    else:
+        dt = datetime.now(timezone.utc)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+
+    if date_only:
+        dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    return dt.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Build MealPlanItem records from a plan dictionary.
@@ -168,7 +205,7 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
             recipe_id = recipe.get("food_id") or recipe.get("recipe_id")
             if not recipe_id:
                 continue
-            servings = float(meal_data.get("servings", 1.0))
+            servings = _safe_float(meal_data.get("servings", 1.0), default=1.0)
             macros = _get_meal_macros(recipe)
             
             # Calculate total macros including accompaniments
@@ -180,7 +217,7 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
             accompaniments = meal_data.get("accompaniments", [])
             for acc in accompaniments:
                 acc_recipe = acc.get("recipe", {})
-                acc_servings = float(acc.get("servings", 1.0))
+                acc_servings = _safe_float(acc.get("servings", 1.0), default=1.0)
                 if acc_recipe and isinstance(acc_recipe, dict):
                     acc_macros = _get_meal_macros(acc_recipe)
                     for k in total_macros:
@@ -192,7 +229,7 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "meal_type": meal_data.get("meal_type", meal_key),
                     "recipe_id": str(recipe_id),
                     "servings": servings,
-                    "actual_macros": json.dumps(total_macros),
+                    "actual_macros": total_macros,
                 }
             )
 
@@ -258,13 +295,13 @@ async def _calculate_plan_micronutrients(
     # Collect all fdc_ids and their quantities
     def _collect_from_meal(meal_data: Dict[str, Any]):
         recipe = meal_data.get("recipe", {})
-        servings = float(meal_data.get("servings", 1.0))
+        servings = _safe_float(meal_data.get("servings", 1.0), default=1.0)
         ingredient_map = recipe.get("ingredient_fdc_map", [])
         
         for ing_entry in ingredient_map:
             if isinstance(ing_entry, dict):
                 fdc_id = ing_entry.get("fdc_id")
-                quantity_g = float(ing_entry.get("quantity_g", 0.0))
+                quantity_g = _safe_float(ing_entry.get("quantity_g", 0.0), default=0.0)
                 
                 if fdc_id:
                     fdc_id_int = int(fdc_id)
@@ -279,13 +316,13 @@ async def _calculate_plan_micronutrients(
         accompaniments = meal_data.get("accompaniments", [])
         for acc in accompaniments:
             acc_recipe = acc.get("recipe", {})
-            acc_servings = float(acc.get("servings", 1.0))
+            acc_servings = _safe_float(acc.get("servings", 1.0), default=1.0)
             if acc_recipe:
                 acc_ingredient_map = acc_recipe.get("ingredient_fdc_map", [])
                 for ing_entry in acc_ingredient_map:
                     if isinstance(ing_entry, dict):
                         fdc_id = ing_entry.get("fdc_id")
-                        quantity_g = float(ing_entry.get("quantity_g", 0.0))
+                        quantity_g = _safe_float(ing_entry.get("quantity_g", 0.0), default=0.0)
                         
                         if fdc_id:
                             fdc_id_int = int(fdc_id)
@@ -354,7 +391,8 @@ async def _calculate_plan_micronutrients(
                     
                     for field, key in micro_fields:
                         if field in fdc_food:
-                            total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+                            value = _safe_float(fdc_food.get(field, 0.0), default=0.0)
+                            total_micros[key] = total_micros.get(key, 0.0) + value * scale
         except Exception as e:
             logging.warning(f"Failed to batch fetch FDC foods for micros: {str(e)}")
     
@@ -408,8 +446,11 @@ def sync_plan_to_weaviate(
 
     plan_type = plan.get("plan_type", "day")
     plan_id = plan.get("plan_id") or _generate_plan_id(user_id)
-    created_at = plan.get("created_at") or datetime.utcnow().isoformat()
-    plan_start_date = plan.get("start_date") or start_date or datetime.utcnow().date().isoformat()
+    created_at = ensure_rfc3339_datetime(plan.get("created_at"))
+    plan_start_date = ensure_rfc3339_datetime(
+        plan.get("start_date") or start_date,
+        date_only=True,
+    )
 
     plan_payload = {
         "plan_id": plan_id,

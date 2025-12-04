@@ -44,7 +44,24 @@ class CitedSummarizer(Tool):
         client_manager: ClientManager | None = None,
         **kwargs,
     ):
-        return not tree_data.environment.is_empty()
+        # Only make summarization available when there is something substantial to explain.
+        # For MealAgent-style flows this typically means either:
+        #   - a structured plan has been created, or
+        #   - at least one non-empty retrieval/topk result exists.
+        env = tree_data.environment
+        if env.is_empty():
+            return False
+
+        # Prefer explanation after planning when plan outputs exist.
+        for tool_name in ("plan_day_e2e_tool", "plan_week_e2e_tool"):
+            if env.find(tool_name, "plan"):
+                return True
+
+        # Fallback: allow summary after retrieval tools have produced results.
+        if env.find("search_and_rank_tool", "topk"):
+            return True
+
+        return False
 
     async def __call__(
         self,

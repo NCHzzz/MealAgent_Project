@@ -45,6 +45,7 @@ const ProfilePage: React.FC = () => {
       height_cm: profile?.height_cm,
       activity_level: profile?.activity_level,
       goal: profile?.goal,
+      timeline_months: profile?.timeline_months || 3,
       diet_type: profile?.diet_type,
       allergens: profile?.allergens || [],
       preferences: profile?.preferences || [],
@@ -59,6 +60,7 @@ const ProfilePage: React.FC = () => {
     profile?.height_cm,
     profile?.activity_level,
     profile?.goal,
+    profile?.timeline_months,
     profile?.diet_type,
     profile?.allergens,
     profile?.preferences,
@@ -288,6 +290,28 @@ const ProfilePage: React.FC = () => {
                   </SelectContent>
                 </Select>
               </div>
+              {(form.goal === "weight_loss" || form.goal === "weight_gain") && (
+                <div>
+                  <Label>Timeline (Mục tiêu thời gian)</Label>
+                  <Select
+                    value={String(form.timeline_months || 3)}
+                    onValueChange={(value) =>
+                      setForm({
+                        ...form,
+                        timeline_months: Number(value) as 3 | 6,
+                      })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select timeline..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="3">3 months (Nhanh hơn)</SelectItem>
+                      <SelectItem value="6">6 months (Bền vững hơn)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div>
                 <Label>Max cooking time (minutes)</Label>
                 <Input

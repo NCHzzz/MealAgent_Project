@@ -200,6 +200,10 @@ class UserManager:
         """
 
         if user_id not in self.users:
+            logger.debug("User %s not found in memory, auto-initialising...", user_id)
+            await self.add_user_local(user_id)
+
+        if user_id not in self.users:
             raise ValueError(
                 f"User {user_id} not found. Please initialise a user first (by calling `add_user_local`)."
             )
