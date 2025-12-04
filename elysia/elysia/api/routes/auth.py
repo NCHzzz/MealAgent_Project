@@ -314,10 +314,19 @@ async def update_profile(
                     # Use weight-based protein for gym/muscle_gain goals
                     use_weight_based = goal and goal.lower() in ("muscle_gain", "gym")
                     
-                    # Get macro overrides
-                    protein_override = merged_profile.get("protein_g")
-                    fat_override = merged_profile.get("fat_g")
-                    carb_override = merged_profile.get("carb_g")
+                    # IMPORTANT:
+                    #   Do NOT treat existing macro values as "overrides" when core profile
+                    #   fields change. Existing values (protein_g/fat_g/carb_g) are themselves
+                    #   *derived* from a previous calculation, so reusing them here would freeze
+                    #   macros across goal/weight changes.
+                    #
+                    #   We only support automatic macro calculation from profile today – there
+                    #   is no UI for the user to directly set macros. Therefore, whenever
+                    #   profile fields that affect the calculation change, we should ignore
+                    #   previous macro values and recompute a fresh set from TDEE + goal.
+                    protein_override = None
+                    fat_override = None
+                    carb_override = None
                     
                     # Adjust targets by goal (includes rounding)
                     adjusted_targets = adjust_targets_by_goal(
@@ -327,9 +336,9 @@ async def update_profile(
                         age=int(merged_profile["age"]) if merged_profile.get("age") else None,
                         gender=str(merged_profile["gender"]) if merged_profile.get("gender") else None,
                         height_cm=float(merged_profile["height_cm"]) if merged_profile.get("height_cm") else None,
-                        protein_override=float(protein_override) if isinstance(protein_override, (int, float)) else None,
-                        fat_override=float(fat_override) if isinstance(fat_override, (int, float)) else None,
-                        carb_override=float(carb_override) if isinstance(carb_override, (int, float)) else None,
+                        protein_override=protein_override,
+                        fat_override=fat_override,
+                        carb_override=carb_override,
                         use_weight_based_protein=use_weight_based,
                     )
                     

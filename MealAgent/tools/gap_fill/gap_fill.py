@@ -10,9 +10,9 @@ from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
 from elysia import tool
 
-
 from MealAgent.tools.utils.planning_helpers import _get_meal_macros, sync_plan_to_weaviate
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.profile_targets import ensure_macro_targets
 
 
 def _calculate_plan_macros(plan: Dict[str, Any]) -> Dict[str, float]:
@@ -129,12 +129,16 @@ async def gap_fill_tool(
         else:
             plan_id = None
         
-        # Step 2: Read targets
-        macro_results = tree_data.environment.find("macro_calc_tool", "targets")
-        if not macro_results or not macro_results[0]["objects"]:
-            yield Error("Targets not found. Run macro_calc_tool first.")
+        # Step 2: Read targets (auto-calculate if missing)
+        targets, targets_refreshed = await ensure_macro_targets(
+            tree_data=tree_data,
+            client_manager=client_manager,
+            user_id=plan_user_id,
+            **kwargs,
+        )
+        if not targets:
+            yield Error("Targets not found and could not be calculated from profile. Please create or complete your profile first.")
             return
-        targets = macro_results[0]["objects"][0]
         
         # Step 3: Calculate plan macros and deficits
         yield Response("📊 Calculating macro deficits...")

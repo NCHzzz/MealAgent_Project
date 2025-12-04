@@ -202,7 +202,13 @@ async def micros_tool(
                         
                         for field, key in micro_fields:
                             if field in fdc_food:
-                                total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+                                raw_value = fdc_food.get(field, 0.0)
+                                # Robust conversion: some fields may be None instead of 0.0
+                                try:
+                                    value = float(raw_value) if raw_value is not None else 0.0
+                                except (TypeError, ValueError):
+                                    value = 0.0
+                                total_micros[key] = total_micros.get(key, 0.0) + value * scale
             except Exception as e:
                 logging.warning(f"Batch fetch failed, falling back to individual queries: {str(e)}")
                 # Fallback to individual queries if batch fails
@@ -225,7 +231,13 @@ async def micros_tool(
                                 scale = (data["quantity_g"] * data["servings"]) / 100.0
                                 for field, key in micro_fields:
                                     if field in fdc_food:
-                                        total_micros[key] = total_micros.get(key, 0.0) + float(fdc_food.get(field, 0.0)) * scale
+                                        raw_value = fdc_food.get(field, 0.0)
+                                        # Robust conversion: some fields may be None instead of 0.0
+                                        try:
+                                            value = float(raw_value) if raw_value is not None else 0.0
+                                        except (TypeError, ValueError):
+                                            value = 0.0
+                                        total_micros[key] = total_micros.get(key, 0.0) + value * scale
                     except Exception:
                         continue
         

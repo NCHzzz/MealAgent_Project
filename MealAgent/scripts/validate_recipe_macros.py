@@ -305,6 +305,95 @@ async def _validate_macros_with_lm(
     }
 
 
+async def validate_macros(
+    recipe: Dict[str, Any],
+    base_lm: Optional[LM],
+    tree_data: Optional[TreeData] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Validate and (optionally) correct macros for **một recipe duy nhất** bằng LLM.
+
+    Hàm này nhận đúng các trường quan trọng từ `Recipe`:
+      - `dish_name`  : tên món ăn (tiếng Việt)
+      - `ingredients_with_qty` hoặc `ingredients` : danh sách nguyên liệu kèm số lượng
+      - `macros_per_serving` : các cột dinh dưỡng đã tính sẵn {kcal, protein_g, fat_g, carb_g}
+
+    Cách hoạt động:
+      1. Đóng gói recipe thành 1 batch gồm đúng 1 phần tử.
+      2. Gọi LLM (thông qua `_batch_validate_macros_with_lm`) để **đánh giá** macros hiện tại.
+      3. Nếu LLM cho verdict = "adjust" và trả về `macros_adjusted`, hàm sẽ trả về macros đã được
+         hiệu chỉnh; nếu không, giữ nguyên macros ban đầu.
+
+    Trả về:
+      - `None` nếu không có `base_lm` hoặc không parse được kết quả từ LLM.
+      - Ngược lại trả về dict:
+          {
+            "verdict": "ok" | "adjust" | "unknown",
+            "reason": <chuỗi giải thích ngắn>,
+            "macros": { "kcal": float, "protein_g": float, "fat_g": float, "carb_g": float } | None
+          }
+    """
+    if base_lm is None:
+        # Không có LLM → không thể đánh giá / sửa, trả về None để caller tự quyết định.
+        return None
+
+    # Nếu caller không truyền sẵn TreeData (khi dùng ngoài context Elysia),
+    # ta tạo một TreeData "rỗng" tối thiểu để dùng cho ElysiaChainOfThought.
+    if tree_data is None:
+        collection_data = CollectionData(collection_names=[])
+        atlas = Atlas()
+        environment = Environment(environment={}, self_info=False)
+        tree_data = TreeData(
+            collection_data=collection_data,
+            atlas=atlas,
+            environment=environment,
+        )
+
+    # Dùng lại batch‑validator nhưng với batch có đúng 1 recipe.
+    batch_results = await _batch_validate_macros_with_lm(
+        [recipe],
+        base_lm,
+        tree_data,
+    )
+
+    # ID dùng để map kết quả: ưu tiên UUID, sau đó tới food_id.
+    rid = str(recipe.get("_uuid") or recipe.get("food_id") or "").strip()
+    if not rid:
+        # Nếu không có bất kỳ ID nào, ta không thể map kết quả một cách an toàn.
+        logger.warning(
+            "validate_macros: recipe thiếu _uuid/food_id, không thể map kết quả LLM."
+        )
+        return None
+
+    result = batch_results.get(rid)
+    if not result:
+        # LLM không trả về verdict cho recipe này.
+        return {
+            "verdict": "unknown",
+            "reason": "No LLM verdict available for this recipe.",
+            "macros": recipe.get("macros_per_serving"),
+        }
+
+    verdict = result.get("verdict", "unknown")
+    reason = result.get("reason", "")
+    macros_adjusted = result.get("macros_adjusted")
+
+    # Nếu LLM bảo "ok" hoặc không có số liệu mới → giữ nguyên macros cũ.
+    if verdict != "adjust" or not macros_adjusted:
+        return {
+            "verdict": verdict or "unknown",
+            "reason": reason,
+            "macros": recipe.get("macros_per_serving"),
+        }
+
+    # Ngược lại, dùng macros đã được LLM hiệu chỉnh.
+    return {
+        "verdict": verdict,
+        "reason": reason,
+        "macros": macros_adjusted,
+    }
+
+
 async def _batch_validate_macros_with_lm(
     recipes: List[Dict[str, Any]],
     base_lm: Optional[LM],

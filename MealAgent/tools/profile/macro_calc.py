@@ -11,6 +11,7 @@ from MealAgent.utils.nutrition import (
     calculate_tdee,
     adjust_targets_by_goal,
 )
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 
 def _safe_float(value):
@@ -51,85 +52,149 @@ async def macro_calc_tool(
     yield Response("📊 Calculating your nutritional targets (TDEE & macros)...")
 
     try:
+        # Always use the **latest** profile snapshot from the environment.
+        # environment.find returns a history of Results; index 0 may be a stale
+        # version from earlier in the conversation (without updated macros).
         results = tree_data.environment.find("profile_crud_tool", "profile")
-        profile = results[0]["objects"][0] if results and results[0]["objects"] else None
+        profile = None
+        if results:
+            for entry in reversed(results):
+                objs = entry.get("objects") or []
+                if objs:
+                    profile = objs[0]
+                    break
+
+        # Hard refresh from Weaviate to ensure we see the most recent macros
+        # embedded in UserProfile (tdee_kcal, protein_g, fat_g, carb_g).
+        try:
+            user_id = None
+            if isinstance(profile, dict):
+                user_id = profile.get("user_id")
+            # Fallback to hidden_environment if user_id not present on profile
+            if not user_id:
+                hidden_env = getattr(tree_data.environment, "hidden_environment", {})
+                user_id = hidden_env.get("user_id")
+
+            if user_id:
+                client = client_manager.get_client()
+                collection = client.collections.get("UserProfile")
+                user_filter = build_filters_from_where(
+                    {"path": ["user_id"], "operator": "Equal", "valueString": str(user_id)}
+                )
+                fresh = collection.query.fetch_objects(filters=user_filter, limit=1)
+                if fresh.objects:
+                    profile = fresh.objects[0].properties
+        except Exception:
+            # If refresh fails, continue with whatever profile we already have.
+            logging.debug("macro_calc_tool: failed to hard-refresh profile from Weaviate", exc_info=True)
 
         fallback_reason = None
         targets: dict[str, float] | None = None
 
         if profile:
             try:
-                calorie_override = next(
-                    (
-                        profile.get(key)
-                        for key in (
-                            "target_calories",
-                            "daily_calorie_target",
-                            "calorie_target",
-                            "tdee_kcal",
-                        )
-                        if profile.get(key) is not None
-                    ),
-                    None,
-                )
+                # 1) Prefer pre-computed targets embedded in UserProfile if available.
+                #    This keeps the planning agent in sync with the values shown in the
+                #    `/auth/profile` API and frontend Profile page.
+                existing_tdee = _safe_float(profile.get("tdee_kcal"))
+                existing_protein = _safe_float(profile.get("protein_g"))
+                existing_fat = _safe_float(profile.get("fat_g"))
+                existing_carb = _safe_float(profile.get("carb_g"))
 
-                if calorie_override is not None:
-                    base_tdee = float(calorie_override)
+                if all(v is not None for v in (existing_tdee, existing_protein, existing_fat, existing_carb)):
+                    cal_protein = existing_protein * 4.0
+                    cal_fat = existing_fat * 9.0
+                    cal_carb = existing_carb * 4.0
+                    total_calo = cal_protein + cal_fat + cal_carb
+                    if total_calo <= 0 and existing_tdee:
+                        total_calo = float(existing_tdee)
+                    if total_calo <= 0:
+                        total_calo = 1.0  # safety fallback
+
+                    targets = {
+                        "tdee_kcal": float(existing_tdee),
+                        "protein_g": float(existing_protein),
+                        "fat_g": float(existing_fat),
+                        "carb_g": float(existing_carb),
+                        "split": {
+                            "protein": cal_protein / total_calo,
+                            "fat": cal_fat / total_calo,
+                            "carb": cal_carb / total_calo,
+                        },
+                    }
                 else:
-                    age_val = _safe_int(profile.get("age"))
-                    gender_val = str(profile.get("gender")) if profile.get("gender") else None
-                    weight_val = _safe_float(profile.get("weight_kg"))
-                    height_val = _safe_float(profile.get("height_cm"))
-                    activity_level = profile.get("activity_level")
-
-                    if None in (age_val, gender_val, weight_val, height_val) or not activity_level:
-                        raise ValueError("Profile missing required fields for TDEE calculation")
-
-                    # Use Mifflin-St Jeor for more accurate calculation
-                    base_tdee = calculate_tdee(
-                        age=age_val,
-                        gender=gender_val,
-                        weight_kg=weight_val,
-                        height_cm=height_val,
-                        activity_level=activity_level,
+                    # 2) Otherwise, derive targets from profile fields.
+                    calorie_override = next(
+                        (
+                            profile.get(key)
+                            for key in (
+                                "target_calories",
+                                "daily_calorie_target",
+                                "calorie_target",
+                                "tdee_kcal",
+                            )
+                            if profile.get(key) is not None
+                        ),
+                        None,
                     )
 
-                # Get goal and timeline from profile
-                goal = profile.get("goal")
-                goal_lower = goal.lower() if isinstance(goal, str) else None
-                weight_val = _safe_float(profile.get("weight_kg"))
-                height_val = _safe_float(profile.get("height_cm"))
-                age_val = _safe_int(profile.get("age"))
-                gender_val = str(profile.get("gender")) if profile.get("gender") else None
-                timeline_months = profile.get("timeline_months")
-                # Default to 3 months if not specified
-                if timeline_months is None:
-                    timeline_months = 3
-                else:
-                    timeline_months = int(timeline_months)
-                
-                # Use weight-based protein for gym/muscle_gain goals
-                use_weight_based = bool(goal_lower in ("muscle_gain", "gym") and weight_val)
-                
-                # Get macro overrides
-                protein_override = _safe_float(profile.get("protein_g"))
-                fat_override = _safe_float(profile.get("fat_g"))
-                carb_override = _safe_float(profile.get("carb_g"))
-                
-                # Adjust targets by goal (includes rounding)
-                targets = adjust_targets_by_goal(
-                    tdee=base_tdee,
-                    goal=goal,
-                    weight_kg=weight_val,
-                    age=age_val,
-                    gender=gender_val,
-                    height_cm=height_val,
-                    protein_override=protein_override,
-                    fat_override=fat_override,
-                    carb_override=carb_override,
-                    use_weight_based_protein=use_weight_based,
-                    timeline_months=timeline_months,
-                )
+                    if calorie_override is not None:
+                        base_tdee = float(calorie_override)
+                    else:
+                        age_val = _safe_int(profile.get("age"))
+                        gender_val = str(profile.get("gender")) if profile.get("gender") else None
+                        weight_val = _safe_float(profile.get("weight_kg"))
+                        height_val = _safe_float(profile.get("height_cm"))
+                        activity_level = profile.get("activity_level")
+
+                        if None in (age_val, gender_val, weight_val, height_val) or not activity_level:
+                            raise ValueError("Profile missing required fields for TDEE calculation")
+
+                        # Use Mifflin-St Jeor for more accurate calculation
+                        base_tdee = calculate_tdee(
+                            age=age_val,
+                            gender=gender_val,
+                            weight_kg=weight_val,
+                            height_cm=height_val,
+                            activity_level=activity_level,
+                        )
+
+                    # Get goal and timeline from profile
+                    goal = profile.get("goal")
+                    goal_lower = goal.lower() if isinstance(goal, str) else None
+                    weight_val = _safe_float(profile.get("weight_kg"))
+                    height_val = _safe_float(profile.get("height_cm"))
+                    age_val = _safe_int(profile.get("age"))
+                    gender_val = str(profile.get("gender")) if profile.get("gender") else None
+                    timeline_months = profile.get("timeline_months")
+                    # Default to 3 months if not specified
+                    if timeline_months is None:
+                        timeline_months = 3
+                    else:
+                        timeline_months = int(timeline_months)
+                    
+                    # Use weight-based protein for gym/muscle_gain goals
+                    use_weight_based = bool(goal_lower in ("muscle_gain", "gym") and weight_val)
+                    
+                    # Get macro overrides (if user ever explicitly overrides)
+                    protein_override = _safe_float(profile.get("protein_g"))
+                    fat_override = _safe_float(profile.get("fat_g"))
+                    carb_override = _safe_float(profile.get("carb_g"))
+                    
+                    # Adjust targets by goal (includes rounding)
+                    targets = adjust_targets_by_goal(
+                        tdee=base_tdee,
+                        goal=goal,
+                        weight_kg=weight_val,
+                        age=age_val,
+                        gender=gender_val,
+                        height_cm=height_val,
+                        protein_override=protein_override,
+                        fat_override=fat_override,
+                        carb_override=carb_override,
+                        use_weight_based_protein=use_weight_based,
+                        timeline_months=timeline_months,
+                    )
             except (KeyError, ValueError, TypeError) as exc:
                 logging.warning("macro_calc_tool: falling back to WHO defaults (%s)", exc)
                 fallback_reason = "profile_missing_fields"

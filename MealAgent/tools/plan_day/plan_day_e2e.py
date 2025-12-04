@@ -423,29 +423,11 @@ async def plan_day_e2e_tool(
         if profile_loaded and profile and resolved_user_id:
             yield Response(f"✅ Profile loaded for user {resolved_user_id}")
 
-        targets, targets_refreshed = await ensure_macro_targets(
-            tree_data=tree_data,
-            client_manager=client_manager,
-            user_id=resolved_user_id,
-            base_lm=base_lm,
-            complex_lm=complex_lm,
-            **kwargs,
-        )
-        if targets_refreshed and targets:
-            yield Response("🧮 Recalculating nutritional targets from your profile...")
-
-        if targets:
-            yield Response(
-                f"📊 Using your targets: {targets.get('tdee_kcal', 0):.0f} kcal | "
-                f"{targets.get('protein_g', 0):.0f}g protein | "
-                f"{targets.get('carb_g', 0):.0f}g carbs"
-            )
-        else:
-            targets = build_default_macro_targets()
-            yield Response(
-                f"📊 Using default targets: {targets['tdee_kcal']:.0f} kcal/day "
-                "(create a profile for personalized targets)"
-            )
+        # Defer macro target calculation until after we have a candidate recipe list.
+        # This aligns the execution flow with:
+        #   1) Fetch recipes from Weaviate
+        #   2) Then assemble a plan that respects the user's nutritional targets.
+        targets: Dict[str, Any] | None = None
 
         # Step 2: Read constraints filters (for validation)
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
@@ -698,6 +680,32 @@ async def plan_day_e2e_tool(
             yield Response(
                 f"⚠️ Only {len(recipes_with_macros)} recipe(s) have complete nutrition data. "
                 f"Plan may use estimated values for some recipes."
+            )
+
+        # At this point we have candidate recipes. Now ensure nutritional targets are ready,
+        # so the actual plan assembly uses the latest UserProfile-based macros.
+        targets, targets_refreshed = await ensure_macro_targets(
+            tree_data=tree_data,
+            client_manager=client_manager,
+            user_id=resolved_user_id,
+            base_lm=base_lm,
+            complex_lm=complex_lm,
+            **kwargs,
+        )
+        if targets_refreshed and targets:
+            yield Response("🧮 Recalculating nutritional targets from your profile...")
+
+        if targets:
+            yield Response(
+                f"📊 Using your targets: {targets.get('tdee_kcal', 0):.0f} kcal | "
+                f"{targets.get('protein_g', 0):.0f}g protein | "
+                f"{targets.get('carb_g', 0):.0f}g carbs"
+            )
+        else:
+            targets = build_default_macro_targets()
+            yield Response(
+                f"📊 Using default targets: {targets['tdee_kcal']:.0f} kcal/day "
+                "(create a profile for personalized targets)"
             )
 
         # Step 4: Assemble plan (Vietnamese meal pattern) with improved macro-aware selection
