@@ -13,9 +13,11 @@ from MealAgent.tools.utils.planning_helpers import (
     _validate_macro_targets,
     sync_plan_to_weaviate,
     _calculate_plan_micronutrients,
+    ensure_rfc3339_datetime,
 )
-from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 from MealAgent.utils.nutrition import build_default_macro_targets
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.recipe_refresh import refresh_recipes
 
 # Import macro fit calculation from plan_day for consistency
 def _calculate_recipe_fit_score(
@@ -392,26 +394,38 @@ async def plan_week_e2e_tool(
     min_variety_score: float = 50.0,
     user_id: str | None = None,
     plan_id: str | None = None,
+    recent_plan_window_minutes: int = 10,  # for testing; set to 10080 (7 days) in production
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Weekly end-to-end planner: combine ranked recipes and targets into a 7‑day (21‑meal) plan.
 
+    IMPORTANT: Recipes should have macros pre-calculated in the database.
+    This tool only reads macros from Weaviate, it does NOT calculate macros automatically.
+    Use `calculate_recipe_macros_tool` explicitly for new recipes that are missing macros.
+
     Environment contract:
       Reads
         • `macro_calc_tool.targets` – daily macros (multiplied internally ×7 for validation).
         • `constraints_guard_tool.filters` – guardrail filters.
-        • `search_and_rank_tool.topk` – ranked recipes with macros.
+        • `search_and_rank_tool.topk` – ranked recipes (should have `macros_per_serving` pre-calculated).
       Writes
         • `plan_week_e2e_tool.plan` – normalized weekly payload used by downstream tooling/UI.
-        • `plan_week_e2e_tool.missing_macros` – blocking recipe IDs (emptied via `_clear_missing_macro_state` once solved).
+        • `plan_week_e2e_tool.missing_macros` – list of recipe IDs missing macros (for manual calculation if needed).
 
     Decision hints:
-      • Use this tool when the user asks for a **weekly meal plan** (e.g. “lên thực đơn cả tuần”), not for ad‑hoc recipe lists.
+      • Use this tool when the user asks for a **weekly meal plan** (e.g. "lên thực đơn cả tuần"), not for ad‑hoc recipe lists.
       • `plan_week_e2e_tool.plan` existing implies success; consult metadata.valid & variety_score.
-      • Non-empty `missing_macros` tells the agent to call nutrition tools before retrying planning.
+      • Non-empty `missing_macros` indicates recipes need macro calculation (run `calculate_recipe_macros_tool`).
     """
-    logging.info("plan_week_e2e_tool: start")
+    logging.info(
+        "plan_week_e2e_tool: start query='%s' user_id=%s macro_tol=%.2f recent_window_min=%s variety_min=%.1f",
+        (query_text or "").strip(),
+        user_id,
+        macro_tolerance_percent,
+        recent_plan_window_minutes,
+        min_variety_score,
+    )
     yield Response("📅 Planning your weekly meals (21 meals over 7 days)...")
     
     try:
@@ -456,26 +470,36 @@ async def plan_week_e2e_tool(
         
         # Step 3: Read ranked recipes
         sr = tree_data.environment.find("search_and_rank_tool", "topk")
-        if not sr or not sr[0]["objects"]:
+        recipes = []
+        if sr:
+            for entry in reversed(sr):
+                objs = entry.get("objects") or []
+                if objs:
+                    recipes = objs
+                    break
+        logging.debug(
+            "plan_week_e2e_tool: recipes count=%d query='%s'",
+            len(recipes),
+            query_text,
+        )
+        if not recipes:
             yield Error(
                 "No recipes found. Please search for recipes first using search_and_rank_tool, "
                 "or check that your search query and constraints are not too restrictive."
             )
             return
-        recipes = sr[0]["objects"]
         
-        # IMPROVED VARIETY: Exclude recently used recipes to avoid repetition
+        # IMPROVED VARIETY: Exclude recently used recipes to avoid repetition (configurable window)
         # Check for recent plans and exclude their recipes
         try:
             client = client_manager.get_client()
             plan_collection = client.collections.get("MealPlan")
             item_collection = client.collections.get("MealPlanItem")
             
-            # Get recent plans (last 14 days) for this user
+            # Get recent plans within configured window (minutes)
             if user_id:
-                from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
-                
-                recent_date = (datetime.now() - timedelta(days=14)).isoformat()
+                window_minutes = max(1, int(recent_plan_window_minutes or 10))
+                recent_date = (datetime.now() - timedelta(minutes=window_minutes)).isoformat()
                 plan_filter = build_filters_from_where({
                     "operator": "And",
                     "operands": [
@@ -484,7 +508,7 @@ async def plan_week_e2e_tool(
                     ]
                 })
                 
-                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=20)
+                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=10)
                 if recent_plans.objects:
                     # Collect all recipe IDs from recent plans
                     recent_recipe_ids = set()
@@ -494,7 +518,7 @@ async def plan_week_e2e_tool(
                             item_filter = build_filters_from_where(
                                 {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
                             )
-                            items = item_collection.query.fetch_objects(filters=item_filter, limit=200)
+                            items = item_collection.query.fetch_objects(filters=item_filter, limit=100)
                             for item_obj in items.objects:
                                 recipe_id = item_obj.properties.get("recipe_id")
                                 if recipe_id:
@@ -519,54 +543,17 @@ async def plan_week_e2e_tool(
         if len(recipes) < 7:
             yield Response(f"⚠️ Warning: Only {len(recipes)} recipes available. Some recipes will be reused for 21 meals.")
         
-        # Check for missing macros and auto-calculate if base_lm is available
-        # OPTIMIZATION: Only check recipes that will actually be used (limit to reasonable count)
-        missing_macros = [
-            r for r in recipes[:30]  # Limit check to first 30 recipes for speed
-            if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict)
-            or not r.get("macros_per_serving", {}).get("kcal")
-        ]
-        if missing_macros:
-            effective_base_lm = base_lm or kwargs.get("base_lm")
-            if effective_base_lm and len(missing_macros) <= 15:  # Only auto-calculate if reasonable count
-                yield Response(f"🧮 Calculating nutrition for {len(missing_macros)} recipe(s)...")
-                calculated_count = 0
-                # Process in batches to avoid blocking
-                for recipe in missing_macros[:15]:  # Limit to 15 to avoid blocking
-                    food_id = recipe.get("food_id")
-                    if food_id:
-                        try:
-                            async for result in calculate_recipe_macros_tool(
-                                inputs={"recipe_id": str(food_id)},
-                                complex_lm=None,
-                                tree_data=tree_data,
-                                client_manager=client_manager,
-                                base_lm=effective_base_lm,
-                            ):
-                                if isinstance(result, Result) and result.name == "macros" and result.objects:
-                                    recipe["macros_per_serving"] = result.objects[0]
-                                    calculated_count += 1
-                                    break
-                                elif isinstance(result, Error):
-                                    break
-                        except Exception as exc:
-                            logging.warning(
-                                f"plan_week_e2e_tool: calculate_recipe_macros_tool failed for {food_id}: {exc}"
-                            )
-                            continue
-                if calculated_count > 0:
-                    yield Response(f"✅ Calculated nutrition for {calculated_count} recipe(s).")
-                if calculated_count < len(missing_macros):
-                    yield Response(f"⚠️ {len(missing_macros) - calculated_count} recipe(s) still missing nutrition data.")
-            else:
-                if len(missing_macros) > 15:
-                    logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving (too many to auto-calculate)")
-                    yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Some will be calculated during planning.")
-                else:
-                    logging.warning(f"plan_week_e2e_tool: {len(missing_macros)} recipes missing macros_per_serving")
-                    yield Response(f"Warning: {len(missing_macros)} recipes missing macros. Consider running calculate_recipe_macros_tool for accurate planning.")
+        # Refresh recipes from Weaviate to ensure we have latest macros
+        # Recipes should already have macros pre-calculated in the database
+        try:
+            client = client_manager.get_client()
+            recipes = refresh_recipes(recipes, client, collection_name="Recipe", hydrate_fields=True)
+            logging.debug(f"Refreshed {len(recipes)} recipes from Weaviate (hydrate macros + fields)")
+        except Exception as refresh_exc:
+            logging.debug(f"Failed to refresh recipes from Weaviate: {refresh_exc}")
+            # Continue with existing recipes if refresh fails
         
-        # Re-check for missing macros after auto-calculation attempt
+        # Check for missing macros (should be rare if recipes are pre-processed)
         missing_macros = [
             r for r in recipes
             if not r.get("macros_per_serving") or not isinstance(r.get("macros_per_serving"), dict)
@@ -574,11 +561,17 @@ async def plan_week_e2e_tool(
         ]
         
         if missing_macros:
-            missing_ids = ", ".join(str(r.get("food_id")) for r in missing_macros[:5])
-            _record_missing_macro_state(
+            missing_ids = [str(r.get("food_id")) for r in missing_macros[:10] if r.get("food_id")]
+            if missing_ids:
+                _record_missing_macro_state(tree_data, missing_ids)
+                yield Response(
+                    f"⚠️ {len(missing_macros)} recipe(s) missing nutrition data. "
+                    f"Run calculate_recipe_macros_tool for these recipes if needed. "
+                    f"Continuing with available recipes..."
+                )
                 tree_data,
                 [str(r.get("food_id")) for r in missing_macros if r.get("food_id")],
-            )
+            
             yield Error(
                 f"Cannot build weekly plan because {len(missing_macros)} recipe(s) still lack nutrition data "
                 f"(e.g. {missing_ids}). Please calculate macros before planning."
@@ -863,6 +856,17 @@ async def plan_week_e2e_tool(
             "fat_g": total_macros["fat_g"] / 7.0,
             "carb_g": total_macros["carb_g"] / 7.0,
         }
+        logging.debug(
+            "plan_week_e2e_tool: weekly totals kcal=%.1f protein=%.1f fat=%.1f carb=%.1f | avg/day kcal=%.1f protein=%.1f fat=%.1f carb=%.1f",
+            total_macros["kcal"],
+            total_macros["protein_g"],
+            total_macros["fat_g"],
+            total_macros["carb_g"],
+            average_daily_macros["kcal"],
+            average_daily_macros["protein_g"],
+            average_daily_macros["fat_g"],
+            average_daily_macros["carb_g"],
+        )
         
         # Step 6: Calculate variety score
         plan_for_variety = {

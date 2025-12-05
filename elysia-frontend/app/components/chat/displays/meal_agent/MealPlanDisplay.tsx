@@ -139,10 +139,24 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 </div>
                 {/* Macros per meal */}
                 <div className="flex gap-4 text-xs text-secondary mt-2">
-                  <span>
-                    {formatKcal(meal.macros?.kcal || 0)} | {formatMacro(meal.macros?.protein_g || 0)} P |{" "}
-                    {formatMacro(meal.macros?.fat_g || 0)} F | {formatMacro(meal.macros?.carb_g || 0)} C
-                  </span>
+                  {(() => {
+                    const main = meal.macros_main || meal.recipe?.macros_per_serving || meal.macros;
+                    const total = meal.macros_total || meal.macros;
+                    const useTotal = total && total !== main;
+                    return (
+                      <span className="space-x-1">
+                        <span>
+                          {formatKcal(main?.kcal || 0)} | {formatMacro(main?.protein_g || 0)} P |{" "}
+                          {formatMacro(main?.fat_g || 0)} F | {formatMacro(main?.carb_g || 0)} C
+                        </span>
+                        {useTotal && (
+                          <span className="text-[11px] text-secondary/80">
+                            (with sides: {formatKcal(total?.kcal || 0)})
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
                 </div>
                 {renderAccompaniments(meal.accompaniments)}
               </div>

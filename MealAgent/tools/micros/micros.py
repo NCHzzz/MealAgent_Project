@@ -95,6 +95,8 @@ async def micros_tool(
             rdas.update(rda_overrides)
         
         # Try to get gender from profile for RDA adjustments
+        # Note: Read from Environment first, but profile_crud_tool already reads from Weaviate
+        # so if profile exists in Environment, it should be relatively fresh
         profile_results = tree_data.environment.find("profile_crud_tool", "profile")
         if profile_results and profile_results[0]["objects"]:
             profile = profile_results[0]["objects"][0]

@@ -1,5 +1,7 @@
 from typing import AsyncGenerator, Dict, Any, List
 import logging
+import random
+from datetime import datetime, timedelta
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response, Retrieval
@@ -7,6 +9,7 @@ from elysia.util.client import ClientManager
 from elysia import tool
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.recipe_refresh import refresh_recipes
 from MealAgent.tools.utils.profile_targets import (
     ensure_macro_targets,
     ensure_profile_loaded,
@@ -157,9 +160,12 @@ async def _search_with_custom_logic(
     collection_name: str,
     limit: int,
     alpha: float,
+    *,
+    sample_size: int = 200,
+    randomize_offset: bool = True,
 ) -> List[Dict[str, Any]] | None:
     """
-    Use custom search logic (direct Weaviate queries).
+    Use custom search logic (direct Weaviate queries) with optional random offset sampling.
     Returns list of item properties or None if failed.
     """
     try:
@@ -176,16 +182,33 @@ async def _search_with_custom_logic(
         if constraints_results and constraints_results[0]["objects"]:
             where = constraints_results[0]["objects"][0].get("where")
 
+        # Determine fetch limit and offset for better diversity
+        fetch_limit = min(max(limit, 50), sample_size)
+        offset = 0
+        if randomize_offset:
+            try:
+                # Heuristic: random offset when query is empty/short to sample broader set
+                if not query_text or len(query_text.strip()) < 3:
+                    offset = random.randint(0, 3000)
+            except Exception:
+                offset = 0
+
         # Execute search with fallback
         def _hybrid():
-            return collection.query.hybrid(query=query_text, alpha=alpha, where=where if where else None, limit=limit)
+            return collection.query.hybrid(
+                query=query_text,
+                alpha=alpha,
+                where=where if where else None,
+                limit=fetch_limit,
+                offset=offset,
+            )
 
         def _bm25():
-            return collection.query.bm25(query=query_text, limit=limit)
+            return collection.query.bm25(query=query_text, limit=fetch_limit, offset=offset)
 
         def _fetch():
             filters = build_filters_from_where(where) if where else None
-            return collection.query.fetch_objects(filters=filters, limit=limit)
+            return collection.query.fetch_objects(filters=filters, limit=fetch_limit, offset=offset)
 
         results = None
         if query_text and query_text.strip():
@@ -210,7 +233,7 @@ async def _search_with_custom_logic(
                 try:
                     if where:
                         # Try without constraints
-                        results = collection.query.fetch_objects(limit=limit)
+                        results = collection.query.fetch_objects(limit=fetch_limit, offset=offset)
                     else:
                         results = None
                 except Exception:
@@ -282,10 +305,15 @@ async def search_and_rank_tool(
     user_id: str | None = None,
     base_lm=None,
     complex_lm=None,
+    recent_plan_window_minutes: int = 10,  # set 10080 for 7 days in production
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Hybrid recipe retrieval with constraint-aware filters, diversity scoring, and optional macro-fit ranking.
+
+    IMPORTANT: Recipes should have macros pre-calculated in the database.
+    This tool only reads macros from Weaviate, it does NOT calculate macros automatically.
+    Use `calculate_recipe_macros_tool` explicitly for new recipes that are missing macros.
 
     Modes:
       1. `ElysiaQuery` (LLM-optimized) when `use_elysia_query=True` and models are available.
@@ -303,13 +331,23 @@ async def search_and_rank_tool(
     Behaviour:
       • Never mutates profile or targets; it only reads environment state (profile/targets are owned by profile tools).
       • If no items are found, yields an `Error` and does not write `topk`.
+      • Reads recipes from Weaviate to get latest macros (recipes should be pre-processed).
 
     Decision hints:
       • If `search_and_rank_tool.topk` is **absent or empty**, planning tools must not attempt to build a plan.
       • Use this tool for “gợi ý món ăn / danh sách công thức”; use `plan_day_e2e_tool` / `plan_day_workflow_tool`
         when the user asks for a complete **thực đơn** (daily plan).
     """
-    logging.info(f"search_and_rank_tool: start (use_elysia_query={use_elysia_query})")
+    logging.info(
+        "search_and_rank_tool: start query='%s' collection=%s alpha=%.2f limit=%d top_k=%d user_id=%s use_elysia_query=%s",
+        (query_text or "").strip(),
+        collection_name,
+        alpha,
+        limit,
+        top_k,
+        user_id,
+        use_elysia_query,
+    )
     collection_display = "recipes" if collection_name == "Recipe" else collection_name.lower()
     yield Response(f"🔍 Searching and ranking {collection_display}...")
 
@@ -361,21 +399,79 @@ async def search_and_rank_tool(
                 # Fallback to custom search if Elysia Query fails
                 yield Response("⚠️ AI search unavailable, using standard search...")
                 items = await _search_with_custom_logic(
-                    tree_data, client_manager, query_text, collection_name, limit, alpha
+                tree_data,
+                client_manager,
+                query_text,
+                collection_name,
+                limit,
+                alpha,
+                sample_size=tool_kwargs.get("sample_size", 200),
+                randomize_offset=tool_kwargs.get("randomize_offset", True),
                 )
         else:
             # Option 2: Use custom search logic (default, deterministic)
             items = await _search_with_custom_logic(
-                tree_data, client_manager, query_text, collection_name, limit, alpha
+                tree_data,
+                client_manager,
+                query_text,
+                collection_name,
+                limit,
+                alpha,
+                sample_size=kwargs.get("sample_size", 200),
+                randomize_offset=kwargs.get("randomize_offset", True),
             )
 
         if not items:
             yield Error("No results found")
             return
+        logging.debug(
+            "search_and_rank_tool: raw items fetched=%d (collection=%s)",
+            len(items),
+            collection_name,
+        )
 
         # Normalize and deduplicate
         normalized = [_normalize_item(item, collection_name) for item in items]
         deduped = _deduplicate_items(normalized, collection_name)
+
+        # Exclude recipes present in recent MealPlans (avoid repetition)
+        if collection_name == "Recipe" and user_id:
+            try:
+                client = client_manager.get_client()
+                plan_collection = client.collections.get("MealPlan")
+                item_collection = client.collections.get("MealPlanItem")
+
+                window_minutes = max(1, int(recent_plan_window_minutes or 10))
+                recent_date = (datetime.now() - timedelta(minutes=window_minutes)).isoformat()
+                plan_filter = build_filters_from_where({
+                    "operator": "And",
+                    "operands": [
+                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                        {"path": ["created_at"], "operator": "GreaterThan", "valueDate": recent_date},
+                    ],
+                })
+                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=10)
+                recent_recipe_ids: set[str] = set()
+                for plan_obj in recent_plans.objects:
+                    plan_id = plan_obj.properties.get("plan_id")
+                    if not plan_id:
+                        continue
+                    item_filter = build_filters_from_where(
+                        {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
+                    )
+                    items_obj = item_collection.query.fetch_objects(filters=item_filter, limit=200)
+                    for it in items_obj.objects:
+                        rid = it.properties.get("recipe_id")
+                        if rid:
+                            recent_recipe_ids.add(str(rid))
+
+                if recent_recipe_ids:
+                    filtered = [r for r in deduped if str(r.get("food_id")) not in recent_recipe_ids]
+                    # Ensure we still have enough items; if not, fall back to deduped
+                    if len(filtered) >= max(top_k, 20):
+                        deduped = filtered
+            except Exception as e:
+                logging.debug(f"search_and_rank_tool: skip recent-plan exclusion due to error: {e}")
 
         # Targets (optional)
         targets_results = tree_data.environment.find("macro_calc_tool", "targets")
@@ -444,27 +540,35 @@ async def search_and_rank_tool(
             })
 
         scored_items.sort(key=lambda x: x.get("fit_score", 0.0), reverse=True)
-        
-        # IMPROVED VARIETY: Select diverse recipes to avoid repetition
-        # Strategy: Take top recipes but ensure variety by dish_name and ingredients
-        top_items = []
+
+        # IMPROVED VARIETY: randomize within a wider top pool and enforce macros presence
+        top_items: list[Dict[str, Any]] = []
         seen_dish_names: set[str] = set()
         seen_ingredient_sets: set[frozenset] = set()
-        
-        for item in scored_items:
+
+        # Build a larger pool then shuffle to increase diversity
+        pool_size = max(top_k * 3, top_k + 50, 60)
+        top_pool = scored_items[:pool_size]
+        random.shuffle(top_pool)
+
+        def _has_macros(item: Dict[str, Any]) -> bool:
+            macros = item.get("macros_per_serving", {})
+            return isinstance(macros, dict) and macros.get("kcal")
+
+        for item in top_pool:
             if len(top_items) >= top_k:
                 break
-            
-            dish_name = str(item.get("dish_name", "")).lower().strip()
-            # Check if we've seen this exact dish name
-            if dish_name and dish_name in seen_dish_names:
-                # Skip exact duplicates, but allow similar dishes
+
+            # Skip items without macros to avoid 0-kcal entries
+            if not _has_macros(item):
                 continue
-            
-            # Check ingredient overlap - avoid recipes with >80% same ingredients
+
+            dish_name = str(item.get("dish_name", "")).lower().strip()
+            if dish_name and dish_name in seen_dish_names:
+                continue
+
             ingredients = set(str(ing).lower().strip() for ing in item.get("ingredients", []))
             if ingredients:
-                # Check if this recipe has too many overlapping ingredients with already selected recipes
                 max_overlap_ratio = 0.0
                 for seen_ings in seen_ingredient_sets:
                     if seen_ings:
@@ -473,28 +577,56 @@ async def search_and_rank_tool(
                         if total > 0:
                             overlap_ratio = overlap / total
                             max_overlap_ratio = max(max_overlap_ratio, overlap_ratio)
-                
-                # If >80% overlap, skip to ensure variety
                 if max_overlap_ratio > 0.8:
                     continue
-            
-            # Add to selected items
+
             top_items.append(item)
             if dish_name:
                 seen_dish_names.add(dish_name)
             if ingredients:
                 seen_ingredient_sets.add(frozenset(ingredients))
-        
-        # If we don't have enough items after variety filtering, fill with remaining top items
-        if len(top_items) < top_k:
-            remaining = [item for item in scored_items if item not in top_items]
-            top_items.extend(remaining[:top_k - len(top_items)])
 
-        # Auto-calculate missing macros for top_k items if base_lm is available.
-        # OPTIMIZATION: Only calculate for items that will actually be used (top_k)
-        # and only when the number of missing recipes is small to avoid blocking.
-        missing_macros_count = 0
-        if collection_name == "Recipe" and base_lm:
+        # If still not enough, fill with remaining items that have macros
+        if len(top_items) < top_k:
+            remaining = [it for it in scored_items if it not in top_items and _has_macros(it)]
+            top_items.extend(remaining[: top_k - len(top_items)])
+
+        # Refresh recipes from Weaviate to ensure we have latest macros
+        # Recipes should already have macros pre-calculated in the database
+        if collection_name == "Recipe":
+            def _count_missing(items: list[Dict[str, Any]]) -> int:
+                return sum(
+                    1
+                    for item in items
+                    if not item.get("macros_per_serving")
+                    or not isinstance(item.get("macros_per_serving"), dict)
+                    or not item.get("macros_per_serving", {}).get("kcal")
+                )
+
+            missing_before_refresh = _count_missing(top_items)
+            try:
+                client = client_manager.get_client()
+                top_items = refresh_recipes(top_items, client, collection_name="Recipe", hydrate_fields=True)
+                missing_after_refresh = _count_missing(top_items)
+                missing_ids = [
+                    str(item.get("food_id") or item.get("recipe_id") or item.get("id"))
+                    for item in top_items
+                    if not item.get("macros_per_serving")
+                    or not isinstance(item.get("macros_per_serving"), dict)
+                    or not item.get("macros_per_serving", {}).get("kcal")
+                ][:5]
+                logging.debug(
+                    "search_and_rank_tool: refreshed %d recipes (missing macros before=%d, after=%d, sample_missing=%s)",
+                    len(top_items),
+                    missing_before_refresh,
+                    missing_after_refresh,
+                    missing_ids or "none",
+                )
+            except Exception as refresh_exc:
+                logging.debug(f"Failed to refresh recipes from Weaviate: {refresh_exc}")
+                # Continue with existing items if refresh fails
+            
+            # Check for missing macros (should be rare if recipes are pre-processed)
             missing_macros_count = sum(
                 1
                 for item in top_items
@@ -502,77 +634,35 @@ async def search_and_rank_tool(
                 or not isinstance(item.get("macros_per_serving"), dict)
                 or not item.get("macros_per_serving", {}).get("kcal")
             )
-
-            # Only auto-calculate if missing count is reasonable (<= 5) to avoid blocking
-            if 0 < missing_macros_count <= 5:
-                from MealAgent.tools.nutrition.calculate_recipe_macros import (
-                    calculate_recipe_macros_tool,
+            
+            logging.debug(
+                "search_and_rank_tool: scoring summary missing_macros=%d total_scored=%d top_items=%d",
+                missing_macros_count,
+                len(scored_items),
+                len(top_items),
+            )
+            for preview in top_items[:3]:
+                bd = preview.get("_score_breakdown", {})
+                logging.debug(
+                    "search_and_rank_tool: top preview id=%s dish=%s fit=%.2f macro=%s semantic=%s diversity=%s kcal=%s",
+                    preview.get("food_id") or preview.get("recipe_id") or preview.get("id"),
+                    preview.get("dish_name"),
+                    preview.get("fit_score"),
+                    bd.get("macro"),
+                    bd.get("semantic"),
+                    bd.get("diversity"),
+                    (preview.get("macros_per_serving") or {}).get("kcal"),
                 )
-
-                calculated_count = 0
-                failed_ids: list[str] = []
-                for item in top_items:
-                    macros = item.get("macros_per_serving", {})
-                    if (
-                        not macros
-                        or not isinstance(macros, dict)
-                        or not macros.get("kcal")
-                    ):
-                        # Missing macros - try to calculate
-                        food_id = item.get("food_id")
-                        if not food_id:
-                            continue
-                        try:
-                            async for result in calculate_recipe_macros_tool(
-                                inputs={"recipe_id": str(food_id)},
-                                complex_lm=None,
-                                tree_data=tree_data,
-                                client_manager=client_manager,
-                                base_lm=base_lm,
-                            ):
-                                if (
-                                    isinstance(result, Result)
-                                    and result.name == "macros"
-                                    and result.objects
-                                ):
-                                    item["macros_per_serving"] = result.objects[0]
-                                    calculated_count += 1
-                                    break
-                                elif isinstance(result, Error):
-                                    failed_ids.append(str(food_id))
-                                    break
-                        except Exception as e:
-                            logging.warning(
-                                "Failed to auto-calculate macros for recipe %s: %s",
-                                food_id,
-                                str(e),
-                            )
-                            failed_ids.append(str(food_id))
-
-                if calculated_count > 0:
-                    yield Response(
-                        f"🧮 Calculated nutrition for {calculated_count} recipe(s)."
-                    )
-
-                remaining_missing = [
-                    item
-                    for item in top_items
-                    if not isinstance(item.get("macros_per_serving"), dict)
+            
+            if missing_macros_count > 0:
+                sample_ids = ", ".join(
+                    str(item.get("food_id")) for item in top_items[:5]
+                    if not item.get("macros_per_serving") or not isinstance(item.get("macros_per_serving"), dict)
                     or not item.get("macros_per_serving", {}).get("kcal")
-                ]
-                if remaining_missing:
-                    sample_ids = ", ".join(
-                        str(item.get("food_id")) for item in remaining_missing[:5]
-                    )
-                    yield Response(
-                        f"⚠️ Still missing nutrition for {len(remaining_missing)} recipe(s) (e.g. {sample_ids}). "
-                        "Run calculate_recipe_macros_tool explicitly if needed."
-                    )
-            elif missing_macros_count > 5:
-                # Too many missing - skip auto-calculation to avoid blocking
+                )
                 yield Response(
-                    f"ℹ️ {missing_macros_count} recipes missing nutrition data. "
-                    "Planning tool will handle calculation as needed."
+                    f"⚠️ {missing_macros_count} recipe(s) missing nutrition data (e.g. {sample_ids}). "
+                    "Run calculate_recipe_macros_tool explicitly for new recipes."
                 )
 
         warn = ""

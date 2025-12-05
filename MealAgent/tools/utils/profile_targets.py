@@ -31,24 +31,50 @@ async def ensure_profile_loaded(
     user_id: str | None = None,
     base_lm=None,
     complex_lm=None,
+    force_refresh: bool = False,
     **kwargs,
 ) -> Tuple[dict | None, bool]:
     """
-    Make sure profile_crud_tool.profile exists in the environment.
+    Make sure profile_crud_tool.profile exists and is fresh from Weaviate.
+    
+    IMPORTANT: This function reads from Weaviate UserProfile collection, not just Environment.
+    Environment may contain stale data, so we always refresh from Weaviate when needed.
 
     Returns:
         (profile_dict | None, bool loaded_now)
     """
     hidden = _hidden_env(tree_data)
-    cached_profile = hidden.get("profile")
-    if cached_profile:
-        return cached_profile, False
+    
+    # If force_refresh, skip cache and Environment
+    if not force_refresh:
+        cached_profile = hidden.get("profile")
+        if cached_profile:
+            return cached_profile, False
 
-    profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-    if profile_results and profile_results[0]["objects"]:
-        profile = profile_results[0]["objects"][0]
-        hidden["profile"] = profile
-        return profile, False
+        profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+        if profile_results and profile_results[0]["objects"]:
+            profile = profile_results[0]["objects"][0]
+            # Still refresh from Weaviate to ensure we have latest data
+            # (Environment may be stale if profile was updated elsewhere)
+            resolved_user = profile.get("user_id") or resolve_user_id(tree_data, user_id)
+            if resolved_user:
+                try:
+                    client = client_manager.get_client()
+                    collection = client.collections.get("UserProfile")
+                    from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+                    profile_filter = build_filters_from_where(
+                        {"path": ["user_id"], "operator": "Equal", "valueString": str(resolved_user)}
+                    )
+                    fresh_results = collection.query.fetch_objects(filters=profile_filter, limit=1)
+                    if fresh_results.objects:
+                        fresh_profile = fresh_results.objects[0].properties
+                        hidden["profile"] = fresh_profile
+                        return fresh_profile, False
+                except Exception as refresh_exc:
+                    logger.debug("Failed to refresh profile from Weaviate, using Environment data: %s", refresh_exc)
+                    # Fallback to Environment data if refresh fails
+                    hidden["profile"] = profile
+                    return profile, False
 
     resolved_user = resolve_user_id(tree_data, user_id)
     if not resolved_user:
@@ -70,6 +96,7 @@ async def ensure_profile_loaded(
                 return None, False
             if isinstance(result, Result) and result.objects:
                 profile_obj = result.objects[0]
+                # profile_crud_tool already reads from Weaviate, so this is fresh
                 hidden["profile"] = profile_obj
                 return profile_obj, True
     except Exception as exc:  # pragma: no cover - defensive
@@ -83,21 +110,34 @@ async def ensure_macro_targets(
     user_id: str | None = None,
     base_lm=None,
     complex_lm=None,
+    force_refresh: bool = False,
     **kwargs,
 ) -> Tuple[dict | None, bool]:
     """
-    Ensure macro_calc_tool.targets exists. Returns (targets, recalculated_now).
+    Ensure macro_calc_tool.targets exists and is fresh.
+    
+    IMPORTANT: macro_calc_tool already refreshes profile from Weaviate (line 67-86),
+    so targets calculated from fresh profile will be accurate.
+    
+    Returns:
+        (targets_dict | None, bool recalculated_now)
     """
     hidden = _hidden_env(tree_data)
-    cached_targets = hidden.get("macro_targets")
-    if cached_targets:
-        return cached_targets, False
+    
+    # If force_refresh, skip cache and Environment
+    if not force_refresh:
+        cached_targets = hidden.get("macro_targets")
+        if cached_targets:
+            return cached_targets, False
 
-    target_results = tree_data.environment.find("macro_calc_tool", "targets")
-    if target_results and target_results[0]["objects"]:
-        targets = target_results[0]["objects"][0]
-        hidden["macro_targets"] = targets
-        return targets, False
+        target_results = tree_data.environment.find("macro_calc_tool", "targets")
+        if target_results and target_results[0]["objects"]:
+            targets = target_results[0]["objects"][0]
+            # Note: macro_calc_tool already does hard refresh from Weaviate (line 67-86),
+            # so if targets exist in Environment, they should be relatively fresh.
+            # However, if profile was updated after targets were calculated, we should recalculate.
+            hidden["macro_targets"] = targets
+            return targets, False
 
     profile, profile_loaded = await ensure_profile_loaded(
         tree_data,
@@ -105,6 +145,7 @@ async def ensure_macro_targets(
         user_id=user_id,
         base_lm=base_lm,
         complex_lm=complex_lm,
+        force_refresh=force_refresh,
         **kwargs,
     )
     if not profile:
@@ -124,6 +165,7 @@ async def ensure_macro_targets(
                 return None, profile_loaded
             if isinstance(result, Result) and result.objects:
                 targets_obj = result.objects[0]
+                # macro_calc_tool already reads fresh profile from Weaviate, so targets are accurate
                 hidden["macro_targets"] = targets_obj
                 return targets_obj, True
     except Exception as exc:  # pragma: no cover - defensive

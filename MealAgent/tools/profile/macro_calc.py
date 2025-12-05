@@ -122,6 +122,13 @@ async def macro_calc_tool(
                             "carb": cal_carb / total_calo,
                         },
                     }
+                    logging.debug(
+                        "macro_calc_tool: using existing profile targets tdee=%s protein=%s fat=%s carb=%s",
+                        existing_tdee,
+                        existing_protein,
+                        existing_fat,
+                        existing_carb,
+                    )
                 else:
                     # 2) Otherwise, derive targets from profile fields.
                     calorie_override = next(
@@ -194,6 +201,17 @@ async def macro_calc_tool(
                         carb_override=carb_override,
                         use_weight_based_protein=use_weight_based,
                         timeline_months=timeline_months,
+                    )
+                    logging.debug(
+                        "macro_calc_tool: derived targets tdee=%.1f protein=%.1f fat=%.1f carb=%.1f (goal=%s overrides=%s/%s/%s)",
+                        targets.get("tdee_kcal"),
+                        targets.get("protein_g"),
+                        targets.get("fat_g"),
+                        targets.get("carb_g"),
+                        goal,
+                        protein_override,
+                        fat_override,
+                        carb_override,
                     )
             except (KeyError, ValueError, TypeError) as exc:
                 logging.warning("macro_calc_tool: falling back to WHO defaults (%s)", exc)

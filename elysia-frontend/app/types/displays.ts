@@ -164,6 +164,20 @@ type MealComponent = {
   type?: string;
   recipe: MealRecipe;
   servings: number;
+  // Main macros = chỉ món chính (không tính accompaniments)
+  macros_main?: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
+  // Total macros = món chính + accompaniments (khi có)
+  macros_total?: {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+  };
   macros?: {
     kcal: number;
     protein_g: number;

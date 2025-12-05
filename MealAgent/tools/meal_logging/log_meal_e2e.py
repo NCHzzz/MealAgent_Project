@@ -1,13 +1,87 @@
 from typing import AsyncGenerator, Dict, Any, List
 import json
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 
+import dspy
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
 from elysia.util.client import ClientManager
+from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
 from elysia import tool
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _parse_meal_with_lm(meal_description: str, base_lm, tree_data: TreeData) -> Dict[str, Any]:
+    """Use the configured LM (dspy) to turn a free-text meal into structured fields."""
+    if base_lm is None:
+        raise ValueError("base_lm is required for LLM parsing")
+
+    class MealParseSignature(dspy.Signature):
+        """Parse meal description to dish name, ingredients array, and portion size."""
+
+        meal_description = dspy.InputField(
+            desc="Free-text meal description with dish name and ingredients."
+        )
+        dish = dspy.OutputField(desc="Dish name/title.")
+        ingredients = dspy.OutputField(
+            desc="List of objects: name, amount (number), unit (string)."
+        )
+        portion_size = dspy.OutputField(desc="Number of portions/servings (float).")
+
+    cot = ElysiaChainOfThought(
+        MealParseSignature,
+        tree_data=tree_data,
+        reasoning=False,
+        impossible=False,
+        message_update=False,
+    )
+    pred = await cot.aforward(lm=base_lm, meal_description=meal_description)
+
+    dish = str(getattr(pred, "dish", "") or "").strip()
+    ingredients = getattr(pred, "ingredients", []) or []
+    portion_size_raw = getattr(pred, "portion_size", 1.0)
+
+    # Normalise ingredients into expected dict shape
+    cleaned_ingredients: List[Dict[str, Any]] = []
+    if isinstance(ingredients, str):
+        try:
+            ingredients = json.loads(ingredients)
+        except json.JSONDecodeError:
+            ingredients = []
+    if isinstance(ingredients, list):
+        for item in ingredients:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            amount = item.get("amount")
+            try:
+                amount = float(amount) if amount is not None else 0.0
+            except (TypeError, ValueError):
+                amount = 0.0
+            unit = str(item.get("unit", "g") or "g").strip() or "g"
+            cleaned_ingredients.append({"name": name, "amount": amount, "unit": unit})
+
+    try:
+        portion_size = float(portion_size_raw) if portion_size_raw is not None else 1.0
+    except (TypeError, ValueError):
+        portion_size = 1.0
+
+    return {
+        "dish": dish or meal_description.strip() or "Meal",
+        "ingredients": cleaned_ingredients,
+        "portion_size": portion_size,
+    }
 
 
 @tool
@@ -41,43 +115,25 @@ async def log_meal_e2e_tool(
         yield Error("meal_description is required")
         return
 
-    # Parse with LLM
-    llm_prompt = f"""Parse this meal description into structured JSON:
-"{meal_description}"
-
-Return JSON with:
-- dish: dish name
-- ingredients: list of [{{"name": str, "amount": float, "unit": str}}]
-- portion_size: number (default 1.0)
-"""
+    # Parse meal with LM (fallback to simple parse on failure)
+    parse_warning = None
     try:
-        llm_response = await base_lm.generate_structured(
-            prompt=llm_prompt,
-            schema={
-                "type": "object",
-                "properties": {
-                    "dish": {"type": "string"},
-                    "ingredients": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string"},
-                                "amount": {"type": "number"},
-                                "unit": {"type": "string"},
-                            },
-                            "required": ["name"],
-                        },
-                    },
-                    "portion_size": {"type": "number"},
-                },
-                "required": ["dish", "ingredients"],
-            },
-        )
-        parsed_data = json.loads(llm_response) if isinstance(llm_response, str) else llm_response
+        parsed_data = await _parse_meal_with_lm(meal_description, base_lm, tree_data)
     except Exception as e:
-        yield Error(f"Failed to parse meal: {str(e)}")
-        return
+        parse_warning = f"LLM parsing fallback: {str(e)}"
+        yield Response("⚠️ LLM parsing failed, using simple fallback.")
+        parsed_data = {
+            "dish": meal_description.strip() or "Meal",
+            "ingredients": [],
+            "portion_size": 1.0,
+        }
+    logging.debug(
+        "log_meal_e2e_tool: parsed meal dish=%s portion=%s ingredients=%d warning=%s",
+        parsed_data.get("dish"),
+        parsed_data.get("portion_size"),
+        len(parsed_data.get("ingredients", [])),
+        parse_warning,
+    )
 
     # Nutrition calc + profile update
     try:
@@ -103,12 +159,21 @@ Return JSON with:
                 validated_ingredients.append({**ing, "fdc_id": f.get("fdc_id")})
             else:
                 validated_ingredients.append({**ing, "fdc_id": None, "validation_status": "not_found"})
+        logging.debug(
+            "log_meal_e2e_tool: validated ingredients %s",
+            [
+                (vi.get("name"), vi.get("fdc_id"), vi.get("validation_status"))
+                for vi in validated_ingredients[:10]
+            ],
+        )
 
         # Calculate nutrition
         portion_size = float(parsed_data.get("portion_size", 1.0))
         total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
         total_micros: Dict[str, float] = {}
         warnings: List[str] = []
+        if parse_warning:
+            warnings.append(parse_warning)
 
         for ing in validated_ingredients:
             fdc_id = ing.get("fdc_id")
@@ -176,15 +241,16 @@ Return JSON with:
             if profile_results.objects:
                 profile_uuid = profile_results.objects[0].uuid
 
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.now(timezone.utc)
+        today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
         today_filter = build_filters_from_where(
             {
                 "operator": "And",
                 "operands": [
                     {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                    {"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": today_start.isoformat()},
-                    {"path": ["logged_at"], "operator": "LessThan", "valueDate": today_end.isoformat()},
+                    {"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": today_start.isoformat().replace("+00:00", "Z")},
+                    {"path": ["logged_at"], "operator": "LessThan", "valueDate": today_end.isoformat().replace("+00:00", "Z")},
                 ],
             }
         )
@@ -211,10 +277,10 @@ Return JSON with:
         today_consumed["carb_g"] += total_macros["carb_g"]
 
         target_macros = {
-            "kcal": float(profile.get("tdee_kcal", 2000)),
-            "protein_g": float(profile.get("protein_g", 150)),
-            "fat_g": float(profile.get("fat_g", 67)),
-            "carb_g": float(profile.get("carb_g", 200)),
+            "kcal": _safe_float(profile.get("tdee_kcal", 2000), 2000.0),
+            "protein_g": _safe_float(profile.get("protein_g", 150), 150.0),
+            "fat_g": _safe_float(profile.get("fat_g", 67), 67.0),
+            "carb_g": _safe_float(profile.get("carb_g", 200), 200.0),
         }
         remaining_targets = {
             "kcal": max(0.0, target_macros["kcal"] - today_consumed["kcal"]),
@@ -223,10 +289,11 @@ Return JSON with:
             "carb_g": max(0.0, target_macros["carb_g"] - today_consumed["carb_g"]),
         }
 
+        logged_at_iso = now_utc.isoformat().replace("+00:00", "Z")
         log_entry = {
             "log_id": f"log_{user_id}_{int(datetime.now().timestamp())}",
             "user_id": user_id,
-            "logged_at": datetime.now().isoformat(),
+            "logged_at": logged_at_iso,
             "meal_description": meal_description,
             "parsed_dish": parsed_data.get("dish", ""),
             "ingredients": json.dumps(validated_ingredients),
@@ -238,7 +305,7 @@ Return JSON with:
         }
         log_collection.data.insert(log_entry)
 
-        profile["updated_at"] = datetime.now().isoformat()
+        profile["updated_at"] = logged_at_iso
         profile_collection.data.update(uuid=profile_uuid, properties=profile)
 
         updated = {
@@ -248,6 +315,22 @@ Return JSON with:
             "log_entry": log_entry,
             "warnings": warnings,
         }
+        logging.debug(
+            "log_meal_e2e_tool: totals meal kcal=%.1f protein=%.1f fat=%.1f carb=%.1f | today_consumed kcal=%.1f protein=%.1f fat=%.1f carb=%.1f | remaining kcal=%.1f protein=%.1f fat=%.1f carb=%.1f | logged_at=%s",
+            total_macros["kcal"],
+            total_macros["protein_g"],
+            total_macros["fat_g"],
+            total_macros["carb_g"],
+            today_consumed["kcal"],
+            today_consumed["protein_g"],
+            today_consumed["fat_g"],
+            today_consumed["carb_g"],
+            remaining_targets["kcal"],
+            remaining_targets["protein_g"],
+            remaining_targets["fat_g"],
+            remaining_targets["carb_g"],
+            logged_at_iso,
+        )
 
         # Stream response first for immediate feedback
         consumed_kcal = total_macros['kcal']

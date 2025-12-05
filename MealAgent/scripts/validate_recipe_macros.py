@@ -11,11 +11,11 @@ This script:
   4. Optionally writes the LLM‑adjusted macros back to Weaviate
 
 Usage:
-    python -m MealAgent.scripts.validate_recipe_macros --limit 200 --batch-size 100 --dry-run
+    python -m MealAgent.scripts.validate_recipe_macros --limit 200 --batch-size 25 --dry-run
 
 Options:
     --limit N       : Maximum number of recipes to inspect (default: all)
-    --batch-size N  : Recipes per LLM batch (default: 100)
+    --batch-size N  : Recipes per LLM batch (default: 25, use 10-20 if you see truncation errors)
     --dry-run       : Only report what would change, do not update Weaviate
 """
 
@@ -157,8 +157,18 @@ def init_base_lm(
                     "LM API key not provided. Validation will run without LLM insights."
                 )
                 return None
-            base_lm = dspy.LM(model=model, api_key=api_key)
-            logger.info("Initialized override base_lm with model: %s", model)
+            # Use max_tokens and temperature from settings if available
+            max_tokens = getattr(settings, "MAX_TOKENS", 16000)
+            temperature = getattr(settings, "TEMPERATURE", None)
+            lm_kwargs = {"model": model, "api_key": api_key, "max_tokens": max_tokens}
+            if temperature is not None:
+                lm_kwargs["temperature"] = temperature
+            base_lm = dspy.LM(**lm_kwargs)
+            logger.info(
+                "Initialized override base_lm with model: %s, max_tokens: %s",
+                model,
+                max_tokens,
+            )
             return base_lm
 
         base_lm = load_base_lm(settings)
@@ -430,10 +440,11 @@ async def _batch_validate_macros_with_lm(
             "id": uuid_value or r.get("food_id") or "",
             "food_id": r.get("food_id") or "",
             "dish_name": r.get("dish_name") or "",
-            "servings": servings,
+            "servings": servings,  # Total servings this recipe makes (for context only)
             "ingredients": [str(item) for item in ingredients],
             "cooking_notes": str(cooking_notes),
             # Macros can be missing or invalid; LLM should propose values when needed.
+            # IMPORTANT: macros_per_serving is ALWAYS per SINGLE serving, not total recipe.
             "macros_per_serving": {
                 "kcal": macros.get("kcal"),
                 "protein_g": macros.get("protein_g"),
@@ -449,10 +460,14 @@ async def _batch_validate_macros_with_lm(
         """
         Review whether the provided macros per serving are realistic for each recipe.
 
+        CRITICAL: All macros must be calculated and returned PER SINGLE SERVING, not for the entire recipe.
+        The "servings" field indicates how many servings the recipe makes, but macros_per_serving 
+        and macros_adjusted must always represent nutrition for ONE serving only.
+
         You are given a list of recipes. For *each* recipe:
-          - If macros look reasonable and are present, mark verdict "ok".
-          - If macros look wrong OR are missing/invalid, mark verdict "adjust" and
-            provide corrected macros_per_serving PER SERVING.
+          - If macros_per_serving look reasonable and are present, mark verdict "ok".
+          - If macros_per_serving look wrong OR are missing/invalid, mark verdict "adjust" and
+            provide corrected macros_per_serving PER SINGLE SERVING (divide total recipe macros by servings if needed).
 
         STRICT RESPONSE FORMAT (VERY IMPORTANT):
           - Respond with a single JSON array (no surrounding text, no comments).
@@ -462,10 +477,10 @@ async def _batch_validate_macros_with_lm(
                 "verdict": "ok" | "adjust",           // REQUIRED
                 "reason": "<short explanation>",      // REQUIRED
                 "macros_adjusted": {                  // REQUIRED when verdict=="adjust"
-                  "kcal": <number>,
-                  "protein_g": <number>,
-                  "fat_g": <number>,
-                  "carb_g": <number>
+                  "kcal": <number>,                   // PER SINGLE SERVING
+                  "protein_g": <number>,              // PER SINGLE SERVING
+                  "fat_g": <number>,                  // PER SINGLE SERVING
+                  "carb_g": <number>                  // PER SINGLE SERVING
                 }
               }
         """
@@ -473,7 +488,8 @@ async def _batch_validate_macros_with_lm(
         recipes = dspy.InputField(
             description=(
                 "JSON array of recipes, each with fields: id, food_id, dish_name, "
-                "servings, ingredients, cooking_notes, macros_per_serving."
+                "servings (total servings recipe makes), ingredients, cooking_notes, "
+                "macros_per_serving (nutrition per SINGLE serving: {kcal, protein_g, fat_g, carb_g})."
             )
         )
         batch_result_json = dspy.OutputField(
@@ -502,15 +518,33 @@ async def _batch_validate_macros_with_lm(
         logger.warning("Batch LLM validation returned empty output.")
         return {}
 
+    # Check if output appears truncated (missing closing bracket or incomplete JSON)
+    start = raw_output.find("[")
+    end = raw_output.rfind("]")
+    is_truncated = start == -1 or end == -1 or end <= start
+    
+    # Additional check: if output ends abruptly without proper closing
+    if not is_truncated and end < len(raw_output) - 10:
+        # Check if there's incomplete JSON at the end
+        remaining = raw_output[end + 1:].strip()
+        if remaining and not remaining.startswith(('}', ']', ',')):
+            # Might be truncated
+            is_truncated = True
+
     # Try to robustly extract the JSON array even if the model adds stray text.
+    parsed = None
     try:
         # If the model followed instructions, this should succeed directly.
         parsed = json.loads(raw_output)
-    except Exception:
+    except json.JSONDecodeError as json_exc:
+        # Check if error is due to incomplete JSON (truncated in middle of object)
+        error_pos = getattr(json_exc, 'pos', None)
+        if error_pos and error_pos < len(raw_output) - 100:
+            # Likely truncated in the middle - try to extract complete objects
+            is_truncated = True
+        
         try:
             # Try to find JSON array in the output
-            start = raw_output.find("[")
-            end = raw_output.rfind("]")
             if start != -1 and end != -1 and end > start:
                 json_str = raw_output[start : end + 1]
                 parsed = json.loads(json_str)
@@ -523,7 +557,86 @@ async def _batch_validate_macros_with_lm(
             logger.error("LLM output preview (first 500 chars): %s", output_preview)
             if len(raw_output) > 500:
                 logger.error("... (output truncated, total length: %d chars)", len(raw_output))
-            return {}
+            
+            # If truncated, try to parse partial results before raising exception
+            if is_truncated and start != -1:
+                # Try to extract as many complete JSON objects as possible
+                try:
+                    partial_json = raw_output[start:]
+                    
+                    # Improved algorithm: find all complete JSON objects
+                    # Track positions of complete objects (balanced braces)
+                    brace_count = 0
+                    object_starts = []
+                    object_ends = []
+                    in_string = False
+                    escape_next = False
+                    
+                    for i, char in enumerate(partial_json):
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if char == '\\':
+                            escape_next = True
+                            continue
+                        if char == '"' and not escape_next:
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
+                            
+                        if char == '{':
+                            if brace_count == 0:
+                                object_starts.append(i)
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0 and object_starts:
+                                object_ends.append(i)
+                    
+                    # Extract all complete objects
+                    if object_ends:
+                        last_complete_pos = object_ends[-1]
+                        partial_str = partial_json[:last_complete_pos + 1]
+                        # Make it a valid JSON array
+                        if not partial_str.strip().startswith('['):
+                            partial_str = '[' + partial_str
+                        if not partial_str.strip().endswith(']'):
+                            partial_str = partial_str + ']'
+                        try:
+                            parsed = json.loads(partial_str)
+                            logger.warning(
+                                "Parsed %d complete items from truncated output (out of %d recipes in batch). "
+                                "Remaining recipes will be treated as OK/unchanged.",
+                                len(parsed) if isinstance(parsed, list) else 0,
+                                len(recipes)
+                            )
+                        except Exception as parse_exc:
+                            logger.debug("Failed to parse partial JSON: %s", parse_exc)
+                            pass
+                except Exception as extract_exc:
+                    logger.debug("Failed to extract partial results: %s", extract_exc)
+                    pass
+            
+            # If we still don't have parsed results and it's truncated, log warning but continue
+            if parsed is None and is_truncated:
+                current_max_tokens = getattr(base_lm, 'max_tokens', None) if base_lm else None
+                logger.warning(
+                    "LLM output truncated and could not extract partial results. "
+                    "All recipes in this batch will be treated as OK/unchanged. "
+                    "Current max_tokens: %s. Consider: "
+                    "1) Reducing batch size (--batch-size 10-15), "
+                    "2) Increasing max_tokens (configure(max_tokens=32000) or export MAX_TOKENS=32000)",
+                    current_max_tokens
+                )
+                return {}
+            # If not truncated but still failed to parse, return empty (might be other issue)
+            if parsed is None:
+                logger.warning("Could not parse LLM output. Treating batch as OK/unchanged.")
+                return {}
+    except Exception as exc:
+        logger.error("Unexpected error parsing LLM output: %s", exc)
+        return {}
 
     if not isinstance(parsed, list):
         logger.error("Batch LLM JSON output is not a list. Got type: %s", type(parsed))
@@ -641,11 +754,48 @@ async def process_recipes(
         logger.info("%s", "=" * 60)
 
         # Single LLM call for the entire batch.
-        batch_results = await _batch_validate_macros_with_lm(
-            batch,
-            base_lm,
-            tree_data,
-        )
+        # If truncation occurs, automatically split into smaller batches.
+        batch_results = {}
+        try:
+            batch_results = await _batch_validate_macros_with_lm(
+                batch,
+                base_lm,
+                tree_data,
+            )
+        except ValueError as e:
+            if "truncated" in str(e).lower() or "batch too large" in str(e).lower():
+                logger.warning(
+                    "Batch %d was too large and got truncated. Splitting into smaller batches...",
+                    batch_num,
+                )
+                # Split into smaller batches (half the size, minimum 5)
+                sub_batch_size = max(5, len(batch) // 2)
+                sub_batch_num = 1
+                for sub_idx in range(0, len(batch), sub_batch_size):
+                    sub_batch = batch[sub_idx : sub_idx + sub_batch_size]
+                    logger.info(
+                        "  Processing sub-batch %d/%d (%d recipes)...",
+                        sub_batch_num,
+                        (len(batch) + sub_batch_size - 1) // sub_batch_size,
+                        len(sub_batch),
+                    )
+                    try:
+                        sub_results = await _batch_validate_macros_with_lm(
+                            sub_batch,
+                            base_lm,
+                            tree_data,
+                        )
+                        batch_results.update(sub_results)
+                    except Exception as sub_exc:
+                        logger.error(
+                            "  Sub-batch %d failed: %s. Continuing with remaining recipes...",
+                            sub_batch_num,
+                            sub_exc,
+                        )
+                    sub_batch_num += 1
+            else:
+                logger.error("Batch %d failed with error: %s", batch_num, e)
+                # Continue with next batch
 
         for recipe in batch:
             stats["processed"] += 1
@@ -721,8 +871,8 @@ async def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=100,
-        help="Recipes per LLM batch (default: 100 recipes per single LLM call).",
+        default=25,
+        help="Recipes per LLM batch (default: 25 recipes per single LLM call). Use smaller batches (10-20) if you see truncation errors.",
     )
     parser.add_argument(
         "--dry-run",

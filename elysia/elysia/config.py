@@ -192,6 +192,10 @@ class Settings:
         self.BASE_USE_REASONING = True
         self.COMPLEX_USE_REASONING = True
 
+        # LM configuration
+        self.MAX_TOKENS: int = 16000  # Increased default to reduce truncation
+        self.TEMPERATURE: float | None = None  # None = use model default
+
     def setup_app_logger(self, logger: logging.Logger):
         """
         Override existing logger with the app-level logger.
@@ -258,6 +262,13 @@ class Settings:
         self.COMPLEX_PROVIDER = os.getenv("COMPLEX_PROVIDER", None)
         self.MODEL_API_BASE = os.getenv("MODEL_API_BASE", None)
         self.LOGGING_LEVEL = os.getenv("LOGGING_LEVEL", "NOTSET")
+        
+        # LM configuration from environment
+        max_tokens_env = os.getenv("MAX_TOKENS")
+        self.MAX_TOKENS = int(max_tokens_env) if max_tokens_env else 16000
+        temperature_env = os.getenv("TEMPERATURE")
+        self.TEMPERATURE = float(temperature_env) if temperature_env else None
+        
         self.WEAVIATE_IS_LOCAL = os.getenv("WEAVIATE_IS_LOCAL", "False") == "True"
         self.LOCAL_WEAVIATE_PORT = os.getenv("LOCAL_WEAVIATE_PORT", 8080)
         self.LOCAL_WEAVIATE_GRPC_PORT = os.getenv("LOCAL_WEAVIATE_GRPC_PORT", 50051)
@@ -384,6 +395,8 @@ class Settings:
                     If True, the model will generate reasoning before coming to its solution.
                 - complex_use_reasoning (bool): Whether to use reasoning output for the complex model.
                     If True, the model will generate reasoning before coming to its solution.
+                - max_tokens (int): Maximum tokens for LM responses. Default: 16000. Increase if you see truncation warnings.
+                - temperature (float | None): Temperature for LM generation. None uses model default. Default: None.
                 - Additional API keys to set. E.g. `openai_apikey="..."`, if this argument ends with `apikey` or `api_key`,
                     it will be added to the `API_KEYS` dictionary.
 
@@ -548,6 +561,15 @@ class Settings:
         if "complex_use_reasoning" in kwargs:
             self.COMPLEX_USE_REASONING = kwargs["complex_use_reasoning"]
             kwargs.pop("complex_use_reasoning")
+
+        if "max_tokens" in kwargs:
+            self.MAX_TOKENS = int(kwargs["max_tokens"])
+            kwargs.pop("max_tokens")
+
+        if "temperature" in kwargs:
+            temp_val = kwargs["temperature"]
+            self.TEMPERATURE = float(temp_val) if temp_val is not None else None
+            kwargs.pop("temperature")
 
         if "api_keys" in kwargs and isinstance(kwargs["api_keys"], dict):
             for key, value in kwargs["api_keys"].items():
@@ -845,6 +867,7 @@ def load_base_lm(settings: Settings) -> LM:
         settings.BASE_PROVIDER,
         settings.BASE_MODEL,
         settings.MODEL_API_BASE if "MODEL_API_BASE" in dir(settings) else None,
+        settings=settings,
     )
 
 
@@ -855,6 +878,7 @@ def load_complex_lm(settings: Settings) -> LM:
         settings.COMPLEX_PROVIDER,
         settings.COMPLEX_MODEL,
         settings.MODEL_API_BASE if "MODEL_API_BASE" in dir(settings) else None,
+        settings=settings,
     )
 
 
@@ -862,6 +886,7 @@ def load_lm(
     provider: str | None,
     lm_name: str | None,
     model_api_base: str | None = None,
+    settings: Settings | None = None,
 ) -> LM:
 
     if provider is None or lm_name is None:
@@ -869,15 +894,33 @@ def load_lm(
 
     full_lm_name = f"{provider}/{lm_name}"
 
+    # Get max_tokens and temperature from settings if provided
+    max_tokens = 16000  # Default increased from 8000
+    temperature = None
+    
+    if settings is not None:
+        max_tokens = getattr(settings, "MAX_TOKENS", 16000)
+        temperature = getattr(settings, "TEMPERATURE", None)
+
+    # Special handling for o1/o3 models (reasoning models)
     if lm_name.startswith("o1") or lm_name.startswith("o3"):
         return LM(
             model=full_lm_name,
             api_base=model_api_base,
-            max_tokens=8000,
-            temperature=1.0,
+            max_tokens=max_tokens,
+            temperature=temperature if temperature is not None else 1.0,
         )
 
-    return LM(model=full_lm_name, api_base=model_api_base, max_tokens=8000)
+    # For other models, use configured temperature or None (model default)
+    lm_kwargs = {
+        "model": full_lm_name,
+        "api_base": model_api_base,
+        "max_tokens": max_tokens,
+    }
+    if temperature is not None:
+        lm_kwargs["temperature"] = temperature
+    
+    return LM(**lm_kwargs)
 
 
 # global settings that should never be used by the frontend
