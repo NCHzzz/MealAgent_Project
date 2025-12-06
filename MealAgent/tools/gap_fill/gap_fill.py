@@ -107,27 +107,53 @@ async def gap_fill_tool(
     yield Response("🔍 Analyzing your meal plan for nutritional gaps...")
     
     try:
-        # Step 1: Read plan from E2E tools
+        # Step 1: Load plan from Weaviate database (source of truth)
+        # IMPORTANT: Always load from database, not from environment cache
         plan = None
         plan_source = None
         
-        day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-        if day_plan_results and day_plan_results[0]["objects"]:
-            plan = copy.deepcopy(day_plan_results[0]["objects"][0])
-            plan_source = "plan_day_e2e_tool"
-        else:
-            week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-            if week_plan_results and week_plan_results[0]["objects"]:
-                plan = copy.deepcopy(week_plan_results[0]["objects"][0])
-                plan_source = "plan_week_e2e_tool"
+        if plan_id:
+            # Load specific plan by plan_id
+            from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+            plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
+            if plan:
+                plan_source = plan.get("plan_type", "day") + "_plan"
             else:
-                yield Error("No plan found. Run plan_day_e2e_tool or plan_week_e2e_tool first.")
+                yield Error(f"Plan {plan_id} not found in database.")
                 return
-        plan_user_id = plan.get("user_id") or user_id
-        if plan_id or plan.get("plan_id"):
-            plan["plan_id"] = plan.get("plan_id") or plan_id
+        elif user_id:
+            # Load latest plan for user
+            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+            # Try day plan first
+            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+            if plan:
+                plan_source = "day_plan"
+            else:
+                # Try week plan
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+                if plan:
+                    plan_source = "week_plan"
         else:
-            plan_id = None
+            # Fallback: try environment cache (only as last resort)
+            logger.warning("gap_fill_tool: No plan_id or user_id provided, trying environment cache")
+            day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+            if day_plan_results and day_plan_results[0]["objects"]:
+                plan = copy.deepcopy(day_plan_results[0]["objects"][0])
+                plan_source = "plan_day_e2e_tool"
+                yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+            else:
+                week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+                if week_plan_results and week_plan_results[0]["objects"]:
+                    plan = copy.deepcopy(week_plan_results[0]["objects"][0])
+                    plan_source = "plan_week_e2e_tool"
+                    yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+        
+        if not plan:
+            yield Error("No plan found. Please provide plan_id or user_id, or run plan_day_e2e_tool/plan_week_e2e_tool first.")
+            return
+        
+        plan_user_id = plan.get("user_id") or user_id
+        plan_id = plan.get("plan_id") or plan_id
         
         # Step 2: Read targets (auto-calculate if missing)
         targets, targets_refreshed = await ensure_macro_targets(

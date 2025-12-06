@@ -12,6 +12,11 @@ from MealAgent.tools.utils.planning_helpers import (
     _get_meal_macros,
     _validate_macro_targets,
     _validate_constraints,
+    _calculate_meal_targets,
+    _scale_main_by_protein,
+    _scale_carb_by_kcal,
+    _calculate_total_deviation_score,
+    _try_swap_alternatives,
 )
 
 
@@ -203,4 +208,469 @@ def test_validate_constraints_no_violations():
     validation = _validate_constraints(plan, diet_types=["vegetarian"], exclude_allergens=["dairy"])
     assert validation["valid"] is True
     assert len(validation["violations"]) == 0
+
+
+# Phase 1.1 Tests: Protein-first scaling and kcal-scaling
+
+
+def test_calculate_meal_targets_breakfast():
+    """Test calculating meal targets for breakfast."""
+    targets = {
+        "tdee_kcal": 2000.0,
+        "protein_g": 150.0,
+        "fat_g": 67.0,
+        "carb_g": 200.0,
+    }
+    
+    meal_targets = _calculate_meal_targets(targets, "breakfast")
+    assert meal_targets["kcal"] == 500.0  # 25% of 2000
+    assert meal_targets["protein_g"] == 37.5  # 25% of 150
+    assert meal_targets["fat_g"] == 16.75  # 25% of 67
+    assert meal_targets["carb_g"] == 50.0  # 25% of 200
+
+
+def test_calculate_meal_targets_lunch():
+    """Test calculating meal targets for lunch."""
+    targets = {
+        "tdee_kcal": 2000.0,
+        "protein_g": 150.0,
+        "fat_g": 67.0,
+        "carb_g": 200.0,
+    }
+    
+    meal_targets = _calculate_meal_targets(targets, "lunch")
+    # Lunch is 110% of average (2000/3 * 1.1 = 733.33)
+    assert abs(meal_targets["kcal"] - 733.33) < 1.0
+    assert abs(meal_targets["protein_g"] - 55.0) < 1.0  # 150/3 * 1.1
+    assert abs(meal_targets["fat_g"] - 24.57) < 1.0  # 67/3 * 1.1
+    assert abs(meal_targets["carb_g"] - 73.33) < 1.0  # 200/3 * 1.1
+
+
+def test_calculate_meal_targets_dinner():
+    """Test calculating meal targets for dinner."""
+    targets = {
+        "tdee_kcal": 2000.0,
+        "protein_g": 150.0,
+        "fat_g": 67.0,
+        "carb_g": 200.0,
+    }
+    
+    meal_targets = _calculate_meal_targets(targets, "dinner")
+    # Dinner is 110% of average (2000/3 * 1.1 = 733.33)
+    assert abs(meal_targets["kcal"] - 733.33) < 1.0
+    assert abs(meal_targets["protein_g"] - 55.0) < 1.0  # 150/3 * 1.1
+    assert abs(meal_targets["fat_g"] - 24.57) < 1.0  # 67/3 * 1.1
+    assert abs(meal_targets["carb_g"] - 73.33) < 1.0  # 200/3 * 1.1
+
+
+def test_scale_main_by_protein_exact_match():
+    """Test scaling main dish when protein matches target exactly."""
+    main_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 30.0,
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    target_protein = 30.0
+    scale = _scale_main_by_protein(main_recipe, target_protein)
+    assert scale == 1.0  # Exact match
+
+
+def test_scale_main_by_protein_under_target():
+    """Test scaling main dish when recipe has less protein than target."""
+    main_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 20.0,  # Less than target
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    target_protein = 30.0
+    scale = _scale_main_by_protein(main_recipe, target_protein)
+    assert scale == 1.5  # 30/20 = 1.5 (clamped at max)
+
+
+def test_scale_main_by_protein_over_target():
+    """Test scaling main dish when recipe has more protein than target."""
+    main_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 60.0,  # More than target
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    target_protein = 30.0
+    scale = _scale_main_by_protein(main_recipe, target_protein)
+    assert scale == 0.5  # 30/60 = 0.5 (clamped at min)
+
+
+def test_scale_main_by_protein_no_protein_data():
+    """Test scaling main dish when recipe has no protein data."""
+    main_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 0.0,  # No protein data
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    target_protein = 30.0
+    scale = _scale_main_by_protein(main_recipe, target_protein)
+    assert scale == 1.0  # Fallback to 1.0
+
+
+def test_scale_carb_by_kcal_exact_match():
+    """Test scaling carb dish when kcal matches target exactly."""
+    carb_recipe = {
+        "food_id": "carb_001",
+        "dish_name": "Steamed Rice",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 45.0,
+        },
+    }
+    
+    kcal_missing = 200.0
+    scale = _scale_carb_by_kcal(carb_recipe, kcal_missing)
+    assert scale == 1.0  # Exact match
+
+
+def test_scale_carb_by_kcal_under_target():
+    """Test scaling carb dish when recipe has less kcal than target."""
+    carb_recipe = {
+        "food_id": "carb_001",
+        "dish_name": "Steamed Rice",
+        "macros_per_serving": {
+            "kcal": 150.0,  # Less than target
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 45.0,
+        },
+    }
+    
+    kcal_missing = 300.0
+    scale = _scale_carb_by_kcal(carb_recipe, kcal_missing)
+    assert scale == 2.0  # 300/150 = 2.0 (clamped at max)
+
+
+def test_scale_carb_by_kcal_over_target():
+    """Test scaling carb dish when recipe has more kcal than target."""
+    carb_recipe = {
+        "food_id": "carb_001",
+        "dish_name": "Steamed Rice",
+        "macros_per_serving": {
+            "kcal": 400.0,  # More than target
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 45.0,
+        },
+    }
+    
+    kcal_missing = 200.0
+    scale = _scale_carb_by_kcal(carb_recipe, kcal_missing)
+    assert scale == 0.5  # 200/400 = 0.5 (clamped at min)
+
+
+def test_scale_carb_by_kcal_no_kcal_data():
+    """Test scaling carb dish when recipe has no kcal data."""
+    carb_recipe = {
+        "food_id": "carb_001",
+        "dish_name": "Steamed Rice",
+        "macros_per_serving": {
+            "kcal": 0.0,  # No kcal data
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 45.0,
+        },
+    }
+    
+    kcal_missing = 200.0
+    scale = _scale_carb_by_kcal(carb_recipe, kcal_missing)
+    assert scale == 1.0  # Fallback to 1.0
+
+
+def test_scale_main_by_protein_clamping():
+    """Test that scaling factors are clamped within min/max bounds."""
+    main_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 10.0,  # Very low protein
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    target_protein = 30.0
+    scale = _scale_main_by_protein(main_recipe, target_protein, min_scale=0.5, max_scale=1.5)
+    # 30/10 = 3.0, but should be clamped to 1.5
+    assert scale == 1.5
+    
+    # Test min clamping
+    main_recipe_high = {
+        "food_id": "main_002",
+        "dish_name": "High Protein Dish",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 100.0,  # Very high protein
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    scale_min = _scale_main_by_protein(main_recipe_high, target_protein, min_scale=0.5, max_scale=1.5)
+    # 30/100 = 0.3, but should be clamped to 0.5
+    assert scale_min == 0.5
+
+
+def test_scale_carb_by_kcal_clamping():
+    """Test that carb scaling factors are clamped within min/max bounds."""
+    carb_recipe = {
+        "food_id": "carb_001",
+        "dish_name": "Steamed Rice",
+        "macros_per_serving": {
+            "kcal": 100.0,  # Very low kcal
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 45.0,
+        },
+    }
+    
+    kcal_missing = 500.0
+    scale = _scale_carb_by_kcal(carb_recipe, kcal_missing, min_scale=0.5, max_scale=2.0)
+    # 500/100 = 5.0, but should be clamped to 2.0
+    assert scale == 2.0
+    
+    # Test min clamping
+    carb_recipe_high = {
+        "food_id": "carb_002",
+        "dish_name": "High Calorie Rice",
+        "macros_per_serving": {
+            "kcal": 500.0,  # Very high kcal
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 45.0,
+        },
+    }
+    
+    kcal_missing_low = 100.0
+    scale_min = _scale_carb_by_kcal(carb_recipe_high, kcal_missing_low, min_scale=0.5, max_scale=2.0)
+    # 100/500 = 0.2, but should be clamped to 0.5
+    assert scale_min == 0.5
+
+
+# Phase 1.2 Tests: Iterative adjust logic
+
+
+def test_calculate_total_deviation_score_exact_match():
+    """Test calculating total deviation score when macros match exactly."""
+    actual = {"kcal": 2000.0, "protein_g": 150.0, "fat_g": 67.0, "carb_g": 200.0}
+    target = {"kcal": 2000.0, "protein_g": 150.0, "fat_g": 67.0, "carb_g": 200.0}
+    
+    score = _calculate_total_deviation_score(actual, target)
+    assert score == 0.0  # Perfect match
+
+
+def test_calculate_total_deviation_score_20_percent_over():
+    """Test calculating total deviation score when 20% over target."""
+    actual = {"kcal": 2400.0, "protein_g": 180.0, "fat_g": 80.0, "carb_g": 240.0}
+    target = {"kcal": 2000.0, "protein_g": 150.0, "fat_g": 67.0, "carb_g": 200.0}
+    
+    score = _calculate_total_deviation_score(actual, target)
+    # Average deviation should be around 0.2 (20% over for most macros)
+    assert abs(score - 0.2) < 0.05
+
+
+def test_calculate_total_deviation_score_perfect_match():
+    """Test total deviation score when macros match perfectly."""
+    actual = {"kcal": 2000.0, "protein_g": 150.0, "fat_g": 67.0, "carb_g": 200.0}
+    target = {"kcal": 2000.0, "protein_g": 150.0, "fat_g": 67.0, "carb_g": 200.0}
+    
+    score = _calculate_total_deviation_score(actual, target)
+    assert score == 0.0
+
+
+def test_calculate_total_deviation_score_large_deviation():
+    """Test total deviation score with large deviation."""
+    actual = {"kcal": 3000.0, "protein_g": 200.0, "fat_g": 100.0, "carb_g": 300.0}
+    target = {"kcal": 2000.0, "protein_g": 150.0, "fat_g": 67.0, "carb_g": 200.0}
+    
+    score = _calculate_total_deviation_score(actual, target)
+    assert score > 0.0
+    assert score < 1.0  # Should be reasonable
+
+
+def test_try_swap_alternatives_no_better():
+    """Test swap alternatives when current recipe is already best."""
+    current_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 30.0,
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    alternatives = [
+        {
+            "food_id": "main_002",
+            "dish_name": "Grilled Fish",
+            "macros_per_serving": {
+                "kcal": 250.0,
+                "protein_g": 25.0,  # Less protein
+                "fat_g": 8.0,
+                "carb_g": 0.0,
+            },
+        },
+    ]
+    
+    target_macros = {"kcal": 200.0, "protein_g": 30.0, "fat_g": 5.0, "carb_g": 0.0}
+    
+    best_recipe, best_scale, best_score = _try_swap_alternatives(
+        current_recipe,
+        alternatives,
+        target_macros,
+        "main",
+        current_servings=1.0,
+        max_alternatives=2,
+    )
+    
+    # Should return None since current is better
+    assert best_recipe is None
+    assert best_scale == 1.0
+
+
+def test_try_swap_alternatives_finds_better():
+    """Test swap alternatives when a better alternative exists."""
+    current_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 20.0,  # Less protein than target
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    alternatives = [
+        {
+            "food_id": "main_002",
+            "dish_name": "Grilled Fish",
+            "macros_per_serving": {
+                "kcal": 200.0,
+                "protein_g": 30.0,  # Better match for target
+                "fat_g": 5.0,
+                "carb_g": 0.0,
+            },
+        },
+    ]
+    
+    target_macros = {"kcal": 200.0, "protein_g": 30.0, "fat_g": 5.0, "carb_g": 0.0}
+    
+    best_recipe, best_scale, best_score = _try_swap_alternatives(
+        current_recipe,
+        alternatives,
+        target_macros,
+        "main",
+        current_servings=1.0,
+        max_alternatives=2,
+    )
+    
+    # Should return the better alternative
+    assert best_recipe is not None
+    assert best_recipe["food_id"] == "main_002"
+    assert best_score < float('inf')
+
+
+def test_try_swap_alternatives_empty_list():
+    """Test swap alternatives with empty alternatives list."""
+    current_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Grilled Chicken",
+        "macros_per_serving": {
+            "kcal": 200.0,
+            "protein_g": 30.0,
+            "fat_g": 5.0,
+            "carb_g": 0.0,
+        },
+    }
+    
+    alternatives = []
+    target_macros = {"kcal": 200.0, "protein_g": 30.0, "fat_g": 5.0, "carb_g": 0.0}
+    
+    best_recipe, best_scale, best_score = _try_swap_alternatives(
+        current_recipe,
+        alternatives,
+        target_macros,
+        "main",
+        current_servings=1.0,
+    )
+    
+    assert best_recipe is None
+    assert best_scale == 1.0
+    assert best_score == 1.0  # Should return current_score (1.0) when no alternatives
+
+
+def test_try_swap_alternatives_carb_type():
+    """Test swap alternatives for carb dishes."""
+    current_recipe = {
+        "food_id": "carb_001",
+        "dish_name": "Steamed Rice",
+        "macros_per_serving": {
+            "kcal": 150.0,
+            "protein_g": 4.0,
+            "fat_g": 0.5,
+            "carb_g": 35.0,
+        },
+    }
+    
+    alternatives = [
+        {
+            "food_id": "carb_002",
+            "dish_name": "Brown Rice",
+            "macros_per_serving": {
+                "kcal": 200.0,  # Better match for target
+                "protein_g": 4.0,
+                "fat_g": 0.5,
+                "carb_g": 45.0,
+            },
+        },
+    ]
+    
+    target_macros = {"kcal": 200.0, "protein_g": 4.0, "fat_g": 0.5, "carb_g": 45.0}
+    
+    best_recipe, best_scale, best_score = _try_swap_alternatives(
+        current_recipe,
+        alternatives,
+        target_macros,
+        "carb",
+        current_servings=1.0,
+        max_alternatives=2,
+    )
+    
+    # Should return the better alternative
+    assert best_recipe is not None
+    assert best_recipe["food_id"] == "carb_002"
 

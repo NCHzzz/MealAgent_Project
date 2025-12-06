@@ -130,6 +130,218 @@ def _validate_constraints(
     }
 
 
+def _calculate_meal_targets(
+    targets: Dict[str, float],
+    meal_type: str,
+    breakfast_ratio: float = 0.25,
+    lunch_ratio: float = 0.40,
+    dinner_ratio: float = 0.35,
+) -> Dict[str, float]:
+    """
+    Calculate macro targets for a specific meal (breakfast, lunch, or dinner).
+    
+    Args:
+        targets: Daily macro targets (tdee_kcal, protein_g, fat_g, carb_g)
+        meal_type: "breakfast", "lunch", or "dinner"
+        breakfast_ratio: Ratio of daily calories for breakfast (default 0.25)
+        lunch_ratio: Ratio of daily calories for lunch (default 0.40)
+        dinner_ratio: Ratio of daily calories for dinner (default 0.35)
+    
+    Returns:
+        Dict with meal-specific targets (kcal, protein_g, fat_g, carb_g)
+    """
+    ratios = {
+        "breakfast": breakfast_ratio,
+        "lunch": lunch_ratio,
+        "dinner": dinner_ratio,
+    }
+    ratio = ratios.get(meal_type, 0.33)
+    
+    return {
+        "kcal": targets.get("tdee_kcal", 2000.0) * ratio,
+        "protein_g": targets.get("protein_g", 150.0) * ratio,
+        "fat_g": targets.get("fat_g", 65.0) * ratio,
+        "carb_g": targets.get("carb_g", 200.0) * ratio,
+    }
+
+
+def _scale_main_by_protein(
+    recipe: Dict[str, Any],
+    target_protein: float,
+    max_scale: float = 1.2,
+) -> float:
+    """
+    Calculate serving scale for main dish based on protein target.
+    
+    Args:
+        recipe: Recipe dict with macros_per_serving
+        target_protein: Target protein in grams
+        max_scale: Maximum scaling factor (default 1.2)
+    
+    Returns:
+        Serving scale factor (clamped between 0.5 and max_scale)
+    """
+    macros = _get_meal_macros(recipe)
+    current_protein = macros.get("protein_g", 0.0)
+    
+    if current_protein <= 0:
+        return 1.0
+    
+    scale = target_protein / current_protein
+    return max(0.5, min(max_scale, scale))
+
+
+def _scale_carb_by_kcal(
+    recipe: Dict[str, Any],
+    target_kcal: float,
+    max_scale: float = 1.5,
+) -> float:
+    """
+    Calculate serving scale for carb dish based on kcal target.
+    
+    Args:
+        recipe: Recipe dict with macros_per_serving
+        target_kcal: Target kcal
+        max_scale: Maximum scaling factor (default 1.5)
+    
+    Returns:
+        Serving scale factor (clamped between 0.5 and max_scale)
+    """
+    macros = _get_meal_macros(recipe)
+    current_kcal = macros.get("kcal", 0.0)
+    
+    if current_kcal <= 0:
+        return 1.0
+    
+    scale = target_kcal / current_kcal
+    return max(0.5, min(max_scale, scale))
+
+
+def _calculate_macro_deviation(
+    actual: Dict[str, float],
+    target: Dict[str, float],
+) -> Dict[str, float]:
+    """
+    Calculate deviation percentage for each macro.
+    
+    Args:
+        actual: Actual macro values
+        target: Target macro values
+    
+    Returns:
+        Dict with deviation percentages for each macro
+    """
+    deviations = {}
+    for key in ["kcal", "protein_g", "fat_g", "carb_g"]:
+        target_val = target.get(key, 0.0)
+        actual_val = actual.get(key, 0.0)
+        
+        if target_val <= 0:
+            deviations[key] = 0.0
+        else:
+            deviations[key] = abs(actual_val - target_val) / target_val
+    
+    return deviations
+
+
+def _calculate_total_deviation_score(
+    actual: Dict[str, float],
+    target: Dict[str, float],
+) -> float:
+    """
+    Calculate total deviation score (average of all macro deviations).
+    
+    Args:
+        actual: Actual macro values
+        target: Target macro values
+    
+    Returns:
+        Average deviation score (0.0 to 1.0+)
+    """
+    deviations = _calculate_macro_deviation(actual, target)
+    if not deviations:
+        return 0.0
+    
+    return sum(deviations.values()) / len(deviations)
+
+
+def _try_swap_alternatives(
+    current_recipe: Dict[str, Any],
+    alternatives: List[Dict[str, Any]],
+    target_macros: Dict[str, float],
+    dish_type: str,  # "main" or "carb"
+    current_servings: float = 1.0,
+    max_alternatives: int = 5,
+    max_kcal: float | None = None,
+) -> tuple[Dict[str, Any] | None, float, float]:
+    """
+    Try swapping current recipe with alternatives to improve macro fit.
+    
+    Args:
+        current_recipe: Current recipe to potentially swap
+        alternatives: List of alternative recipes
+        target_macros: Target macros for the meal
+        dish_type: "main" (protein-based) or "carb" (kcal-based)
+        current_servings: Current serving size (default 1.0)
+        max_alternatives: Maximum number of alternatives to try (default 5)
+        max_kcal: Maximum kcal for filtering alternatives (optional)
+    
+    Returns:
+        Tuple of (best_recipe, best_servings, best_score) or (None, 1.0, float('inf'))
+    """
+    if not alternatives:
+        return None, 1.0, float('inf')
+    
+    # Filter alternatives by max_kcal if provided
+    if max_kcal is not None:
+        alternatives = [
+            r for r in alternatives
+            if _get_meal_macros(r).get("kcal", 0.0) <= max_kcal
+        ]
+    
+    if not alternatives:
+        return None, 1.0, float('inf')
+    
+    # Limit number of alternatives to try
+    alternatives = alternatives[:max_alternatives]
+    
+    best_recipe = None
+    best_servings = 1.0
+    best_score = float('inf')
+    
+    # Calculate current score
+    current_macros = _get_meal_macros(current_recipe)
+    current_meal_macros = {k: current_macros[k] * current_servings for k in current_macros}
+    current_score = _calculate_total_deviation_score(current_meal_macros, target_macros)
+    
+    for alt_recipe in alternatives:
+        alt_macros = _get_meal_macros(alt_recipe)
+        
+        # Calculate optimal serving size
+        if dish_type == "main":
+            # Scale by protein for main dishes
+            target_protein = target_macros.get("protein_g", 0.0)
+            alt_servings = _scale_main_by_protein(alt_recipe, target_protein, max_scale=1.2)
+        else:  # carb
+            # Scale by kcal for carb dishes
+            target_kcal = target_macros.get("kcal", 0.0)
+            alt_servings = _scale_carb_by_kcal(alt_recipe, target_kcal, max_scale=1.5)
+        
+        # Always use 1.0 serving (user requirement)
+        alt_servings = 1.0
+        
+        # Calculate score for this alternative
+        alt_meal_macros = {k: alt_macros[k] * alt_servings for k in alt_macros}
+        alt_score = _calculate_total_deviation_score(alt_meal_macros, target_macros)
+        
+        if alt_score < best_score and alt_score < current_score:
+            best_recipe = alt_recipe
+            best_servings = alt_servings
+            best_score = alt_score
+    
+    return best_recipe, best_servings, best_score
+
+
 def _generate_plan_id(user_id: str | None = None) -> str:
     """
     Generate a unique plan ID.

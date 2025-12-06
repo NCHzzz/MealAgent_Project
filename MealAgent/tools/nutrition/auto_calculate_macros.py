@@ -12,6 +12,7 @@ from elysia.util.client import ClientManager
 from weaviate.collections.classes.filters import Filter
 
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 logger = logging.getLogger(__name__)
 
@@ -99,16 +100,74 @@ async def auto_calculate_macros_tool(
         yield Error("auto_calculate_macros_tool requires base_lm for translation.")
         return
 
-    topk_results = tree_data.environment.find("search_and_rank_tool", "topk")
-    candidates = _extract_objects(topk_results)
-
-    # Check both daily and weekly plan missing macros
-    missing_records_day = tree_data.environment.find("plan_day_e2e_tool", "missing_macros")
-    missing_records_week = tree_data.environment.find("plan_week_e2e_tool", "missing_macros")
-    missing_ids = _extract_missing_ids(missing_records_day)
-    missing_ids.extend(_extract_missing_ids(missing_records_week))
-    # Deduplicate
-    missing_ids = list(dict.fromkeys(missing_ids))  # Preserves order while removing duplicates
+    # IMPORTANT: Load recipes from Weaviate database, not from environment cache
+    # Environment cache may be stale - Weaviate is the source of truth
+    candidates = []
+    missing_ids = []
+    
+    try:
+        client = client_manager.get_client()
+        recipe_collection = client.collections.get("Recipe")
+        
+        # Get recipes that need macro calculation (missing macros_per_serving)
+        # Query recipes where macros_per_serving is null or empty
+        # Note: This is a simplified query - in production, you might have a flag field
+        # For now, we'll get recipes from missing_macros records
+        
+        # Check missing macros from plans in database
+        plan_collection = client.collections.get("MealPlan")
+        if user_id:
+            user_filter = build_filters_from_where({
+                "path": ["user_id"], "operator": "Equal", "valueString": user_id
+            })
+            recent_plans = plan_collection.query.fetch_objects(filters=user_filter, limit=10)
+            
+            for plan_obj in recent_plans.objects:
+                plan_id = plan_obj.properties.get("plan_id")
+                if not plan_id:
+                    continue
+                
+                # Check if plan has missing_macros metadata (stored in plan properties or separate)
+                # For now, we'll check environment as fallback, but ideally this should be in plan metadata
+                pass
+        
+        # Fallback: Check environment for missing macros (only as last resort)
+        missing_records_day = tree_data.environment.find("plan_day_e2e_tool", "missing_macros")
+        missing_records_week = tree_data.environment.find("plan_week_e2e_tool", "missing_macros")
+        missing_ids = _extract_missing_ids(missing_records_day)
+        missing_ids.extend(_extract_missing_ids(missing_records_week))
+        
+        # Also try to get candidates from environment (fallback)
+        topk_results = tree_data.environment.find("search_and_rank_tool", "topk")
+        candidates = _extract_objects(topk_results)
+        
+        # Deduplicate
+        missing_ids = list(dict.fromkeys(missing_ids))  # Preserves order while removing duplicates
+        
+        # If we have missing_ids, fetch those recipes from Weaviate
+        if missing_ids:
+            for recipe_id in missing_ids[:max_recipes]:
+                try:
+                    recipe_filter = build_filters_from_where({
+                        "path": ["food_id"], "operator": "Equal", "valueString": recipe_id
+                    })
+                    recipe_results = recipe_collection.query.fetch_objects(filters=recipe_filter, limit=1)
+                    if recipe_results.objects:
+                        recipe = recipe_results.objects[0].properties
+                        # Check if macros are missing
+                        macros = recipe.get("macros_per_serving", {})
+                        if not macros or not macros.get("kcal"):
+                            candidates.append(recipe)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch recipe {recipe_id}: {e}")
+                    continue
+        
+    except Exception as e:
+        logger.error(f"Failed to load recipes from Weaviate: {e}")
+        # Fallback: use environment cache
+        topk_results = tree_data.environment.find("search_and_rank_tool", "topk")
+        candidates = _extract_objects(topk_results)
+        yield Response("⚠️ Using cached recipes (database access failed)")
 
     if missing_ids:
         try:

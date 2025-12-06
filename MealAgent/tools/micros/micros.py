@@ -72,22 +72,44 @@ async def micros_tool(
     yield Response("🔬 Analyzing micronutrients (vitamins & minerals) in your plan...")
     
     try:
-        # Step 1: Read plan from E2E tools
+        # Step 1: Load plan from Weaviate database (source of truth)
         plan = None
         plan_source = None
         
-        day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-        if day_plan_results and day_plan_results[0]["objects"]:
-            plan = day_plan_results[0]["objects"][0]
-            plan_source = "plan_day_e2e_tool"
-        else:
-            week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-            if week_plan_results and week_plan_results[0]["objects"]:
-                plan = week_plan_results[0]["objects"][0]
-                plan_source = "plan_week_e2e_tool"
+        if plan_id:
+            # Load specific plan by plan_id
+            from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+            plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
+            if plan:
+                plan_source = plan.get("plan_type", "day") + "_plan"
+        elif user_id:
+            # Load latest plan for user
+            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+            if not plan:
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+        
+        # Fallback: try environment cache (only as last resort)
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not plan:
+            logger.warning("micros_tool: No plan from database, trying environment cache")
+            day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+            if day_plan_results and day_plan_results[0]["objects"]:
+                plan = day_plan_results[0]["objects"][0]
+                plan_source = "plan_day_e2e_tool"
+                yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
             else:
-                yield Error("No plan found. Run plan_day_e2e_tool or plan_week_e2e_tool first.")
-                return
+                week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+                if week_plan_results and week_plan_results[0]["objects"]:
+                    plan = week_plan_results[0]["objects"][0]
+                    plan_source = "plan_week_e2e_tool"
+                    yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+        
+        if not plan:
+            yield Error("No plan found. Please provide plan_id or user_id, or run plan_day_e2e_tool/plan_week_e2e_tool first.")
+            return
         
         # Step 2: Get RDA values (adjust for gender if profile available)
         rdas = DEFAULT_RDAs.copy()

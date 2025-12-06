@@ -1,6 +1,7 @@
-from typing import AsyncGenerator, Dict, Any, List
+from typing import AsyncGenerator, Dict, Any, List, Optional
 import logging
 import random
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from elysia.tree.objects import TreeData
@@ -15,7 +16,15 @@ from MealAgent.tools.utils.planning_helpers import (
     sync_plan_to_weaviate,
     _calculate_plan_micronutrients,
     ensure_rfc3339_datetime,
+    _calculate_meal_targets,
+    _scale_main_by_protein,
+    _scale_carb_by_kcal,
+    _calculate_total_deviation_score,
+    _try_swap_alternatives,
 )
+from MealAgent.tools.utils.llm_draft import generate_llm_draft
+from MealAgent.schemas.llm_draft import LLMDraftResponse
+from MealAgent.tools.utils.llm_critic import create_critic_task
 from MealAgent.utils.nutrition import build_default_macro_targets
 from MealAgent.tools.utils.profile_targets import (
     ensure_macro_targets,
@@ -91,19 +100,94 @@ def _is_vietnamese_breakfast(recipe: Dict[str, Any]) -> bool:
     return False
 
 
+def _create_default_white_rice_recipe() -> Dict[str, Any]:
+    """
+    Create a default white rice recipe for Vietnamese meals.
+    This is used when white rice is not found in the database.
+    
+    Macros per serving (1 chén cơm ~ 150g cooked rice):
+    - Kcal: ~220 kcal
+    - Protein: ~4.5g
+    - Fat: ~0.5g
+    - Carb: ~48g
+    """
+    return {
+        "food_id": "default_white_rice",
+        "dish_name": "Cơm Trắng",
+        "dish_type": "rice",
+        "meal_type": "lunch,dinner",
+        "category": "rice",
+        "servings": 1.0,
+        "macros_per_serving": {
+            "kcal": 220.0,
+            "protein_g": 4.5,
+            "fat_g": 0.5,
+            "carb_g": 48.0,
+        },
+        "fiber_g": 0.5,
+        "sugar_g": 0.1,
+        "sodium_mg": 1.0,
+        "description": "Cơm trắng nấu từ gạo tẻ, món cơ bản trong bữa ăn Việt Nam",
+        "ingredients": ["Gạo tẻ", "Nước"],
+        "cooking_time_min": 30,
+        "serving_size": "1 chén",
+        "is_default": True,  # Flag to indicate this is a default recipe
+    }
+
+
 def _is_rice_dish(recipe: Dict[str, Any]) -> bool:
-    """Check if recipe is a rice dish (cơm)."""
+    """Check if recipe is a rice dish (cơm) - plain rice, not main dishes."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # Check for rice keywords first
     rice_keywords = ["cơm", "com", "rice"]
-    return any(keyword in dish_name or keyword in dish_type for keyword in rice_keywords)
+    has_rice = any(keyword in dish_name or keyword in dish_type for keyword in rice_keywords)
+    
+    if not has_rice:
+        return False
+    
+    # Exclude main dishes that don't have rice in name
+    # Examples: "Cá Kho Riềng" (main, no rice), "Ốc Hương Rang Muối Tôm" (main, no rice)
+    # Check for main dish keywords directly (avoid recursion)
+    main_keywords = [
+        "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga",
+        "heo", "bò", "bo", "meat", "fish", "chicken", "pork", "beef",
+        "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien"
+    ]
+    has_main_keywords = any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)
+    
+    # If it has main keywords but no rice keywords in name, it's not a rice dish
+    if has_main_keywords and not any(kw in dish_name for kw in rice_keywords):
+        return False
+    
+    # Exclude breakfast dishes and cakes/pancakes
+    breakfast_keywords = ["bánh mì", "banh mi", "bánh cuốn", "banh cuon", "xôi", "xoi", "cháo", "chao", "phở", "pho"]
+    if any(kw in dish_name or kw in dish_type for kw in breakfast_keywords):
+        return False
+    
+    # Exclude cakes/pancakes (these are not rice dishes)
+    cake_keywords = ["pancake", "bánh bông lan", "banh bong lan", "bánh ngọt", "banh ngot", "flan", "cake"]
+    if any(kw in dish_name or kw in dish_type for kw in cake_keywords):
+        return False
+    
+    # Exclude bean dishes (đậu) - these are not rice dishes
+    if "đậu" in dish_name or "dau" in dish_name or "bean" in dish_name:
+        return False
+    
+    return True
 
 
 def _is_noodle_soup(recipe: Dict[str, Any]) -> bool:
     """Check if recipe is a noodle/soup dish (phở, bún, mì, canh)."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
+    
+    # Exclude cakes/pancakes (these are not noodle dishes)
+    cake_keywords = ["pancake", "bánh bông lan", "banh bong lan", "bánh ngọt", "banh ngot", "flan", "cake"]
+    if any(kw in dish_name or kw in dish_type for kw in cake_keywords):
+        return False
+    
     noodle_keywords = [
         "phở", "pho", "bún", "bun", "bún bò", "bun bo", "bún riêu", "bun rieu",
         "bún chả", "bun cha", "hủ tiếu", "hu tieu", "mì", "mi ", "miến", "mien",
@@ -112,31 +196,104 @@ def _is_noodle_soup(recipe: Dict[str, Any]) -> bool:
     return any(kw in dish_name or kw in dish_type for kw in noodle_keywords)
 
 
+def _is_soup(recipe: Dict[str, Any]) -> bool:
+    """Check if recipe is a soup dish (canh) - Vietnamese soup typically served with rice."""
+    dish_name = str(recipe.get("dish_name", "")).lower()
+    dish_type = str(recipe.get("dish_type", "")).lower()
+    
+    # Canh is Vietnamese soup, typically liquid-based and served with rice
+    soup_keywords = ["canh", "soup"]
+    # Exclude noodle soups (phở, bún) which are standalone dishes
+    exclude_keywords = ["phở", "pho", "bún", "bun", "mì", "mi ", "miến", "mien", "hủ tiếu", "hu tieu"]
+    
+    has_soup = any(kw in dish_name or kw in dish_type for kw in soup_keywords)
+    has_noodle = any(kw in dish_name or kw in dish_type for kw in exclude_keywords)
+    
+    return has_soup and not has_noodle
+
+
 def _is_main_dish(recipe: Dict[str, Any]) -> bool:
     """Check if recipe is a main dish (món mặn)."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
-    # Exclude breakfast, rice, vegetables, fruits
-    if _is_vietnamese_breakfast(recipe) or _is_rice_dish(recipe):
+    # Exclude breakfast by checking keywords directly (avoid recursion)
+    breakfast_keywords = ["bánh mì", "banh mi", "bánh cuốn", "banh cuon", "xôi", "xoi", "cháo", "chao", "phở", "pho"]
+    if any(kw in dish_name or kw in dish_type for kw in breakfast_keywords):
         return False
     
+    # Exclude plain rice dishes by checking keywords directly (avoid recursion)
+    rice_keywords = ["cơm", "com", "rice"]
+    has_rice = any(keyword in dish_name or keyword in dish_type for keyword in rice_keywords)
+    # If it's plain rice (has rice but no main keywords), exclude it
+    if has_rice:
+        # Check if it has main keywords - if not, it's plain rice
+        main_keywords = [
+            "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga",
+            "heo", "bò", "bo", "meat", "fish", "chicken", "pork", "beef",
+            "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien",
+            "ba rọi", "ba roi", "pork belly", "sườn", "suon", "rib",
+            "xúc xích", "xuc xich", "sausage", "giò", "gio", "bì", "bi",
+            "đậu", "dau", "bean"  # Bean dishes are not rice dishes
+        ]
+        has_main = any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)
+        if not has_main:
+            # Plain rice without main keywords - not a main dish
+            return False
+    
+    # Check for main dish keywords (comprehensive list)
     main_keywords = [
         "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga",
         "heo", "bò", "bo", "meat", "fish", "chicken", "pork", "beef",
-        "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien"
+        "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien",
+        "ba rọi", "ba roi", "pork belly", "sườn", "suon", "rib",
+        "xúc xích", "xuc xich", "sausage", "giò", "gio", "bì", "bi",
+        "lươn", "luon", "eel", "ếch", "ech", "frog", "ngâm", "ngam", "pickled"
     ]
     
     return any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)
 
 
 def _is_vegetable_dish(recipe: Dict[str, Any]) -> bool:
-    """Check if recipe is a vegetable dish (rau)."""
+    """Check if recipe is a vegetable dish (rau) - pure vegetable, no protein."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # Exclude combined dishes, main dishes, and dishes with protein
+    if _is_combined_dish(recipe) or _is_main_dish(recipe):
+        return False
+    
+    # Exclude breakfast items (bánh mì, bánh cuốn, etc.) - these are not vegetables
+    breakfast_keywords = ["bánh mì", "banh mi", "bánh cuốn", "banh cuon", "bánh bao", "banh bao", 
+                          "bánh canh", "banh canh", "bánh ngọt", "banh ngot", "bánh bông lan", "banh bong lan",
+                          "pancake", "flan", "cake", "bánh", "banh"]
+    if any(kw in dish_name or kw in dish_type for kw in breakfast_keywords):
+        return False
+    
+    # Exclude dishes with protein keywords (even if they have "rau")
+    protein_keywords = [
+        "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga", "heo", "bò", "bo", 
+        "lươn", "luon", "meat", "fish", "chicken", "pork", "beef", 
+        "xúc xích", "xuc xich", "sausage", "giò", "gio", "trứng", "trung", "egg",
+        "ba rọi", "ba roi", "pork belly", "sườn", "suon", "rib", "bì", "bi",
+        "ếch", "ech", "frog", "ngâm", "ngam", "pickled"
+    ]
+    if any(kw in dish_name or kw in dish_type for kw in protein_keywords):
+        return False
+    
+    # Exclude dishes with "đậu" (bean) that are cooked with protein (xào, kho, etc.)
+    if "đậu" in dish_name or "dau" in dish_name:
+        cooking_keywords = ["xào", "xao", "kho", "chiên", "chien", "nướng", "nuong", "rang"]
+        if any(kw in dish_name or kw in dish_type for kw in cooking_keywords):
+            # Bean dishes with cooking methods are likely main dishes, not pure vegetables
+            return False
+    
+    # Exclude gỏi/salad (these are combined dishes)
+    if "gỏi" in dish_name or "goi" in dish_name or ("salad" in dish_name and any(kw in dish_name for kw in protein_keywords)):
+        return False
+    
     veg_keywords = [
-        "rau", "cải", "cai", "xà lách", "xa lach", "salad",
+        "rau", "cải", "cai", "xà lách", "xa lach",
         "vegetable", "greens", "cucumber", "dưa chuột", "dua chuot"
     ]
     
@@ -144,16 +301,95 @@ def _is_vegetable_dish(recipe: Dict[str, Any]) -> bool:
 
 
 def _is_fruit(recipe: Dict[str, Any]) -> bool:
-    """Check if recipe is a fruit (trái cây)."""
+    """Check if recipe is a fruit (trái cây) - pure fruit, not gỏi or salad."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # Exclude combined dishes, main dishes, and gỏi/salad
+    if _is_combined_dish(recipe) or _is_main_dish(recipe):
+        return False
+    
+    # Exclude gỏi (Vietnamese salad) - even if it has fruit in name
+    if "gỏi" in dish_name or "goi" in dish_name:
+        return False
+    
+    # Exclude breakfast items (bánh, pancake, flan, etc.) - these are not fruits
+    breakfast_keywords = ["bánh", "banh", "pancake", "flan", "cake", "bánh bông lan", "banh bong lan"]
+    if any(kw in dish_name or kw in dish_type for kw in breakfast_keywords):
+        return False
+    
+    # Exclude dishes with protein keywords (more comprehensive)
+    protein_keywords = [
+        "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga", "heo", "bò", "bo", 
+        "lươn", "luon", "meat", "fish", "chicken", "pork", "beef", 
+        "xúc xích", "xuc xich", "sausage", "giò", "gio", "bì", "bi", 
+        "ngâm", "ngam", "pickled", "kho", "chiên", "chien", "xào", "xao",
+        "rang", "nướng", "nuong", "vây", "vay", "fin", "rim", "rim",
+        "ba rọi", "ba roi", "pork belly", "sườn", "suon", "rib", "ếch", "ech", "frog",
+        "khoai tây", "khoai tay", "potato", "khoai lang", "khoai lang", "sweet potato"
+    ]
+    if any(kw in dish_name or kw in dish_type for kw in protein_keywords):
+        return False
+    
+    # Pure fruit keywords
     fruit_keywords = [
         "trái cây", "trai cay", "fruit", "chuối", "chuoi", "táo", "tao",
-        "cam", "ổi", "oi", "dưa hấu", "dua hau", "watermelon", "apple", "orange"
+        "cam", "ổi", "oi", "dưa hấu", "dua hau", "watermelon", "apple", "orange",
+        "detox", "smoothie", "nước ép", "nuoc ep", "juice"
     ]
     
     return any(keyword in dish_name or keyword in dish_type for keyword in fruit_keywords)
+
+
+def _is_combined_dish(recipe: Dict[str, Any]) -> bool:
+    """
+    Check if recipe is a combined dish (có cả carb và protein trong cùng một món).
+    Vietnamese examples: mì trộn, bún trộn, cơm chiên, cơm rang, phở, bún bò, bánh canh, cháo...
+    These dishes typically contain both carbs (noodles/rice) and protein (meat/fish) in one dish.
+    """
+    dish_name = str(recipe.get("dish_name", "")).lower()
+    dish_type = str(recipe.get("dish_type", "")).lower()
+    
+    # Combined dish keywords (carb + protein in one dish)
+    combined_keywords = [
+        # Noodles with protein
+        "mì trộn", "mi tron", "bún trộn", "bun tron", "phở", "pho", "bún bò", "bun bo",
+        "bún chả", "bun cha", "bún riêu", "bun rieu", "bánh canh", "banh canh",
+        # Fried rice (usually has protein)
+        "cơm chiên", "com chien", "cơm rang", "com rang", "fried rice",
+        # Rice with protein (cơm xay, cơm với...)
+        "cơm xay", "com xay", "cơm với", "com voi", "rice with",
+        # Soup with protein
+        "cháo", "chao", "porridge",
+        # Other combined dishes
+        "bánh mì", "banh mi", "sandwich", "salad", "gỏi", "goi",
+    ]
+    
+    # Check if it matches combined keywords
+    if any(kw in dish_name or kw in dish_type for kw in combined_keywords):
+        return True
+    
+    # Check if it contains both carb keywords AND protein keywords
+    carb_keywords = ["mì", "mi", "bún", "bun", "phở", "pho", "cơm", "com", "cháo", "chao", "bánh canh", "banh canh", "salad", "gỏi", "goi"]
+    protein_keywords = ["thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga", "heo", "bò", "bo", "lươn", "luon", "meat", "fish", "chicken", "pork", "beef", "xúc xích", "xuc xich", "sausage", "giò", "gio"]
+    
+    has_carb = any(kw in dish_name or kw in dish_type for kw in carb_keywords)
+    has_protein = any(kw in dish_name or kw in dish_type for kw in protein_keywords)
+    
+    # If it has both carb and protein, it's a combined dish
+    if has_carb and has_protein:
+        # But exclude plain rice dishes (only "cơm trắng" or "white rice")
+        if _is_rice_dish(recipe):
+            # Check if it's plain white rice
+            if "cơm trắng" in dish_name or "com trang" in dish_name or "white rice" in dish_name:
+                # Plain white rice - not combined
+                if not any(kw in dish_name for kw in ["chiên", "chien", "rang", "fried", "xay", "với", "voi", "with"]):
+                    return False
+            # Other rice dishes with protein are combined
+            return True
+        return True
+    
+    return False
 
 
 def _matches_meal_slot(recipe: Dict[str, Any], slot: str) -> bool:
@@ -259,6 +495,80 @@ def _calculate_recipe_fit_score(
     return (total_fit * 0.8) + (original_fit * 0.2)
 
 
+def _map_llm_suggestion_to_recipe(
+    suggestion: Dict[str, Any],
+    recipes: List[Dict[str, Any]],
+    role: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Map LLM suggestion to actual recipe from database.
+    
+    Args:
+        suggestion: LLM suggestion with dish_name, general_term, role, category
+        recipes: List of recipes from database
+        role: Expected role (breakfast, carb, main, vegetable, fruit)
+    
+    Returns:
+        Best matching recipe, or None if not found
+    """
+    dish_name = suggestion.get("dish_name", "").lower()
+    general_term = suggestion.get("general_term", "").lower()
+    category = suggestion.get("category", "").lower()
+    
+    # Score recipes by match quality
+    scored_recipes = []
+    for recipe in recipes:
+        recipe_name = str(recipe.get("dish_name", "")).lower()
+        recipe_type = str(recipe.get("dish_type", "")).lower()
+        
+        score = 0.0
+        
+        # Exact name match (highest priority)
+        if dish_name in recipe_name or recipe_name in dish_name:
+            score += 100.0
+        
+        # General term match
+        if general_term and general_term in recipe_name:
+            score += 80.0
+        
+        # Category match
+        if category:
+            if category == "rice" and _is_rice_dish(recipe):
+                score += 50.0
+            elif category == "noodle" and _is_noodle_soup(recipe):
+                score += 50.0
+            elif category == "soup" and _is_soup(recipe):
+                score += 50.0
+            elif category == "main_dish" and _is_main_dish(recipe):
+                score += 50.0
+            elif category == "vegetable" and _is_vegetable_dish(recipe):
+                score += 50.0
+            elif category == "fruit" and _is_fruit(recipe):
+                score += 50.0
+        
+        # Role match
+        if role == "breakfast" and _is_vietnamese_breakfast(recipe):
+            score += 30.0
+        elif role == "carb" and (_is_rice_dish(recipe) or _is_noodle_soup(recipe)):
+            score += 30.0
+        elif role == "main" and _is_main_dish(recipe):
+            score += 30.0
+        elif role == "vegetable" and _is_vegetable_dish(recipe):
+            score += 30.0
+        elif role == "fruit" and _is_fruit(recipe):
+            score += 30.0
+        
+        if score > 0:
+            scored_recipes.append((recipe, score))
+    
+    # Return best match
+    if scored_recipes:
+        scored_recipes.sort(key=lambda x: x[1], reverse=True)
+        return scored_recipes[0][0]
+    
+    return None
+
+
 def _select_meal_by_strategy(
     recipes: List[Dict[str, Any]],
     strategy: str,
@@ -269,6 +579,7 @@ def _select_meal_by_strategy(
     target_macros: Dict[str, float] | None = None,
     require_macros: bool = False,
     min_kcal: float = 30.0,
+    max_kcal: float | None = None,  # Filter out dishes with too high kcal
 ) -> Dict[str, Any] | None:
     """
     Select recipe based on strategy with improved macro-aware selection.
@@ -288,11 +599,18 @@ def _select_meal_by_strategy(
     if used_recipe_ids:
         exclude_ids.update(str(rid) for rid in used_recipe_ids)
     candidates = [r for r in recipes if r.get("food_id") not in exclude_ids]
-    if require_macros:
+    if require_macros or max_kcal:
         filtered = []
         for r in candidates:
             macros = r.get("macros_per_serving", {})
-            if isinstance(macros, dict) and macros.get("kcal", 0) >= min_kcal:
+            if isinstance(macros, dict):
+                kcal = macros.get("kcal", 0)
+                # Filter by min_kcal if require_macros
+                if require_macros and kcal < min_kcal:
+                    continue
+                # Filter by max_kcal to avoid dishes that are too high in calories
+                if max_kcal and kcal > max_kcal:
+                    continue
                 filtered.append(r)
         if filtered:
             candidates = filtered
@@ -302,18 +620,48 @@ def _select_meal_by_strategy(
     # Filter by dish category if specified
     if dish_category:
         if dish_category == "breakfast":
-            category_candidates = [r for r in candidates if _is_vietnamese_breakfast(r)]
+            category_candidates = [r for r in candidates if _is_vietnamese_breakfast(r) and not _is_combined_dish(r)]
         elif dish_category == "rice":
-            category_candidates = [r for r in candidates if _is_rice_dish(r)]
+            # For rice category, we want plain rice OR standalone noodles, but NOT combined dishes or main dishes
+            # Also exclude breakfast items (pancake, bánh, etc.) and protein-rich dishes
+            category_candidates = [
+                r for r in candidates 
+                if (_is_rice_dish(r) or _is_noodle_soup(r)) 
+                and not _is_combined_dish(r) 
+                and not _is_main_dish(r)  # Exclude main dishes (e.g., "Cá Kho Riềng", "Chả Hoa Ngũ Sắc Phô Mai")
+                and not _is_vietnamese_breakfast(r)  # Exclude breakfast items like "Pancake Trứng Chiên"
+            ]
+            # If still no candidates, try just rice dishes (excluding main dishes and breakfast items)
             if not category_candidates:
-                # Fallback to noodle/soup dishes for Vietnamese-style main carb
-                category_candidates = [r for r in candidates if _is_noodle_soup(r)]
+                category_candidates = [
+                    r for r in candidates 
+                    if _is_rice_dish(r) 
+                    and not _is_main_dish(r)
+                    and not _is_vietnamese_breakfast(r)
+                ]
+            # Final fallback: noodle/soup dishes (standalone, not combined, not main, not breakfast)
+            if not category_candidates:
+                category_candidates = [
+                    r for r in candidates 
+                    if _is_noodle_soup(r) 
+                    and not _is_combined_dish(r) 
+                    and not _is_main_dish(r)
+                    and not _is_vietnamese_breakfast(r)
+                ]
         elif dish_category == "main":
-            category_candidates = [r for r in candidates if _is_main_dish(r)]
+            # Main dish should NOT be combined dish
+            category_candidates = [r for r in candidates if _is_main_dish(r) and not _is_combined_dish(r)]
         elif dish_category == "vegetable":
-            category_candidates = [r for r in candidates if _is_vegetable_dish(r)]
+            # Vegetable should NOT be combined dish or have protein
+            category_candidates = [r for r in candidates if _is_vegetable_dish(r) and not _is_combined_dish(r)]
         elif dish_category == "fruit":
-            category_candidates = [r for r in candidates if _is_fruit(r)]
+            # Fruit should NOT be combined dish, gỏi, main dish, or breakfast items
+            category_candidates = [
+                r for r in candidates 
+                if _is_fruit(r) 
+                and not _is_combined_dish(r) 
+                and not _is_main_dish(r)  # Exclude main dishes (e.g., "Chả Hoa Ngũ Sắc Phô Mai")
+            ]
         else:
             category_candidates = candidates
         
@@ -345,7 +693,18 @@ def _select_meal_by_strategy(
         else:
             candidates.sort(key=lambda r: r.get("fit_score", 0.0), reverse=True)
     
-    return candidates[0] if candidates else None
+    # IMPROVED VARIETY: Instead of always picking the top candidate, randomly select from top 3-5
+    # This ensures variety while still maintaining quality
+    if len(candidates) > 1:
+        top_n = min(5, len(candidates))  # Consider top 5 candidates
+        top_candidates = candidates[:top_n]
+        # Add small random factor to break ties and ensure variety
+        selected = random.choice(top_candidates)
+        return selected
+    elif candidates:
+        return candidates[0]
+    else:
+        return None
 
 
 async def _ensure_recipe_macros_cached(
@@ -437,7 +796,7 @@ async def plan_day_e2e_tool(
       Reads
         • `macro_calc_tool.targets` – individualized macro goals (TDEE-based).
         • `constraints_guard_tool.filters` (optional) – used only for validation/explanation, not retrieval.
-        • `search_and_rank_tool.topk` – ranked candidate recipes (should have `macros_per_serving` pre-calculated).
+        • `search_and_rank_tool.topk` (optional fallback) – cached recipes, only used if Weaviate search fails.
       Writes
         • `plan_day_e2e_tool.plan`
             - canonical day-plan payload used by the UI and downstream tools.
@@ -446,6 +805,8 @@ async def plan_day_e2e_tool(
 
     Behaviour:
       • Does **not** own profile CRUD; it expects profile/targets/search results to be present (or will fall back to defaults).
+      • **Always searches recipes from Weaviate database** via `search_and_rank_tool()` to ensure latest data.
+      • Environment cache (`search_and_rank_tool.topk`) is only used as fallback if database search fails.
       • Reads recipes from Weaviate to get latest macros (recipes should be pre-processed).
       • When `missing_macros` is non-empty, planning still returns a best-effort plan but warns about missing nutrition data.
 
@@ -511,103 +872,188 @@ async def plan_day_e2e_tool(
         else:
             yield Response("ℹ️ No dietary constraints specified")
 
-        # Step 3: Read ranked recipes or auto-search if not available
-        sr = tree_data.environment.find("search_and_rank_tool", "topk")
-        recipes: list[Dict[str, Any]] = []
-        if sr:
-            # Prefer the most recent non-empty result
-            for entry in reversed(sr):
-                objs = entry.get("objects") or []
-                if objs:
-                    recipes = objs
-                    break
-        logging.debug(
-            "plan_day_e2e_tool: recipes from search results count=%d query='%s'",
-            len(recipes),
-            query_text,
-        )
-
-        if not recipes:
-            # Auto-search for recipes if not available
-            yield Response("🔍 No recipes found. Searching for recipes automatically...")
+        # Prepare constraints for LLM draft
+        constraints_dict = {
+            "diet_types": filters_metadata.get("diet_types", []) if filters_metadata else [],
+            "exclude_allergens": filters_metadata.get("exclude_allergens", []) if filters_metadata else [],
+        }
+        
+        # Get meal history for LLM draft (before recipe search)
+        meal_history_dish_names: List[str] = []
+        try:
+            if resolved_user_id:
+                client = client_manager.get_client()
+                meal_log_collection = client.collections.get("MealLogEntry")
+                
+                # Get recent meal logs (last 20 meals)
+                recent_date = ensure_rfc3339_datetime(
+                    datetime.now(timezone.utc) - timedelta(days=7)  # Last 7 days
+                )
+                meal_filter = build_filters_from_where({
+                    "operator": "And",
+                    "operands": [
+                        {"path": ["user_id"], "operator": "Equal", "valueString": resolved_user_id},
+                        {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": recent_date}
+                    ]
+                })
+                
+                # Get meal logs without sort (sorting not critical for meal history)
+                # Fetch more than needed, then sort manually
+                meal_logs = meal_log_collection.query.fetch_objects(
+                    filters=meal_filter, 
+                    limit=50  # Fetch more to ensure we get recent ones
+                )
+                # Sort manually by logged_at descending and take top 20
+                if meal_logs.objects:
+                    sorted_objects = sorted(
+                        list(meal_logs.objects), 
+                        key=lambda x: x.properties.get("logged_at", ""), 
+                        reverse=True
+                    )[:20]
+                    # Create a new result with sorted objects
+                    from types import SimpleNamespace
+                    meal_logs = SimpleNamespace(objects=sorted_objects)
+                for log_obj in meal_logs.objects:
+                    dish_name = log_obj.properties.get("dish_name")
+                    if dish_name:
+                        meal_history_dish_names.append(dish_name)
+        except Exception as e:
+            logging.debug(f"plan_day_e2e_tool: Could not load meal history for LLM draft: {e}")
+            # Continue without meal history
+        
+        # Phase 2.1: LLM Draft Step (BEFORE recipe search, as per flow)
+        llm_draft: LLMDraftResponse | None = None
+        if base_lm:
             try:
-                from MealAgent.tools.search.search_and_rank import search_and_rank_tool
-                from MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
+                yield Response("🤖 Generating meal suggestions with AI...")
+                user_preferences = (profile or {}).get("preferences", "")
+                llm_draft = await generate_llm_draft(
+                    base_lm=base_lm,
+                    meal_history=meal_history_dish_names,
+                    constraints=constraints_dict,
+                    user_preferences=user_preferences if user_preferences else None,
+                    tree_data=tree_data,
+                )
+                if llm_draft:
+                    yield Response("✅ AI suggestions ready. Mapping to recipes...")
+                else:
+                    yield Response("ℹ️ Using rule-based selection (AI suggestions unavailable)")
+            except Exception as e:
+                logging.warning(f"plan_day_e2e_tool: LLM draft failed: {e}")
+                llm_draft = None
+        else:
+            logging.debug("plan_day_e2e_tool: No base_lm available, skipping LLM draft")
+        
+        # Step 3: Search recipes from Weaviate database
+        # IMPORTANT: Always search from Weaviate to get latest data, not from environment cache
+        # Environment cache may be stale - Weaviate is the source of truth
+        yield Response("🔍 Searching recipes from database...")
+        try:
+            from MealAgent.tools.search.search_and_rank import search_and_rank_tool
+            from MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
 
-                # First, ensure constraints are set up
-                constraints_results = tree_data.environment.find("constraints_guard_tool", "filters")
-                if not constraints_results or not constraints_results[0]["objects"]:
-                    # Set up constraints (empty if no profile)
-                    async for result in constraints_guard_tool(
-                        tree_data=tree_data,
-                        inputs={},
-                        base_lm=base_lm,
-                        complex_lm=complex_lm,
-                        client_manager=client_manager,
-                        **kwargs,
-                    ):
-                        if isinstance(result, Error):
-                            logging.warning(
-                                "plan_day_e2e_tool: constraints_guard_tool failed: %s",
-                                result.message,
-                            )
-                            break
-
-                # Now search for recipes. Note: internal tool calls do NOT automatically
-                # persist Results into the environment, so we must capture them here.
-                search_query = query_text if query_text else "Vietnamese recipes"
-                auto_recipes: list[Dict[str, Any]] = []
-                async for result in search_and_rank_tool(
+            # First, ensure constraints are set up
+            constraints_results = tree_data.environment.find("constraints_guard_tool", "filters")
+            if not constraints_results or not constraints_results[0]["objects"]:
+                # Set up constraints (empty if no profile)
+                async for result in constraints_guard_tool(
                     tree_data=tree_data,
                     inputs={},
                     base_lm=base_lm,
                     complex_lm=complex_lm,
                     client_manager=client_manager,
-                    query_text=search_query,
-                    collection_name=collection_name,
-                    limit=50,  # Get more recipes for better selection
-                    top_k=30,  # Top 30 for planning
                     **kwargs,
                 ):
                     if isinstance(result, Error):
-                        yield Error(
-                            f"Failed to search for recipes: {result.message}. "
-                            "Please try searching manually first."
+                        error_msg = str(result) if hasattr(result, '__str__') else "Unknown error"
+                        logging.warning(
+                            "plan_day_e2e_tool: constraints_guard_tool failed: %s",
+                            error_msg,
                         )
-                        return
-                    if isinstance(result, Response):
-                        # Forward progress messages to the user
-                        yield result
-                    elif isinstance(result, Result) and result.objects:
-                        # Capture the ranked recipes from this internal call
-                        auto_recipes = list(result.objects)
+                        break
 
-                # Prefer recipes captured from the internal call; environment may not be updated
-                if auto_recipes:
-                    recipes = auto_recipes
-                else:
-                    # Fallback: try reading from environment in case the runtime persisted it
-                    sr = tree_data.environment.find("search_and_rank_tool", "topk")
-                    recipes = []
-                    if sr:
-                        for entry in reversed(sr):
-                            objs = entry.get("objects") or []
-                            if objs:
-                                recipes = objs
-                                break
-
-                if not recipes:
+            # Search recipes from Weaviate database
+            # This ensures we always get the latest recipes with up-to-date macros
+            search_query = query_text if query_text else "Vietnamese recipes"
+            recipes: list[Dict[str, Any]] = []
+            
+            async for result in search_and_rank_tool(
+                tree_data=tree_data,
+                inputs={},
+                base_lm=base_lm,
+                complex_lm=complex_lm,
+                client_manager=client_manager,
+                query_text=search_query,
+                collection_name=collection_name,
+                limit=50,  # Get more recipes for better selection
+                top_k=30,  # Top 30 for planning
+                **kwargs,
+            ):
+                if isinstance(result, Error):
+                    error_msg = str(result) if hasattr(result, '__str__') else "Unknown error"
                     yield Error(
-                        "No recipes found after automatic search. "
+                        f"Failed to search recipes from database: {error_msg}. "
                         "Please check your search query or try a different query."
                     )
                     return
+                if isinstance(result, Response):
+                    # Forward progress messages to the user
+                    yield result
+                elif isinstance(result, Result) and result.objects:
+                    # Capture the ranked recipes from Weaviate search
+                    recipes = list(result.objects)
 
-                yield Response(f"✅ Found {len(recipes)} recipe(s) for planning.")
-            except Exception as e:  # pragma: no cover - defensive
-                logging.error("plan_day_e2e_tool: Auto-search failed: %s", e)
+            # Fallback: If search returned no results, try reading from environment cache
+            # This is only a fallback - primary source is always Weaviate
+            if not recipes:
+                logging.debug("plan_day_e2e_tool: No recipes from Weaviate search, trying environment cache...")
+                sr = tree_data.environment.find("search_and_rank_tool", "topk")
+                if sr:
+                    for entry in reversed(sr):
+                        objs = entry.get("objects") or []
+                        if objs:
+                            # Handle case where objs is a list containing a list of recipes
+                            if len(objs) == 1 and isinstance(objs[0], list):
+                                recipes = objs[0]
+                            else:
+                                recipes = objs
+                                break
+                if recipes:
+                    yield Response("⚠️ Using cached recipes (database search returned no results)")
+
+            if not recipes:
                 yield Error(
-                    f"Failed to automatically search for recipes: {str(e)}. "
+                    "No recipes found in database. "
+                    "Please check your search query or ensure recipes are available in Weaviate."
+                )
+                return
+
+            yield Response(f"✅ Found {len(recipes)} recipe(s) from database for planning.")
+            logging.debug(
+                "plan_day_e2e_tool: recipes from Weaviate search count=%d query='%s'",
+                len(recipes),
+                query_text,
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            logging.error("plan_day_e2e_tool: Failed to search recipes from Weaviate: %s", e)
+            # Last resort: try environment cache
+            sr = tree_data.environment.find("search_and_rank_tool", "topk")
+            recipes = []
+            if sr:
+                for entry in reversed(sr):
+                    objs = entry.get("objects") or []
+                    if objs:
+                        if len(objs) == 1 and isinstance(objs[0], list):
+                            recipes = objs[0]
+                        else:
+                            recipes = objs
+                        break
+                if recipes:
+                    yield Response("⚠️ Using cached recipes (database search failed)")
+            
+            if not recipes:
+                yield Error(
+                    f"Failed to search recipes from database: {str(e)}. "
                     "Please search for recipes first using search_and_rank_tool."
                 )
                 return
@@ -615,8 +1061,9 @@ async def plan_day_e2e_tool(
         # At this point, `recipes` must be non-empty
         
         # IMPROVED VARIETY: Shuffle recipes and exclude recent plans to ensure better variety
-        # Shuffle recipes to randomize selection
-        random.shuffle(recipes)
+        # Shuffle recipes multiple times for better randomization
+        for _ in range(3):  # Shuffle 3 times for better randomization
+            random.shuffle(recipes)
         
         # Check for recent plans and exclude their recipes (configurable minutes, default 10 minutes for testing)
         recent_recipe_ids = set()
@@ -627,7 +1074,7 @@ async def plan_day_e2e_tool(
             
             # Get recent plans within configured window (minutes) for this user
             if user_id:
-                window_minutes = max(1, int(recent_plan_window_minutes or 10))
+                window_minutes = max(1, int(recent_plan_window_minutes or 60))  # Increased from 10 to 60 minutes for better variety
                 recent_date = ensure_rfc3339_datetime(
                     datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
                 )
@@ -775,7 +1222,7 @@ async def plan_day_e2e_tool(
                 "(create a profile for personalized targets)"
             )
 
-        # Step 4: Assemble plan (Vietnamese meal pattern) with improved macro-aware selection
+        # Step 4: Assemble plan (Vietnamese meal pattern) with LLM-guided selection
         yield Response("🔍 Selecting meals following Vietnamese meal patterns and your nutritional targets...")
         
         # Use the recent_recipe_ids set already collected above (or empty set if not collected)
@@ -784,14 +1231,37 @@ async def plan_day_e2e_tool(
         # Use macro_fit strategy if targets available for better quality
         selection_strategy = "macro_fit" if targets else "balanced"
         
-        # Breakfast: Vietnamese breakfast dishes (phở, bánh mì, bún, hủ tiếu, etc.)
-        breakfast = _select_meal_by_strategy(
-            recipes, selection_strategy if targets else "highest_carb", 
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="breakfast",
-            dish_category="breakfast",
-            target_macros=targets
-        )
+        # Calculate max_kcal per meal to avoid selecting dishes that are too high
+        # Breakfast: ~25% of daily target, max 600 kcal
+        # Lunch/Dinner: ~37.5% of daily target, max 900 kcal per meal
+        breakfast_max_kcal = min(600.0, (targets.get("tdee_kcal", 2000) * 0.25 * 1.2) if targets else 600.0)
+        meal_max_kcal = min(900.0, (targets.get("tdee_kcal", 2000) * 0.375 * 1.2) if targets else 900.0)
+        
+        # If LLM draft is available, use it to guide selection
+        # Otherwise, fall back to rule-based selection
+        breakfast = None
+        if llm_draft and llm_draft.breakfast and llm_draft.breakfast.suggestions:
+            # Try to map LLM suggestions to recipes
+            for suggestion in llm_draft.breakfast.suggestions:
+                mapped_recipe = _map_llm_suggestion_to_recipe(
+                    suggestion.model_dump() if hasattr(suggestion, 'model_dump') else suggestion,
+                    recipes,
+                    "breakfast"
+                )
+                if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                    breakfast = mapped_recipe
+                    yield Response(f"✅ Selected breakfast from AI suggestion: {breakfast.get('dish_name', 'Unknown')}")
+                    break
+        
+        # Fallback to rule-based selection if LLM mapping failed
+        if not breakfast:
+            breakfast = _select_meal_by_strategy(
+                recipes, selection_strategy if targets else "highest_carb", 
+                used_recipe_ids=recent_recipe_ids_set,
+                preferred_meal_type="breakfast",
+                dish_category="breakfast",
+                target_macros=targets
+            )
         if not breakfast:
             # Fallback: try any breakfast-type dish
             breakfast = _select_meal_by_strategy(
@@ -807,41 +1277,235 @@ async def plan_day_e2e_tool(
                 yield Response("❌ No recipes available for planning. Please search for recipes first.")
                 return
         
-        # Lunch: Rice + Main dish + Vegetable + Fruit (Vietnamese lunch pattern)
+        # Lunch: Vietnamese lunch pattern - flexible carb selection
+        # Can be: rice, noodles (mì, bún, phở), or combined dishes
+        # If combined dish (mì trộn, cơm chiên, etc.) → only add fruit
+        # If plain rice → add main dish + soup (canh) + vegetable + fruit
+        # If noodles (mì, bún, phở) → standalone dish, optionally add fruit
         excluded = [breakfast]
-        lunch_rice = _select_meal_by_strategy(
-            recipes, selection_strategy if targets else "highest_carb", 
-            exclude=excluded, 
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="lunch", 
-            dish_category="rice", 
-            target_macros=targets
-        )
-        if not lunch_rice:
-            # Fallback: noodle/soup dishes for Vietnamese lunch
-            lunch_rice = _select_meal_by_strategy(
-                recipes, "highest_carb", 
+        
+        # If LLM draft is available, try to map lunch carb suggestions
+        lunch_carb = None
+        if llm_draft and llm_draft.lunch and llm_draft.lunch.suggestions:
+            for suggestion in llm_draft.lunch.suggestions:
+                suggestion_dict = suggestion.model_dump() if hasattr(suggestion, 'model_dump') else suggestion
+                role = suggestion_dict.get("role", "")
+                if role in ["carb", "rice", "noodle"]:
+                    mapped_recipe = _map_llm_suggestion_to_recipe(
+                        suggestion_dict,
+                        recipes,
+                        "carb"
+                    )
+                    if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                        lunch_carb = mapped_recipe
+                        yield Response(f"✅ Selected lunch carb from AI suggestion: {lunch_carb.get('dish_name', 'Unknown')}")
+                        break
+        
+        # Fallback to rule-based selection if LLM mapping failed
+        if not lunch_carb:
+            # Smart selection: prefer plain rice or standalone noodles, NOT combined dishes
+            # dish_category="rice" will filter to plain rice or standalone noodles (NOT combined)
+            lunch_carb = _select_meal_by_strategy(
+                recipes, selection_strategy if targets else "balanced", 
                 exclude=excluded, 
                 used_recipe_ids=recent_recipe_ids_set,
                 preferred_meal_type="lunch", 
-                dish_category="rice",
-                target_macros=targets
+                dish_category="rice",  # This filters to plain rice or standalone noodles (NOT combined)
+                target_macros=targets,
+                max_kcal=meal_max_kcal  # Avoid dishes that are too high in kcal
             )
+        
+        # If not found, try standalone noodle/soup dishes (NOT combined)
+        if not lunch_carb:
+            for recipe in recipes:
+                if recipe in excluded or str(recipe.get("food_id", "")) in recent_recipe_ids_set:
+                    continue
+                if _is_noodle_soup(recipe) and not _is_combined_dish(recipe):
+                    macros = recipe.get("macros_per_serving", {})
+                    if isinstance(macros, dict):
+                        kcal = macros.get("kcal", 0)
+                        if 100 <= kcal <= meal_max_kcal:  # Reasonable kcal range
+                            lunch_carb = recipe
+                            break
+        
+        # Check if it's a combined dish or standalone noodle dish
+        is_lunch_combined = lunch_carb and _is_combined_dish(lunch_carb)
+        is_lunch_noodle = lunch_carb and _is_noodle_soup(lunch_carb) and not is_lunch_combined
+        
+        # IMPORTANT: If lunch_carb is a combined dish, we should NOT use it as rice base
+        # Combined dishes should be treated as standalone meals
+        if lunch_carb and _is_combined_dish(lunch_carb):
+            # This is a combined dish (e.g., "Cơm Cuộn Ba Rọi"), treat it as standalone
+            is_lunch_combined = True
+            is_lunch_noodle = False
+        
+        # If it's a standalone noodle dish (phở, bún bò, etc.), use it as-is
+        # If it's a combined dish, use it as-is
+        # If it's plain rice or nothing found, use default white rice
+        if not lunch_carb:
+            yield Response("ℹ️ No suitable lunch dish found. Using default white rice.")
+            lunch_carb = _create_default_white_rice_recipe()
+            is_lunch_combined = False
+            is_lunch_noodle = False
+        elif not _is_rice_dish(lunch_carb) and not _is_noodle_soup(lunch_carb):
+            # If selected dish is NOT a rice dish and NOT a noodle dish, it's likely a main dish
+            logging.warning(f"Selected lunch_carb is not a rice/noodle dish: {lunch_carb.get('dish_name', 'Unknown')}. Using default white rice.")
+            yield Response("ℹ️ Selected dish is not a rice/noodle dish. Using default white rice for lunch base.")
+            lunch_carb = _create_default_white_rice_recipe()
+            is_lunch_combined = False
+            is_lunch_noodle = False
+        elif _is_main_dish(lunch_carb):
+            # If selected dish is a main dish (shouldn't happen), use default white rice
+            logging.warning(f"Selected lunch_carb is a main dish: {lunch_carb.get('dish_name', 'Unknown')}. Using default white rice.")
+            yield Response("ℹ️ Selected dish is a main dish, not rice. Using default white rice for lunch base.")
+            lunch_carb = _create_default_white_rice_recipe()
+            is_lunch_combined = False
+            is_lunch_noodle = False
+        elif _is_rice_dish(lunch_carb) and not is_lunch_combined:
+            # Plain rice - check if we should use default white rice or found rice
+            # If found rice is actually a combined dish (like fried rice), use default white rice
+            if _is_combined_dish(lunch_carb):
+                yield Response("ℹ️ Found combined rice dish. Using default white rice for lunch base.")
+                lunch_carb = _create_default_white_rice_recipe()
+                is_lunch_combined = False
+            # Otherwise, use the found rice (or default if not found)
+            elif lunch_carb.get("food_id") != "default_white_rice":
+                # Found plain rice in database, use it
+                pass
+        
+        lunch_rice = lunch_carb  # Keep variable name for compatibility
+        
+        lunch_main = None
+        lunch_veg = None
+        lunch_soup = None  # Initialize to avoid UnboundLocalError
+        lunch_fruit = None
+        
+        # Check if lunch_rice is a combined dish (has both carb and protein)
+        is_lunch_combined = lunch_rice and _is_combined_dish(lunch_rice)
         
         if lunch_rice:
             excluded.append(lunch_rice)
-        lunch_main = _select_meal_by_strategy(
-            recipes, selection_strategy if targets else "highest_protein", 
-            exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="lunch", 
-            dish_category="main", 
-            target_macros=targets,
-            require_macros=True,
-            min_kcal=50.0,
-        )
-        if not lunch_main:
-            # Fallback: any protein-rich dish
+            
+            if is_lunch_combined or is_lunch_noodle:
+                # Combined dish or standalone noodle dish: only add fruit (no separate main dish needed)
+                # Vietnamese pattern: mì trộn + trái cây, phở + trái cây, bún bò + trái cây
+                if is_lunch_combined:
+                    yield Response("ℹ️ Selected combined dish for lunch (contains both carbs and protein). Adding fruit only.")
+                else:
+                    yield Response("ℹ️ Selected noodle dish for lunch (standalone meal). Adding fruit only.")
+                lunch_fruit = _select_meal_by_strategy(
+                    recipes, "balanced", 
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="lunch", 
+                    dish_category="fruit", 
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=30.0,
+                )
+                # Validate that selected fruit is actually a fruit (safety check)
+                if lunch_fruit and not _is_fruit(lunch_fruit):
+                    logging.warning(f"Selected 'fruit' is not actually a fruit: {lunch_fruit.get('dish_name', 'Unknown')}")
+                    lunch_fruit = None
+            else:
+                # Plain rice: add main dish + soup (canh) + vegetable + fruit (traditional Vietnamese meal)
+                # Main dish should be reasonable kcal (max 500 kcal for a single main dish)
+                lunch_main = _select_meal_by_strategy(
+                    recipes, selection_strategy if targets else "highest_protein", 
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="lunch", 
+                    dish_category="main", 
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=50.0,
+                    max_kcal=500.0,  # Avoid main dishes that are too high in kcal
+                )
+                if not lunch_main:
+                    # Fallback: any protein-rich dish
+                    lunch_main = _select_meal_by_strategy(
+                        recipes, "highest_protein", 
+                        exclude=excluded, 
+                        used_recipe_ids=recent_recipe_ids_set,
+                        preferred_meal_type="lunch", 
+                        target_macros=targets,
+                        require_macros=True,
+                        min_kcal=50.0,
+                        max_kcal=500.0,  # Avoid main dishes that are too high in kcal
+                    )
+        
+        if lunch_main:
+            excluded.append(lunch_main)
+            
+            # Add soup (canh) - very common in Vietnamese rice meals
+            lunch_soup = _select_meal_by_strategy(
+                recipes, "balanced", 
+                exclude=excluded,
+                used_recipe_ids=recent_recipe_ids_set,
+                preferred_meal_type="lunch", 
+                target_macros=targets,
+                require_macros=True,
+                min_kcal=30.0,
+            )
+            # Filter to only soup dishes (canh)
+            if lunch_soup and not _is_soup(lunch_soup):
+                lunch_soup = None
+            # If no soup found, try to find any soup dish
+            if not lunch_soup:
+                for recipe in recipes:
+                    if recipe in excluded:
+                        continue
+                    if _is_soup(recipe):
+                        lunch_soup = recipe
+                        break
+            
+            if lunch_soup:
+                excluded.append(lunch_soup)
+            
+            # Add vegetable (rau) - optional but common in Vietnamese meals
+            lunch_veg = _select_meal_by_strategy(
+                recipes, "balanced", 
+                exclude=excluded,
+                used_recipe_ids=recent_recipe_ids_set,
+                preferred_meal_type="lunch", 
+                dish_category="vegetable", 
+                target_macros=targets,
+                require_macros=True,
+                min_kcal=30.0,
+            )
+            
+            if lunch_veg:
+                excluded.append(lunch_veg)
+            else:
+                # Add fruit if no vegetable
+                lunch_fruit = _select_meal_by_strategy(
+                    recipes, "balanced", 
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="lunch", 
+                    dish_category="fruit", 
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=30.0,
+                )
+                if lunch_fruit:
+                    excluded.append(lunch_fruit)
+        
+        # Validate that selected fruit is actually a fruit (safety check)
+        if lunch_fruit and not _is_fruit(lunch_fruit):
+            logging.warning(f"Selected 'fruit' is not actually a fruit: {lunch_fruit.get('dish_name', 'Unknown')}")
+            lunch_fruit = None
+        
+        # Validate lunch components
+        if not lunch_rice:
+            yield Response("⚠️ Could not find lunch dish. Using available options...")
+            remaining = [r for r in recipes if r not in [breakfast]]
+            lunch_rice = remaining[0] if remaining else breakfast
+        is_lunch_combined = lunch_rice and _is_combined_dish(lunch_rice)
+        
+        if not is_lunch_combined and not lunch_main:
+            # If plain rice but no main dish, try to find one
+            excluded = [breakfast, lunch_rice]
             lunch_main = _select_meal_by_strategy(
                 recipes, "highest_protein", 
                 exclude=excluded, 
@@ -852,86 +1516,217 @@ async def plan_day_e2e_tool(
                 min_kcal=50.0,
             )
         
+        # Dinner: Vietnamese dinner pattern (same logic as lunch)
+        excluded = [breakfast, lunch_rice]
         if lunch_main:
             excluded.append(lunch_main)
-        lunch_veg = _select_meal_by_strategy(
-            recipes, "balanced", 
-            exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="lunch", 
-            dish_category="vegetable", 
-            target_macros=targets,
-            require_macros=True,
-            min_kcal=30.0,
-        )
-        
         if lunch_veg:
             excluded.append(lunch_veg)
-        lunch_fruit = _select_meal_by_strategy(
-            recipes, "balanced", 
-            exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="lunch", 
-            dish_category="fruit", 
-            target_macros=targets,
-            require_macros=True,
-            min_kcal=30.0,
-        )
-        
-        # Combine lunch components (at minimum need rice + main)
-        if not lunch_rice or not lunch_main:
-            yield Response("⚠️ Could not find complete lunch components. Using available options...")
-            if not lunch_rice:
-                # Use any available recipe as rice substitute
-                exclude_list = [breakfast]
-                if lunch_main:
-                    exclude_list.append(lunch_main)
-                remaining = [r for r in recipes if r not in exclude_list]
-                lunch_rice = remaining[0] if remaining else breakfast
-            if not lunch_main:
-                # Use any available recipe as main substitute
-                remaining = [r for r in recipes if r not in [breakfast, lunch_rice]]
-                lunch_main = remaining[0] if remaining else lunch_rice
-        
-        # Dinner: Rice + Main dish + Vegetable + Fruit (Vietnamese dinner pattern)
-        excluded = [breakfast, lunch_rice, lunch_main]
-        if lunch_veg:
-            excluded.append(lunch_veg)
+        if lunch_soup:
+            excluded.append(lunch_soup)
         if lunch_fruit:
             excluded.append(lunch_fruit)
         
-        dinner_rice = _select_meal_by_strategy(
-            recipes, selection_strategy if targets else "highest_carb", 
+        # Smart selection: prefer plain rice or standalone noodles, NOT combined dishes
+        dinner_carb = _select_meal_by_strategy(
+            recipes, selection_strategy if targets else "balanced", 
             exclude=excluded,
             used_recipe_ids=recent_recipe_ids_set,
             preferred_meal_type="dinner", 
-            dish_category="rice", 
-            target_macros=targets
+            dish_category="rice",  # This filters to plain rice or standalone noodles (NOT combined)
+            target_macros=targets,
+            max_kcal=meal_max_kcal  # Avoid dishes that are too high in kcal
         )
-        if not dinner_rice:
-            # Fallback: noodle/soup dishes for Vietnamese dinner
-            dinner_rice = _select_meal_by_strategy(
-                recipes, "highest_carb", 
-                exclude=excluded, 
-                used_recipe_ids=recent_recipe_ids_set,
-                preferred_meal_type="dinner", 
-                dish_category="rice",
-                target_macros=targets
-            )
+        
+        # If not found, try standalone noodle/soup dishes (NOT combined)
+        if not dinner_carb:
+            for recipe in recipes:
+                if recipe in excluded or str(recipe.get("food_id", "")) in recent_recipe_ids_set:
+                    continue
+                if _is_noodle_soup(recipe) and not _is_combined_dish(recipe):
+                    macros = recipe.get("macros_per_serving", {})
+                    if isinstance(macros, dict):
+                        kcal = macros.get("kcal", 0)
+                        if 100 <= kcal <= meal_max_kcal:  # Reasonable kcal range
+                            dinner_carb = recipe
+                            break
+        
+        # Check if it's a combined dish or standalone noodle dish
+        is_dinner_combined = dinner_carb and _is_combined_dish(dinner_carb)
+        is_dinner_noodle = dinner_carb and _is_noodle_soup(dinner_carb) and not is_dinner_combined
+        
+        # IMPORTANT: If dinner_carb is a combined dish, we should NOT use it as rice base
+        if dinner_carb and _is_combined_dish(dinner_carb):
+            # This is a combined dish, treat it as standalone
+            is_dinner_combined = True
+            is_dinner_noodle = False
+        
+        # If it's a standalone noodle dish (phở, bún bò, etc.), use it as-is
+        # If it's a combined dish, use it as-is
+        # If it's plain rice or nothing found, use default white rice
+        if not dinner_carb:
+            yield Response("ℹ️ No suitable dinner dish found. Using default white rice.")
+            dinner_carb = _create_default_white_rice_recipe()
+            is_dinner_combined = False
+            is_dinner_noodle = False
+        elif not _is_rice_dish(dinner_carb) and not _is_noodle_soup(dinner_carb):
+            # If selected dish is NOT a rice dish and NOT a noodle dish, it's likely a main dish
+            # This shouldn't happen if filtering works correctly, but as a safety check:
+            logging.warning(f"Selected dinner_carb is not a rice/noodle dish: {dinner_carb.get('dish_name', 'Unknown')}. Using default white rice.")
+            yield Response("ℹ️ Selected dish is not a rice/noodle dish. Using default white rice for dinner base.")
+            dinner_carb = _create_default_white_rice_recipe()
+            is_dinner_combined = False
+            is_dinner_noodle = False
+        elif _is_main_dish(dinner_carb):
+            # If selected dish is a main dish (shouldn't happen), use default white rice
+            logging.warning(f"Selected dinner_carb is a main dish: {dinner_carb.get('dish_name', 'Unknown')}. Using default white rice.")
+            yield Response("ℹ️ Selected dish is a main dish, not rice. Using default white rice for dinner base.")
+            dinner_carb = _create_default_white_rice_recipe()
+            is_dinner_combined = False
+            is_dinner_noodle = False
+        elif _is_rice_dish(dinner_carb) and not is_dinner_combined:
+            # Plain rice - check if we should use default white rice or found rice
+            if _is_combined_dish(dinner_carb):
+                yield Response("ℹ️ Found combined rice dish. Using default white rice for dinner base.")
+                dinner_carb = _create_default_white_rice_recipe()
+                is_dinner_combined = False
+            # Otherwise, use the found rice (or default if not found)
+            elif dinner_carb.get("food_id") != "default_white_rice":
+                # Found plain rice in database, use it
+                pass
+        
+        dinner_rice = dinner_carb  # Keep variable name for compatibility
+        
+        dinner_main = None
+        dinner_veg = None
+        dinner_soup = None
+        dinner_fruit = None
         
         if dinner_rice:
             excluded.append(dinner_rice)
-        dinner_main = _select_meal_by_strategy(
-            recipes, selection_strategy if targets else "highest_protein", 
-            exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="dinner", 
-            dish_category="main", 
-            target_macros=targets,
-            require_macros=True,
-            min_kcal=50.0,
-        )
-        if not dinner_main:
+            
+            if is_dinner_combined or is_dinner_noodle:
+                # Combined dish or standalone noodle dish: only add fruit
+                if is_dinner_combined:
+                    yield Response("ℹ️ Selected combined dish for dinner (contains both carbs and protein). Adding fruit only.")
+                else:
+                    yield Response("ℹ️ Selected noodle dish for dinner (standalone meal). Adding fruit only.")
+                dinner_fruit = _select_meal_by_strategy(
+                    recipes, "balanced", 
+                exclude=excluded, 
+                used_recipe_ids=recent_recipe_ids_set,
+                preferred_meal_type="dinner", 
+                    dish_category="fruit", 
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=30.0,
+                )
+                # Validate that selected fruit is actually a fruit (safety check)
+                if dinner_fruit and not _is_fruit(dinner_fruit):
+                    logging.warning(f"Selected 'fruit' is not actually a fruit: {dinner_fruit.get('dish_name', 'Unknown')}")
+                    dinner_fruit = None
+            else:
+                # Plain rice: add main dish + soup (canh) + vegetable + fruit (traditional Vietnamese meal)
+                # Main dish should be reasonable kcal (max 500 kcal for a single main dish)
+                dinner_main = _select_meal_by_strategy(
+                    recipes, selection_strategy if targets else "highest_protein", 
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="dinner", 
+                    dish_category="main", 
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=50.0,
+                    max_kcal=500.0,  # Avoid main dishes that are too high in kcal
+                )
+                if not dinner_main:
+                    dinner_main = _select_meal_by_strategy(
+                        recipes, "highest_protein", 
+                        exclude=excluded, 
+                        used_recipe_ids=recent_recipe_ids_set,
+                        preferred_meal_type="dinner", 
+                        target_macros=targets,
+                        require_macros=True,
+                        min_kcal=50.0,
+                        max_kcal=500.0,  # Avoid main dishes that are too high in kcal
+                    )
+        
+        if dinner_main:
+            excluded.append(dinner_main)
+            
+            # Add soup (canh) - very common in Vietnamese rice meals
+            dinner_soup = _select_meal_by_strategy(
+                recipes, "balanced", 
+                exclude=excluded,
+                used_recipe_ids=recent_recipe_ids_set,
+                preferred_meal_type="dinner", 
+                target_macros=targets,
+                require_macros=True,
+                min_kcal=30.0,
+            )
+            # Filter to only soup dishes (canh)
+            if dinner_soup and not _is_soup(dinner_soup):
+                dinner_soup = None
+            # If no soup found, try to find any soup dish
+            if not dinner_soup:
+                for recipe in recipes:
+                    if recipe in excluded:
+                        continue
+                    if _is_soup(recipe):
+                        dinner_soup = recipe
+                        break
+            
+            if dinner_soup:
+                excluded.append(dinner_soup)
+            
+            # Add vegetable (rau) - optional but common in Vietnamese meals
+            dinner_veg = _select_meal_by_strategy(
+                recipes, "balanced", 
+                exclude=excluded,
+                used_recipe_ids=recent_recipe_ids_set,
+                preferred_meal_type="dinner", 
+                dish_category="vegetable", 
+                target_macros=targets,
+                require_macros=True,
+                min_kcal=30.0,
+            )
+            
+            if dinner_veg:
+                excluded.append(dinner_veg)
+            else:
+                # Add fruit if no vegetable
+                dinner_fruit = _select_meal_by_strategy(
+                    recipes, "balanced", 
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="dinner", 
+                    dish_category="fruit", 
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=30.0,
+                )
+                if dinner_fruit:
+                    excluded.append(dinner_fruit)
+        # Validate that selected fruit is actually a fruit (safety check)
+        if dinner_fruit and not _is_fruit(dinner_fruit):
+            logging.warning(f"Selected 'fruit' is not actually a fruit: {dinner_fruit.get('dish_name', 'Unknown')}")
+            dinner_fruit = None
+        
+        # Validate dinner components
+        if not dinner_rice:
+            yield Response("⚠️ Could not find dinner dish. Using available options...")
+            excluded = [breakfast, lunch_rice]
+            if lunch_main:
+                excluded.append(lunch_main)
+            remaining = [r for r in recipes if r not in excluded]
+            dinner_rice = remaining[0] if remaining else lunch_rice
+        is_dinner_combined = dinner_rice and _is_combined_dish(dinner_rice)
+        
+        if not is_dinner_combined and not dinner_main:
+            # If plain rice but no main dish, try to find one
+            excluded = [breakfast, lunch_rice, dinner_rice]
+            if lunch_main:
+                excluded.append(lunch_main)
             dinner_main = _select_meal_by_strategy(
                 recipes, "highest_protein", 
                 exclude=excluded, 
@@ -941,45 +1736,39 @@ async def plan_day_e2e_tool(
                 require_macros=True,
                 min_kcal=50.0,
             )
+
+        # Phase 3.2: Stream draft early (tên món) before macro calculations
+        yield Response("📋 Draft meal plan:")
+        breakfast_name = breakfast.get("dish_name", "Unknown") if breakfast else "Not selected"
+        yield Response(f"  🌅 Breakfast: {breakfast_name}")
         
-        if dinner_main:
-            excluded.append(dinner_main)
-        dinner_veg = _select_meal_by_strategy(
-            recipes, "balanced", 
-            exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="dinner", 
-            dish_category="vegetable", 
-            target_macros=targets,
-            require_macros=True,
-            min_kcal=30.0,
-        )
+        if lunch_rice:
+            lunch_items = [lunch_rice.get("dish_name", "Unknown")]
+            # If combined dish or noodle dish, no separate main dish
+            if lunch_main:
+                lunch_items.append(lunch_main.get("dish_name", "Unknown"))
+            if lunch_soup:
+                lunch_items.append(lunch_soup.get("dish_name", "Unknown"))
+            if lunch_veg:
+                lunch_items.append(lunch_veg.get("dish_name", "Unknown"))
+            if lunch_fruit:
+                lunch_items.append(lunch_fruit.get("dish_name", "Unknown"))
+            yield Response(f"  🍽️ Lunch: {', '.join(lunch_items)}")
         
-        if dinner_veg:
-            excluded.append(dinner_veg)
-        dinner_fruit = _select_meal_by_strategy(
-            recipes, "balanced", 
-            exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
-            preferred_meal_type="dinner", 
-            dish_category="fruit", 
-            target_macros=targets,
-            require_macros=True,
-            min_kcal=30.0,
-        )
+        if dinner_rice:
+            dinner_items = [dinner_rice.get("dish_name", "Unknown")]
+            # If combined dish or noodle dish, no separate main dish
+            if dinner_main:
+                dinner_items.append(dinner_main.get("dish_name", "Unknown"))
+            if dinner_soup:
+                dinner_items.append(dinner_soup.get("dish_name", "Unknown"))
+            if dinner_veg:
+                dinner_items.append(dinner_veg.get("dish_name", "Unknown"))
+            if dinner_fruit:
+                dinner_items.append(dinner_fruit.get("dish_name", "Unknown"))
+            yield Response(f"  🌙 Dinner: {', '.join(dinner_items)}")
         
-        if not dinner_rice or not dinner_main:
-            yield Response("⚠️ Could not find complete dinner components. Using available options...")
-            if not dinner_rice:
-                # Use any available recipe as rice substitute
-                excluded = [breakfast, lunch_rice, lunch_main]
-                remaining = [r for r in recipes if r not in excluded]
-                dinner_rice = remaining[0] if remaining else lunch_rice
-            if not dinner_main:
-                # Use any available recipe as main substitute
-                excluded = [breakfast, lunch_rice, lunch_main, dinner_rice]
-                remaining = [r for r in recipes if r not in excluded]
-                dinner_main = remaining[0] if remaining else lunch_main
+        yield Response("⚖️ Calculating nutrition details...")
 
         # Build plan with Vietnamese meal structure
         logging.debug(
@@ -1013,57 +1802,109 @@ async def plan_day_e2e_tool(
                 "macros": _calculate_meal_macros(breakfast, 1.0),
             },
             "lunch": {
-                "recipe": lunch_rice,  # Primary dish (rice)
+                "recipe": lunch_rice,  # Primary dish (rice or combined dish)
                 "servings": 1.0,
                 "meal_type": "lunch",
-                "accompaniments": [
-                    {"recipe": lunch_main, "servings": 1.0, "type": "main"},
-                ]
+                "accompaniments": []
             },
             "dinner": {
-                "recipe": dinner_rice,  # Primary dish (rice)
+                "recipe": dinner_rice,  # Primary dish (rice or combined dish)
                 "servings": 1.0,
                 "meal_type": "dinner",
-                "accompaniments": [
-                    {"recipe": dinner_main, "servings": 1.0, "type": "main"},
-                ]
+                "accompaniments": []
             },
         }
         
-        # Add vegetables and fruits if available (only if they have macros)
+        # Add vegetables and fruits following Vietnamese meal patterns
+        # Vietnamese lunch/dinner structure: 
+        # - If combined dish (mì trộn, cơm chiên): Only add fruit
+        # - If plain rice: Rice (carb) + Main dish (món mặn) + Vegetable/Canh (common) + Fruit (optional, less common)
+        # Priority: Vegetable/Canh is more important than fruit in Vietnamese meals
+        # Rule: Add vegetable if available, only add fruit if no vegetable (to avoid too many side dishes)
+        
+        # Lunch accompaniments
+        # Only add main dish if not a combined dish or noodle dish
+        if lunch_main and not is_lunch_combined and not is_lunch_noodle:
+            lunch_main_macros = _get_meal_macros(lunch_main)
+            if lunch_main_macros.get("kcal", 0) > 0:
+                plan["lunch"]["accompaniments"].append({
+                    "recipe": lunch_main,
+                    "servings": 1.0,  # Always 1.0 serving
+                    "type": "main",
+                    "macros": _calculate_meal_macros(lunch_main, 1.0),
+                })
+        
+        # Add soup (canh) - very common in Vietnamese rice meals
+        if lunch_soup and not is_lunch_combined and not is_lunch_noodle:
+            lunch_soup_macros = _get_meal_macros(lunch_soup)
+            if lunch_soup_macros.get("kcal", 0) > 0:
+                plan["lunch"]["accompaniments"].append({
+                    "recipe": lunch_soup,
+                    "servings": 1.0,  # Always 1.0 serving
+                    "type": "soup",
+                    "macros": _calculate_meal_macros(lunch_soup, 1.0),
+                })
+        
         if lunch_veg:
             lunch_veg_macros = _get_meal_macros(lunch_veg)
             if lunch_veg_macros.get("kcal", 0) > 0:  # Only add if has macros
                 plan["lunch"]["accompaniments"].append({
                     "recipe": lunch_veg,
-                    "servings": 1.0,
+                    "servings": 1.0,  # Always 1.0 serving (Vietnamese meal pattern)
                     "type": "vegetable",
                     "macros": _calculate_meal_macros(lunch_veg, 1.0),
                 })
-        if lunch_fruit:
+        # Fruit is optional for lunch (less common in Vietnamese meals)
+        # Only add fruit if vegetable was not added (to keep meal structure simple)
+        elif lunch_fruit:  # Add fruit only if no vegetable
             lunch_fruit_macros = _get_meal_macros(lunch_fruit)
-            if lunch_fruit_macros.get("kcal", 0) > 0:  # Only add if has macros
+            if lunch_fruit_macros.get("kcal", 0) > 0:
                 plan["lunch"]["accompaniments"].append({
                     "recipe": lunch_fruit,
-                    "servings": 1.0,
+                    "servings": 1.0,  # Always 1.0 serving
                     "type": "fruit",
                     "macros": _calculate_meal_macros(lunch_fruit, 1.0),
                 })
+        
+        # Dinner accompaniments (same logic - prioritize vegetable over fruit)
+        # Only add main dish if not a combined dish or noodle dish
+        if dinner_main and not is_dinner_combined and not is_dinner_noodle:
+            dinner_main_macros = _get_meal_macros(dinner_main)
+            if dinner_main_macros.get("kcal", 0) > 0:
+                plan["dinner"]["accompaniments"].append({
+                    "recipe": dinner_main,
+                    "servings": 1.0,  # Always 1.0 serving
+                    "type": "main",
+                    "macros": _calculate_meal_macros(dinner_main, 1.0),
+                })
+        
+        # Add soup (canh) - very common in Vietnamese rice meals
+        if dinner_soup and not is_dinner_combined and not is_dinner_noodle:
+            dinner_soup_macros = _get_meal_macros(dinner_soup)
+            if dinner_soup_macros.get("kcal", 0) > 0:
+                plan["dinner"]["accompaniments"].append({
+                    "recipe": dinner_soup,
+                    "servings": 1.0,  # Always 1.0 serving
+                    "type": "soup",
+                    "macros": _calculate_meal_macros(dinner_soup, 1.0),
+                })
+        
         if dinner_veg:
             dinner_veg_macros = _get_meal_macros(dinner_veg)
             if dinner_veg_macros.get("kcal", 0) > 0:  # Only add if has macros
                 plan["dinner"]["accompaniments"].append({
                     "recipe": dinner_veg,
-                    "servings": 1.0,
+                    "servings": 1.0,  # Always 1.0 serving (Vietnamese meal pattern)
                     "type": "vegetable",
                     "macros": _calculate_meal_macros(dinner_veg, 1.0),
                 })
-        if dinner_fruit:
+        # Fruit is optional for dinner (less common in Vietnamese meals)
+        elif dinner_fruit:  # Add fruit only if no vegetable
             dinner_fruit_macros = _get_meal_macros(dinner_fruit)
-            if dinner_fruit_macros.get("kcal", 0) > 0:  # Only add if has macros
+            if dinner_fruit_macros.get("kcal", 0) > 0:
                 plan["dinner"]["accompaniments"].append({
                     "recipe": dinner_fruit,
-                    "servings": 1.0,
+                    "servings": 1.0,  # Always 1.0 serving
                     "type": "fruit",
                     "macros": _calculate_meal_macros(dinner_fruit, 1.0),
                 })
@@ -1155,95 +1996,259 @@ async def plan_day_e2e_tool(
             f"{total_macros['carb_g']:.0f}g carbs"
         )
 
-        # Step 4.5: Optimize servings to better match targets (if targets available)
+        # Step 4.5: Keep all servings at 1.0 (Vietnamese meal pattern - fixed portions)
+        # Vietnamese meals typically use standard serving sizes (1 serving per dish)
+        # No scaling needed - recipes should be designed for 1 serving
         if targets and total_macros.get("kcal", 0) > 0:
-            target_kcal = targets.get("tdee_kcal", 2000)
-            current_kcal = total_macros.get("kcal", 1)
+            # Ensure all servings are exactly 1.0
+            if "breakfast" in plan:
+                plan["breakfast"]["servings"] = 1.0
             
-            # Calculate adjustment factor (only if deviation is significant)
-            if abs(current_kcal - target_kcal) / target_kcal > 0.1:  # More than 10% deviation
-                adjustment_factor = target_kcal / current_kcal
-                # Allow wider adjustment range (0.5x to 1.5x) to handle larger deviations
-                # This ensures we can adjust even when calories are way off target
-                adjustment_factor = max(0.5, min(1.5, adjustment_factor))
+            if "lunch" in plan:
+                plan["lunch"]["servings"] = 1.0
+                for acc in plan["lunch"].get("accompaniments", []):
+                    acc["servings"] = 1.0
+            
+            if "dinner" in plan:
+                plan["dinner"]["servings"] = 1.0
+                for acc in plan["dinner"].get("accompaniments", []):
+                    acc["servings"] = 1.0
+                    
+            # Recalculate total macros and per-meal macros with fixed 1.0 servings
+            total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+            for meal_key, meal_data in plan.items():
+                recipe = meal_data["recipe"]
+                servings = 1.0  # Always 1.0 serving
+                macros = _get_meal_macros(recipe)
+                meal_macros = {k: macros[k] * servings for k in macros}
                 
-                # Apply adjustment to servings (only if adjustment is meaningful)
-                if abs(adjustment_factor - 1.0) > 0.05:  # At least 5% change
-                    yield Response(f"⚖️ Adjusting servings to better match your targets...")
-                    for meal_key, meal_data in plan.items():
-                        # Adjust main recipe servings (min 1.0 serving)
-                        current_servings = meal_data.get("servings", 1.0)
-                        meal_data["servings"] = max(1.0, round(current_servings * adjustment_factor, 2))
-                        
-                        # Adjust accompaniments servings (min 1.0 serving)
-                        accompaniments = meal_data.get("accompaniments", [])
-                        for acc in accompaniments:
-                            acc_current = acc.get("servings", 1.0)
-                            acc["servings"] = max(1.0, round(acc_current * adjustment_factor, 2))
+                accompaniments = meal_data.get("accompaniments", [])
+                for acc in accompaniments:
+                    acc_recipe = acc.get("recipe")
+                    acc_servings = 1.0  # Always 1.0 serving
+                    if acc_recipe:
+                        acc_macros = _get_meal_macros(acc_recipe)
+                        for k in meal_macros:
+                            meal_macros[k] += acc_macros[k] * acc_servings
+                
+                # Update per-meal macros
+                meal_data["macros"] = meal_macros
+                
+                # Update macros_main and macros_total for lunch/dinner
+                if meal_key in ["lunch", "dinner"]:
+                    meal_data["macros_main"] = {k: macros[k] * servings for k in macros}
+                    meal_data["macros_total"] = meal_macros.copy()
+                
+                # Add to total
+                for k in total_macros:
+                    total_macros[k] += meal_macros[k]
+            
+            # Phase 1.2: Iterative adjust - try swapping alternatives if deviation is large
+            if targets:
+                target_kcal = targets.get("tdee_kcal", 2000)
+                current_kcal = total_macros.get("kcal", 0)
+                
+                # Check if deviation is significant (>20%)
+                if current_kcal > 0 and abs(current_kcal - target_kcal) / target_kcal > 0.2:
+                    yield Response(f"🔄 Trying alternative recipes to improve macro fit...")
                     
-                    # Recalculate total macros and per-meal macros with adjusted servings
-                    total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-                    for meal_key, meal_data in plan.items():
-                        recipe = meal_data["recipe"]
-                        servings = meal_data.get("servings", 1.0)
-                        macros = _get_meal_macros(recipe)
-                        meal_macros = {k: macros[k] * servings for k in macros}
-                        
-                        accompaniments = meal_data.get("accompaniments", [])
-                        for acc in accompaniments:
-                            acc_recipe = acc.get("recipe")
-                            acc_servings = acc.get("servings", 1.0)
-                            if acc_recipe:
-                                acc_macros = _get_meal_macros(acc_recipe)
-                                for k in meal_macros:
-                                    meal_macros[k] += acc_macros[k] * acc_servings
-                        
-                        # Update per-meal macros
-                        meal_data["macros"] = meal_macros
-                        
-                        # Add to total
-                        for k in total_macros:
-                            total_macros[k] += meal_macros[k]
+                    # Calculate meal targets for comparison
+                    lunch_targets = _calculate_meal_targets(targets, "lunch")
+                    dinner_targets = _calculate_meal_targets(targets, "dinner")
                     
-                    # If still significantly off after first adjustment, do a second pass
-                    # This helps when the initial adjustment was limited
-                    new_kcal = total_macros.get("kcal", 0)
-                    if new_kcal > 0 and abs(new_kcal - target_kcal) / target_kcal > 0.15:
-                        # Second adjustment pass with remaining deviation
-                        second_adjustment = target_kcal / new_kcal
-                        # More conservative second pass (0.7x to 1.3x)
-                        second_adjustment = max(0.7, min(1.3, second_adjustment))
+                    swaps_made = 0
+                    max_swaps = 5  # Increased from 2 to 5 for better macro fit
+                    
+                    # Try swapping lunch main if deviation is large
+                    if "lunch" in plan and swaps_made < max_swaps:
+                        lunch_data = plan["lunch"]
+                        lunch_main = None
+                        lunch_carb = lunch_data.get("recipe", {})
+                        accompaniments = lunch_data.get("accompaniments", [])
                         
-                        if abs(second_adjustment - 1.0) > 0.05:
-                            for meal_key, meal_data in plan.items():
-                                current_servings = meal_data.get("servings", 1.0)
-                                meal_data["servings"] = max(1.0, round(current_servings * second_adjustment, 2))
-                                
-                                accompaniments = meal_data.get("accompaniments", [])
-                                for acc in accompaniments:
-                                    acc_current = acc.get("servings", 1.0)
-                                    acc["servings"] = max(1.0, round(acc_current * second_adjustment, 2))
+                        for acc in accompaniments:
+                            if acc.get("type") == "main":
+                                lunch_main = acc.get("recipe", {})
+                                break
+                        
+                        if lunch_main:
+                            # Calculate current meal macros
+                            main_macros = _get_meal_macros(lunch_main)
+                            main_servings = next((acc.get("servings", 1.0) for acc in accompaniments if acc.get("type") == "main"), 1.0)
+                            carb_macros = _get_meal_macros(lunch_carb)
+                            carb_servings = lunch_data.get("servings", 1.0)
                             
-                            # Recalculate one more time
-                            total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-                            for meal_key, meal_data in plan.items():
-                                recipe = meal_data["recipe"]
-                                servings = meal_data.get("servings", 1.0)
-                                macros = _get_meal_macros(recipe)
-                                meal_macros = {k: macros[k] * servings for k in macros}
-                                
-                                accompaniments = meal_data.get("accompaniments", [])
-                                for acc in accompaniments:
-                                    acc_recipe = acc.get("recipe")
+                            current_meal_macros = {
+                                "kcal": main_macros.get("kcal", 0) * main_servings + carb_macros.get("kcal", 0) * carb_servings,
+                                "protein_g": main_macros.get("protein_g", 0) * main_servings + carb_macros.get("protein_g", 0) * carb_servings,
+                                "fat_g": main_macros.get("fat_g", 0) * main_servings + carb_macros.get("fat_g", 0) * carb_servings,
+                                "carb_g": main_macros.get("carb_g", 0) * main_servings + carb_macros.get("carb_g", 0) * carb_servings,
+                            }
+                            
+                            # Add veg/fruit/soup macros
+                            for acc in accompaniments:
+                                if acc.get("type") in ["vegetable", "fruit", "soup"]:
+                                    acc_macros = _get_meal_macros(acc.get("recipe", {}))
                                     acc_servings = acc.get("servings", 1.0)
-                                    if acc_recipe:
-                                        acc_macros = _get_meal_macros(acc_recipe)
-                                        for k in meal_macros:
-                                            meal_macros[k] += acc_macros[k] * acc_servings
+                                    for k in current_meal_macros:
+                                        current_meal_macros[k] += acc_macros.get(k, 0) * acc_servings
+                            
+                            # Check if deviation is large for this meal
+                            meal_deviation = _calculate_total_deviation_score(current_meal_macros, lunch_targets)
+                            if meal_deviation > 0.2:  # >20% deviation
+                                # Get alternative main dishes from recipes (with kcal filter)
+                                alternative_mains = [
+                                    r for r in recipes
+                                    if r.get("food_id") != lunch_main.get("food_id")
+                                    and _is_main_dish(r)
+                                    and not _is_combined_dish(r)  # Exclude combined dishes
+                                    and r.get("macros_per_serving", {}).get("kcal", 0) > 0
+                                    and r.get("macros_per_serving", {}).get("kcal", 0) <= 500.0  # Filter out dishes that are too high in kcal
+                                ][:5]  # Try top 5 alternatives for better selection
                                 
-                                meal_data["macros"] = meal_macros
-                                for k in total_macros:
-                                    total_macros[k] += meal_macros[k]
+                                if alternative_mains:
+                                    best_main, best_scale, best_score = _try_swap_alternatives(
+                                        lunch_main,
+                                        alternative_mains,
+                                        lunch_targets,
+                                        "main",
+                                        main_servings,
+                                        max_alternatives=5,  # Increased from 2 to 5 for better selection
+                                    )
+                                    
+                                    if best_main and best_score < meal_deviation:
+                                        # Swap main dish (keep servings at 1.0)
+                                        for acc in accompaniments:
+                                            if acc.get("type") == "main":
+                                                acc["recipe"] = best_main
+                                                acc["servings"] = 1.0  # Always 1.0 serving
+                                                break
+                                        swaps_made += 1
+                    
+                    # Try swapping dinner main if deviation is large
+                    if "dinner" in plan and swaps_made < max_swaps:
+                            dinner_data = plan["dinner"]
+                            dinner_main = None
+                            dinner_carb = dinner_data.get("recipe", {})
+                            accompaniments = dinner_data.get("accompaniments", [])
+                            
+                            for acc in accompaniments:
+                                if acc.get("type") == "main":
+                                    dinner_main = acc.get("recipe", {})
+                                    break
+                            
+                            if dinner_main:
+                                # Calculate current meal macros
+                                main_macros = _get_meal_macros(dinner_main)
+                                main_servings = next((acc.get("servings", 1.0) for acc in accompaniments if acc.get("type") == "main"), 1.0)
+                                carb_macros = _get_meal_macros(dinner_carb)
+                                carb_servings = dinner_data.get("servings", 1.0)
+                                
+                                current_meal_macros = {
+                                    "kcal": main_macros.get("kcal", 0) * main_servings + carb_macros.get("kcal", 0) * carb_servings,
+                                    "protein_g": main_macros.get("protein_g", 0) * main_servings + carb_macros.get("protein_g", 0) * carb_servings,
+                                    "fat_g": main_macros.get("fat_g", 0) * main_servings + carb_macros.get("fat_g", 0) * carb_servings,
+                                    "carb_g": main_macros.get("carb_g", 0) * main_servings + carb_macros.get("carb_g", 0) * carb_servings,
+                                }
+                                
+                                # Add veg/fruit/soup macros
+                                for acc in accompaniments:
+                                    if acc.get("type") in ["vegetable", "fruit", "soup"]:
+                                        acc_macros = _get_meal_macros(acc.get("recipe", {}))
+                                        acc_servings = acc.get("servings", 1.0)
+                                        for k in current_meal_macros:
+                                            current_meal_macros[k] += acc_macros.get(k, 0) * acc_servings
+                                
+                                # Check if deviation is large for this meal
+                                meal_deviation = _calculate_total_deviation_score(current_meal_macros, dinner_targets)
+                                if meal_deviation > 0.2:  # >20% deviation
+                                    # Get alternative main dishes from recipes (with kcal filter)
+                                    alternative_mains = [
+                                        r for r in recipes
+                                        if r.get("food_id") != dinner_main.get("food_id")
+                                        and _is_main_dish(r)
+                                        and not _is_combined_dish(r)  # Exclude combined dishes
+                                        and r.get("macros_per_serving", {}).get("kcal", 0) > 0
+                                        and r.get("macros_per_serving", {}).get("kcal", 0) <= 500.0  # Filter out dishes that are too high in kcal
+                                    ][:5]  # Try top 5 alternatives for better selection
+                                    
+                                    if alternative_mains:
+                                        best_main, best_scale, best_score = _try_swap_alternatives(
+                                            dinner_main,
+                                            alternative_mains,
+                                            dinner_targets,
+                                            "main",
+                                            main_servings,
+                                            max_alternatives=5,  # Increased from 2 to 5 for better selection
+                                        )
+                                        
+                                        if best_main and best_score < meal_deviation:
+                                            # Swap main dish (keep servings at 1.0)
+                                            for acc in accompaniments:
+                                                if acc.get("type") == "main":
+                                                    acc["recipe"] = best_main
+                                                    acc["servings"] = 1.0  # Always 1.0 serving
+                                                    break
+                                            swaps_made += 1
+                    
+                    # Recalculate total macros after swaps
+                    if swaps_made > 0:
+                        total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                        for meal_key, meal_data in plan.items():
+                            recipe = meal_data["recipe"]
+                            servings = meal_data.get("servings", 1.0)
+                            macros = _get_meal_macros(recipe)
+                            meal_macros = {k: macros[k] * servings for k in macros}
+                            
+                            accompaniments = meal_data.get("accompaniments", [])
+                            for acc in accompaniments:
+                                acc_recipe = acc.get("recipe")
+                                acc_servings = acc.get("servings", 1.0)
+                                if acc_recipe:
+                                    acc_macros = _get_meal_macros(acc_recipe)
+                                    for k in meal_macros:
+                                        meal_macros[k] += acc_macros[k] * acc_servings
+                            
+                            meal_data["macros"] = meal_macros
+                            if meal_key in ["lunch", "dinner"]:
+                                meal_data["macros_main"] = {k: macros[k] * servings for k in macros}
+                                meal_data["macros_total"] = meal_macros.copy()
+                            
+                            for k in total_macros:
+                                total_macros[k] += meal_macros[k]
+                        
+                        yield Response(f"✅ Swapped {swaps_made} recipe(s) to improve macro fit")
+                        
+                        # Ensure all servings remain at 1.0 (Vietnamese meal pattern - fixed portions)
+                        for meal_key, meal_data in plan.items():
+                            meal_data["servings"] = 1.0
+                            for acc in meal_data.get("accompaniments", []):
+                                acc["servings"] = 1.0
+                        
+                        # Recalculate total macros with fixed 1.0 servings
+                        total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                        for meal_key, meal_data in plan.items():
+                            recipe = meal_data.get("recipe", {})
+                            servings = 1.0  # Always 1.0
+                            macros = _get_meal_macros(recipe)
+                            meal_macros = {k: macros[k] * servings for k in macros}
+                            
+                            accompaniments = meal_data.get("accompaniments", [])
+                            for acc in accompaniments:
+                                acc_recipe = acc.get("recipe")
+                                acc_servings = 1.0  # Always 1.0
+                                if acc_recipe:
+                                    acc_macros = _get_meal_macros(acc_recipe)
+                                    for k in meal_macros:
+                                        meal_macros[k] += acc_macros[k] * acc_servings
+                            
+                            meal_data["macros"] = meal_macros
+                            if meal_key in ["lunch", "dinner"]:
+                                meal_data["macros_main"] = {k: macros[k] * servings for k in macros}
+                                meal_data["macros_total"] = meal_macros.copy()
+                            
+                            for k in total_macros:
+                                total_macros[k] += meal_macros[k]
 
         # Step 5: Validate
         validation = {"valid": True, "macro_validation": {}, "constraint_validation": {}}
@@ -1414,6 +2419,32 @@ async def plan_day_e2e_tool(
             payload_type="generic",
             display=False,
         )
+        
+        # Phase 2.2: LLM Critic (async, non-blocking)
+        if base_lm and targets:
+            try:
+                critic_task = create_critic_task(
+                    base_lm=base_lm,
+                    plan=plan_output,
+                    targets=targets,
+                    validation=validation,
+                )
+                
+                if critic_task:
+                    # Try to get critic note quickly (with timeout)
+                    try:
+                        critic_note = await asyncio.wait_for(critic_task, timeout=5.0)
+                        if critic_note:
+                            plan_output["critic_note"] = critic_note
+                            yield Response(f"💡 Gợi ý: {critic_note}")
+                    except asyncio.TimeoutError:
+                        # Critic taking too long, continue without it
+                        logging.debug("LLM critic timeout, continuing without critic note")
+                    except Exception as e:
+                        logging.debug(f"LLM critic error: {e}")
+            except Exception as e:
+                logging.debug(f"Failed to create LLM critic task: {e}")
+        
         _clear_missing_macro_state(tree_data)
 
     except ValueError as e:

@@ -204,16 +204,34 @@ async def substitute_tool(
         exclude_allergens = []
         plan = None
         plan_source = None
-        day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-        if day_plan_results and day_plan_results[0]["objects"]:
-            plan = copy.deepcopy(day_plan_results[0]["objects"][0])
-            plan_source = "plan_day_e2e_tool"
-        else:
-            week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-            if week_plan_results and week_plan_results[0]["objects"]:
-                plan = copy.deepcopy(week_plan_results[0]["objects"][0])
-                plan_source = "plan_week_e2e_tool"
-        plan_user_id = plan.get("user_id") if plan else None
+        
+        # Load plan from Weaviate if plan_id provided
+        if plan_id:
+            from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+            plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
+            if plan:
+                plan_source = plan.get("plan_type", "day") + "_plan"
+        elif user_id:
+            # Load latest plan for user
+            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+            if not plan:
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+        
+        # Fallback: try environment cache (only as last resort)
+        if not plan:
+            logger.debug("substitute_tool: No plan from database, trying environment cache")
+            day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+            if day_plan_results and day_plan_results[0]["objects"]:
+                plan = copy.deepcopy(day_plan_results[0]["objects"][0])
+                plan_source = "plan_day_e2e_tool"
+            else:
+                week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+                if week_plan_results and week_plan_results[0]["objects"]:
+                    plan = copy.deepcopy(week_plan_results[0]["objects"][0])
+                    plan_source = "plan_week_e2e_tool"
+        
+        plan_user_id = plan.get("user_id") if plan else user_id
         if plan and (plan.get("plan_id") or plan_id):
             plan["plan_id"] = plan.get("plan_id") or plan_id
         

@@ -112,8 +112,39 @@ def _normalise_recipe_object(obj: Any) -> Dict[str, Any] | None:
     return None
 
 
-def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> Dict[str, Any] | None:
-    """Try to locate a recipe object from various environment slots."""
+def _find_recipe_from_weaviate(
+    food_id: str,
+    client_manager,
+) -> Dict[str, Any] | None:
+    """Load recipe from Weaviate database by food_id."""
+    try:
+        client = client_manager.get_client()
+        recipe_collection = client.collections.get("Recipe")
+        from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+        
+        recipe_filter = build_filters_from_where({
+            "path": ["food_id"], "operator": "Equal", "valueString": str(food_id)
+        })
+        recipe_results = recipe_collection.query.fetch_objects(filters=recipe_filter, limit=1)
+        
+        if recipe_results.objects:
+            return recipe_results.objects[0].properties
+    except Exception as e:
+        logging.debug(f"Failed to load recipe {food_id} from Weaviate: {e}")
+    return None
+
+
+def _find_recipe_from_environment(
+    tree_data: TreeData,
+    food_id: str | None,
+    client_manager=None,
+) -> Dict[str, Any] | None:
+    """
+    Try to locate a recipe object.
+    
+    IMPORTANT: If food_id is provided, always try Weaviate database first (source of truth).
+    Environment cache is only used as fallback.
+    """
     # 0) If a recipe_id was previously selected and stored, prioritise it
     try:
         selected = tree_data.environment.find("cook_mode_tool", "recipe_id")
@@ -124,7 +155,14 @@ def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> D
                 food_id = str(selected_id)
     except Exception:
         pass
-    # 1) From weekly or daily plan (E2E tools)
+    
+    # 1) If food_id provided, try Weaviate database first (source of truth)
+    if food_id and client_manager:
+        recipe = _find_recipe_from_weaviate(food_id, client_manager)
+        if recipe:
+            return _normalise_recipe_object(recipe) or recipe
+    
+    # 2) From weekly or daily plan (E2E tools) - fallback to environment cache
     for tool_name, name in [("plan_week_e2e_tool", "plan"), ("plan_day_e2e_tool", "plan")]:
         res = tree_data.environment.find(tool_name, name)
         if res and res[0]["objects"]:
@@ -145,7 +183,7 @@ def _find_recipe_from_environment(tree_data: TreeData, food_id: str | None) -> D
                             if r_norm and (food_id is None or str(r_norm.get("food_id")) == str(food_id)):
                                 return r_norm
 
-    # 2) From search/topk
+    # 3) From search/topk - fallback to environment cache
     res = tree_data.environment.find("search_and_rank_tool", "topk")
     if res and res[0]["objects"]:
         for r in res[0]["objects"]:
@@ -234,7 +272,7 @@ async def cook_mode_tool(
     # Stream initial message first for immediate feedback
     yield Response("🔪 Preparing step-by-step cooking instructions...")
 
-    recipe = _find_recipe_from_environment(tree_data, food_id)
+    recipe = _find_recipe_from_environment(tree_data, food_id, client_manager)
     if not recipe:
         msg = "No recipe found. Please select a recipe from your meal plan or search results first."
         logging.warning("cook_mode_tool: %s", msg)

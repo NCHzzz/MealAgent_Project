@@ -211,40 +211,93 @@ async def pantry_diff_tool(
         yield Error("user_id is required")
         return
 
-    # Read plan from E2E tools (prefer daily, fallback to weekly)
+    # Load plan from Weaviate database (source of truth)
     plan = None
     plan_source = None
     plan_id = None
     plan_user_id = None
 
-    day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-    if day_plan_results and day_plan_results[0]["objects"]:
-        plan = day_plan_results[0]["objects"][0]
-        plan_source = "plan_day_e2e_tool"
-    else:
-        week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-        if week_plan_results and week_plan_results[0]["objects"]:
-            plan = week_plan_results[0]["objects"][0]
-            plan_source = "plan_week_e2e_tool"
+    if plan_id:
+        # Load specific plan by plan_id
+        from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+        plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
+        if plan:
+            plan_source = plan.get("plan_type", "day") + "_plan"
+    elif user_id:
+        # Load latest plan for user
+        from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+        plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+        if not plan:
+            plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+    
+    # Fallback: try environment cache (only as last resort)
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if not plan:
+        logger.warning("pantry_diff_tool: No plan from database, trying environment cache")
+        day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+        if day_plan_results and day_plan_results[0]["objects"]:
+            plan = day_plan_results[0]["objects"][0]
+            plan_source = "plan_day_e2e_tool"
+            yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
         else:
-            yield Error("No plan found. Run plan_day_e2e_tool or plan_week_e2e_tool first.")
-            return
+            week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+            if week_plan_results and week_plan_results[0]["objects"]:
+                plan = week_plan_results[0]["objects"][0]
+                plan_source = "plan_week_e2e_tool"
+                yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+    
+    if not plan:
+        yield Error("No plan found. Please provide plan_id or user_id, or run plan_day_e2e_tool/plan_week_e2e_tool first.")
+        return
+    
     plan_id = plan.get("plan_id")
-    plan_user_id = plan.get("user_id")
+    plan_user_id = plan.get("user_id") or user_id
     
     # Extract shopping items from plan
     shopping_items = _extract_ingredients_from_plan(plan)
     plan_type = plan.get("plan_type", "day")
     yield Response(f"📋 Extracted {len(shopping_items)} ingredient(s) from {plan_type} plan")
 
-    # Read pantry state
-    pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
-    if not pantry_results or not pantry_results[0].get("objects"):
-        yield Error("Pantry state not found. Run pantry_crud_tool first.")
-        return
-
-    pantry_state = pantry_results[0]["objects"][0]
-    pantry_items = pantry_state.get("items", [])
+    # Load pantry state from Weaviate database
+    try:
+        client = client_manager.get_client()
+        pantry_collection = client.collections.get("Pantry")
+        
+        # Find pantry for user
+        pantry_filter = build_filters_from_where({
+            "path": ["user_id"], "operator": "Equal", "valueString": plan_user_id
+        })
+        pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
+        
+        if pantry_results.objects:
+            pantry_obj = pantry_results.objects[0]
+            pantry_state = pantry_obj.properties
+            pantry_items = pantry_state.get("items", [])
+            yield Response(f"📦 Loaded pantry with {len(pantry_items)} item(s) from database")
+        else:
+            # Fallback: try environment cache
+            logger.warning("pantry_diff_tool: No pantry from database, trying environment cache")
+            pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
+            if pantry_results and pantry_results[0].get("objects"):
+                pantry_state = pantry_results[0]["objects"][0]
+                pantry_items = pantry_state.get("items", [])
+                yield Response("⚠️ Using cached pantry (please ensure pantry is saved to database)")
+            else:
+                yield Error("Pantry state not found in database. Please create or update your pantry first.")
+                return
+    except Exception as e:
+        logger.error(f"Failed to load pantry from Weaviate: {e}")
+        # Fallback: try environment cache
+        pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
+        if pantry_results and pantry_results[0].get("objects"):
+            pantry_state = pantry_results[0]["objects"][0]
+            pantry_items = pantry_state.get("items", [])
+            yield Response("⚠️ Using cached pantry (database access failed)")
+        else:
+            yield Error(f"Failed to load pantry: {str(e)}")
+            return
 
     try:
         client = client_manager.get_client()

@@ -468,26 +468,98 @@ async def plan_week_e2e_tool(
         else:
             yield Response("ℹ️ No dietary constraints specified")
         
-        # Step 3: Read ranked recipes
-        sr = tree_data.environment.find("search_and_rank_tool", "topk")
-        recipes = []
-        if sr:
-            for entry in reversed(sr):
-                objs = entry.get("objects") or []
-                if objs:
-                    recipes = objs
-                    break
-        logging.debug(
-            "plan_week_e2e_tool: recipes count=%d query='%s'",
-            len(recipes),
-            query_text,
-        )
-        if not recipes:
-            yield Error(
-                "No recipes found. Please search for recipes first using search_and_rank_tool, "
-                "or check that your search query and constraints are not too restrictive."
+        # Step 3: Search recipes from Weaviate database
+        # IMPORTANT: Always search from Weaviate to get latest data, not from environment cache
+        # Environment cache may be stale - Weaviate is the source of truth
+        yield Response("🔍 Searching recipes from database...")
+        try:
+            from MealAgent.tools.search.search_and_rank import search_and_rank_tool
+
+            # Search recipes from Weaviate database
+            # This ensures we always get the latest recipes with up-to-date macros
+            search_query = query_text if query_text else "Vietnamese recipes"
+            recipes: list[Dict[str, Any]] = []
+            
+            async for result in search_and_rank_tool(
+                tree_data=tree_data,
+                inputs={},
+                base_lm=base_lm,
+                complex_lm=complex_lm,
+                client_manager=client_manager,
+                query_text=search_query,
+                collection_name="Recipe",
+                limit=100,  # Get more recipes for weekly planning
+                top_k=50,  # Top 50 for planning
+                **kwargs,
+            ):
+                if isinstance(result, Error):
+                    error_msg = str(result) if hasattr(result, '__str__') else "Unknown error"
+                    yield Error(
+                        f"Failed to search recipes from database: {error_msg}. "
+                        "Please check your search query or try a different query."
+                    )
+                    return
+                if isinstance(result, Response):
+                    # Forward progress messages to the user
+                    yield result
+                elif isinstance(result, Result) and result.objects:
+                    # Capture the ranked recipes from Weaviate search
+                    recipes = list(result.objects)
+
+            # Fallback: If search returned no results, try reading from environment cache
+            # This is only a fallback - primary source is always Weaviate
+            if not recipes:
+                logging.debug("plan_week_e2e_tool: No recipes from Weaviate search, trying environment cache...")
+                sr = tree_data.environment.find("search_and_rank_tool", "topk")
+                if sr:
+                    for entry in reversed(sr):
+                        objs = entry.get("objects") or []
+                        if objs:
+                            # Handle case where objs is a list containing a list of recipes
+                            if len(objs) == 1 and isinstance(objs[0], list):
+                                recipes = objs[0]
+                            else:
+                                recipes = objs
+                            break
+                    if recipes:
+                        yield Response("⚠️ Using cached recipes (database search returned no results)")
+            
+            if not recipes:
+                yield Error(
+                    "No recipes found in database. "
+                    "Please check your search query or ensure recipes are available in Weaviate."
+                )
+                return
+
+            yield Response(f"✅ Found {len(recipes)} recipe(s) from database for planning.")
+            logging.debug(
+                "plan_week_e2e_tool: recipes from Weaviate search count=%d query='%s'",
+                len(recipes),
+                query_text,
             )
-            return
+        except Exception as e:  # pragma: no cover - defensive
+            logging.error("plan_week_e2e_tool: Failed to search recipes from Weaviate: %s", e)
+            # Last resort: try environment cache
+            sr = tree_data.environment.find("search_and_rank_tool", "topk")
+            recipes = []
+            if sr:
+                for entry in reversed(sr):
+                    objs = entry.get("objects") or []
+                    if objs:
+                        if len(objs) == 1 and isinstance(objs[0], list):
+                            recipes = objs[0]
+                        else:
+                            recipes = objs
+                        break
+                if recipes:
+                    yield Response("⚠️ Using cached recipes (database search failed)")
+            
+            if not recipes:
+                yield Error(
+                    f"Failed to search recipes from database: {str(e)}. "
+                    "Please search for recipes first using search_and_rank_tool."
+                )
+                return
         
         # IMPROVED VARIETY: Exclude recently used recipes to avoid repetition (configurable window)
         # Check for recent plans and exclude their recipes

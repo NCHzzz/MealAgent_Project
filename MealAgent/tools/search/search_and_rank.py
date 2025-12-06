@@ -26,8 +26,9 @@ except ImportError:
 
 # Defaults
 DEFAULT_SEARCH_LIMIT = 50
-DEFAULT_HYBRID_ALPHA = 0.5
+DEFAULT_HYBRID_ALPHA = 0.7  # Phase 1.3: Vector 0.7, keyword 0.3 (as per flow doc)
 DEFAULT_TOP_K = 50
+DEFAULT_SEARCH_THRESHOLD = 0.6  # Phase 1.3: Minimum score threshold for search results
 
 
 def _merge_where_clauses(clauses: list[Dict | None]) -> Dict | None:
@@ -163,6 +164,7 @@ async def _search_with_custom_logic(
     *,
     sample_size: int = 200,
     randomize_offset: bool = True,
+    search_threshold: float = DEFAULT_SEARCH_THRESHOLD,
 ) -> List[Dict[str, Any]] | None:
     """
     Use custom search logic (direct Weaviate queries) with optional random offset sampling.
@@ -242,7 +244,42 @@ async def _search_with_custom_logic(
         if results is None or not results.objects:
             return None
 
+        # Phase 1.3: Filter results by threshold score (if available)
+        threshold = search_threshold
+        filtered_items = []
+        search_misses = 0
+        
+        for obj in results.objects:
+            item = obj.properties.copy()
+            # Try to get score from _additional metadata
+            score = None
+            if hasattr(obj, "_additional") and obj._additional:
+                try:
+                    score = getattr(obj._additional, "score", None)
+                except AttributeError:
+                    pass
+            
+            # If score is available and below threshold, skip
+            if score is not None and score < threshold:
+                search_misses += 1
+                continue
+            
+            filtered_items.append(item)
+        
+        # Log search misses if any
+        if search_misses > 0:
+            logging.debug(
+                f"search_and_rank_tool: Filtered out {search_misses} result(s) below threshold {threshold}"
+            )
+        
+        # If no items pass threshold but we have results, return all (fallback)
+        if not filtered_items and results.objects:
+            logging.debug(
+                f"search_and_rank_tool: No results above threshold {threshold}, returning all results as fallback"
+            )
         return [obj.properties for obj in results.objects]
+        
+        return filtered_items
     except Exception as e:
         logging.error(f"Custom search logic failed: {str(e)}")
         return None
@@ -419,6 +456,7 @@ async def search_and_rank_tool(
                 alpha,
                 sample_size=kwargs.get("sample_size", 200),
                 randomize_offset=kwargs.get("randomize_offset", True),
+                search_threshold=kwargs.get("search_threshold", DEFAULT_SEARCH_THRESHOLD),
             )
 
         if not items:
