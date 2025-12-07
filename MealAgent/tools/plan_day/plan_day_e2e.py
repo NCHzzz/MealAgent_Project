@@ -2048,20 +2048,58 @@ async def plan_day_e2e_tool(
                 target_kcal = targets.get("tdee_kcal", 2000)
                 current_kcal = total_macros.get("kcal", 0)
                 
-                # Check if deviation is significant (>20%)
-                if current_kcal > 0 and abs(current_kcal - target_kcal) / target_kcal > 0.2:
+                # Calculate overall deviation score
+                overall_deviation = _calculate_total_deviation_score(total_macros, targets)
+                
+                # Check if deviation is significant (>20% for kcal or >15% overall)
+                kcal_deviation_pct = abs(current_kcal - target_kcal) / target_kcal if target_kcal > 0 else 1.0
+                if current_kcal > 0 and (kcal_deviation_pct > 0.2 or overall_deviation > 0.15):
                     yield Response(f"🔄 Trying alternative recipes to improve macro fit...")
                     
                     # Calculate meal targets for comparison
                     lunch_targets = _calculate_meal_targets(targets, "lunch")
                     dinner_targets = _calculate_meal_targets(targets, "dinner")
+                    breakfast_targets = _calculate_meal_targets(targets, "breakfast")
                     
                     swaps_made = 0
-                    max_swaps = 5  # Increased from 2 to 5 for better macro fit
+                    max_swaps = 8  # Increased to allow more swaps for better overall balance
+                    max_iterations = 3  # Maximum iterations to avoid infinite loops
+                    iteration = 0
                     
-                    # Try swapping lunch main if deviation is large
-                    if "lunch" in plan and swaps_made < max_swaps:
-                        lunch_data = plan["lunch"]
+                    # Keep track of best overall score
+                    best_overall_score = overall_deviation
+                    best_plan_state = None
+                    
+                    # Iterative swapping: try to improve overall balance
+                    while iteration < max_iterations and swaps_made < max_swaps:
+                        iteration += 1
+                        improved = False
+                        
+                        # Calculate current overall deviation
+                        current_total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                        for meal_key, meal_data in plan.items():
+                            recipe = meal_data.get("recipe", {})
+                            servings = meal_data.get("servings", 1.0)
+                            macros = _get_meal_macros(recipe)
+                            meal_macros = {k: macros[k] * servings for k in macros}
+                            
+                            accompaniments = meal_data.get("accompaniments", [])
+                            for acc in accompaniments:
+                                acc_recipe = acc.get("recipe")
+                                acc_servings = acc.get("servings", 1.0)
+                                if acc_recipe:
+                                    acc_macros = _get_meal_macros(acc_recipe)
+                                    for k in meal_macros:
+                                        meal_macros[k] += acc_macros[k] * acc_servings
+                            
+                            for k in current_total_macros:
+                                current_total_macros[k] += meal_macros[k]
+                        
+                        current_overall_score = _calculate_total_deviation_score(current_total_macros, targets)
+                        
+                        # Try swapping lunch main if deviation is large
+                        if "lunch" in plan and swaps_made < max_swaps:
+                            lunch_data = plan["lunch"]
                         lunch_main = None
                         lunch_carb = lunch_data.get("recipe", {})
                         accompaniments = lunch_data.get("accompaniments", [])
@@ -2117,16 +2155,55 @@ async def plan_day_e2e_tool(
                                     )
                                     
                                     if best_main and best_score < meal_deviation:
-                                        # Swap main dish (keep servings at 1.0)
+                                        # Temporarily swap to check overall improvement
+                                        temp_plan_state = {}
                                         for acc in accompaniments:
                                             if acc.get("type") == "main":
+                                                temp_plan_state["old_recipe"] = acc.get("recipe")
+                                                temp_plan_state["old_servings"] = acc.get("servings", 1.0)
                                                 acc["recipe"] = best_main
-                                                acc["servings"] = 1.0  # Always 1.0 serving
+                                                acc["servings"] = 1.0
                                                 break
-                                        swaps_made += 1
-                    
-                    # Try swapping dinner main if deviation is large
-                    if "dinner" in plan and swaps_made < max_swaps:
+                                        
+                                        # Recalculate total macros with swap
+                                        temp_total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                                        for meal_key, meal_data in plan.items():
+                                            recipe = meal_data.get("recipe", {})
+                                            servings = meal_data.get("servings", 1.0)
+                                            macros = _get_meal_macros(recipe)
+                                            meal_macros = {k: macros[k] * servings for k in macros}
+                                            
+                                            accompaniments_temp = meal_data.get("accompaniments", [])
+                                            for acc in accompaniments_temp:
+                                                acc_recipe = acc.get("recipe")
+                                                acc_servings = acc.get("servings", 1.0)
+                                                if acc_recipe:
+                                                    acc_macros = _get_meal_macros(acc_recipe)
+                                                    for k in meal_macros:
+                                                        meal_macros[k] += acc_macros[k] * acc_servings
+                                            
+                                            for k in temp_total_macros:
+                                                temp_total_macros[k] += meal_macros[k]
+                                        
+                                        temp_overall_score = _calculate_total_deviation_score(temp_total_macros, targets)
+                                        
+                                        # Only keep swap if it improves overall balance
+                                        if temp_overall_score < current_overall_score:
+                                            swaps_made += 1
+                                            improved = True
+                                            current_overall_score = temp_overall_score
+                                            if temp_overall_score < best_overall_score:
+                                                best_overall_score = temp_overall_score
+                                        else:
+                                            # Revert swap
+                                            for acc in accompaniments:
+                                                if acc.get("type") == "main":
+                                                    acc["recipe"] = temp_plan_state.get("old_recipe")
+                                                    acc["servings"] = temp_plan_state.get("old_servings", 1.0)
+                                                    break
+                        
+                        # Try swapping dinner main if deviation is large
+                        if "dinner" in plan and swaps_made < max_swaps:
                             dinner_data = plan["dinner"]
                             dinner_main = None
                             dinner_carb = dinner_data.get("recipe", {})
@@ -2183,13 +2260,56 @@ async def plan_day_e2e_tool(
                                         )
                                         
                                         if best_main and best_score < meal_deviation:
-                                            # Swap main dish (keep servings at 1.0)
+                                            # Temporarily swap to check overall improvement
+                                            temp_plan_state = {}
                                             for acc in accompaniments:
                                                 if acc.get("type") == "main":
+                                                    temp_plan_state["old_recipe"] = acc.get("recipe")
+                                                    temp_plan_state["old_servings"] = acc.get("servings", 1.0)
                                                     acc["recipe"] = best_main
-                                                    acc["servings"] = 1.0  # Always 1.0 serving
+                                                    acc["servings"] = 1.0
                                                     break
-                                            swaps_made += 1
+                                            
+                                            # Recalculate total macros with swap
+                                            temp_total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                                            for meal_key, meal_data in plan.items():
+                                                recipe = meal_data.get("recipe", {})
+                                                servings = meal_data.get("servings", 1.0)
+                                                macros = _get_meal_macros(recipe)
+                                                meal_macros = {k: macros[k] * servings for k in macros}
+                                                
+                                                accompaniments_temp = meal_data.get("accompaniments", [])
+                                                for acc in accompaniments_temp:
+                                                    acc_recipe = acc.get("recipe")
+                                                    acc_servings = acc.get("servings", 1.0)
+                                                    if acc_recipe:
+                                                        acc_macros = _get_meal_macros(acc_recipe)
+                                                        for k in meal_macros:
+                                                            meal_macros[k] += acc_macros[k] * acc_servings
+                                                
+                                                for k in temp_total_macros:
+                                                    temp_total_macros[k] += meal_macros[k]
+                                            
+                                            temp_overall_score = _calculate_total_deviation_score(temp_total_macros, targets)
+                                            
+                                            # Only keep swap if it improves overall balance
+                                            if temp_overall_score < current_overall_score:
+                                                swaps_made += 1
+                                                improved = True
+                                                current_overall_score = temp_overall_score
+                                                if temp_overall_score < best_overall_score:
+                                                    best_overall_score = temp_overall_score
+                                            else:
+                                                # Revert swap
+                                                for acc in accompaniments:
+                                                    if acc.get("type") == "main":
+                                                        acc["recipe"] = temp_plan_state.get("old_recipe")
+                                                        acc["servings"] = temp_plan_state.get("old_servings", 1.0)
+                                                        break
+                        
+                        # Break early if no improvement was made
+                        if not improved:
+                            break
                     
                     # Recalculate total macros after swaps
                     if swaps_made > 0:
