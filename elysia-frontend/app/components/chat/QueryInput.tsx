@@ -8,6 +8,7 @@ import { FaTrash } from "react-icons/fa";
 import CollectionSelection from "./components/CollectionSelection";
 import { Button } from "@/components/ui/button";
 import { TbSettings } from "react-icons/tb";
+import StreamingIndicator from "./components/StreamingIndicator";
 
 interface QueryInputProps {
   handleSendQuery: (query: string, route?: string, mimick?: boolean) => void;
@@ -49,10 +50,11 @@ const QueryInput: React.FC<QueryInputProps> = ({
     >
       <div className="w-full flex justify-between items-center gap-2 mb-2">
         {currentStatus != "" ? (
-          <div className="flex gap-2 items-center">
-            <FaCircle className="text-lg pulsing" />
-            <p className="text-sm shine">{currentStatus}</p>
-          </div>
+          <StreamingIndicator
+            isStreaming={true}
+            message={currentStatus}
+            variant="default"
+          />
         ) : (
           <div></div>
         )}

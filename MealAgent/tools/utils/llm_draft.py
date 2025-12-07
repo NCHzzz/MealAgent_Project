@@ -6,6 +6,7 @@ Generates meal framework suggestions using LLM, with fallback to rule-based sele
 
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional
 
 try:
@@ -20,263 +21,453 @@ from MealAgent.schemas.llm_draft import LLMDraftResponse, MealSlotDraft, MealDra
 logger = logging.getLogger(__name__)
 
 
+def _clean_json_string(text: str) -> str:
+    """Clean control characters and normalize text for JSON parsing."""
+    if not text:
+        return ""
+    # Remove control characters (but keep newlines/tabs that are escaped)
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+    # Replace smart quotes with regular quotes
+    text = text.replace('\u201c', '"').replace('\u201d', '"').replace('\u2018', "'").replace('\u2019', "'")
+    return text.strip()
+
+
+def _extract_json_objects(text: str) -> List[Dict[str, Any]]:
+    """
+    Extract JSON objects from text using balanced brace matching.
+    Simple and robust fallback for malformed JSON.
+    """
+    if not text:
+        return []
+    
+    text = _clean_json_string(text)
+    objects = []
+    brace_count = 0
+    start_idx = None
+    in_string = False
+    escape_next = False
+    
+    for idx, char in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+        
+        if char == '\\' and in_string:
+            escape_next = True
+            continue
+        
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        
+        if not in_string:
+            if char == '{':
+                if brace_count == 0:
+                    start_idx = idx
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and start_idx is not None:
+                    obj_str = text[start_idx:idx+1]
+                    try:
+                        obj = json.loads(obj_str)
+                        if isinstance(obj, dict):
+                            objects.append(obj)
+                    except json.JSONDecodeError:
+                        pass
+                    start_idx = None
+    
+    return objects
+
+
+def _parse_json_response(response_text: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Parse LLM JSON response with simplified, robust logic.
+    Returns list of dicts or None if parsing fails completely.
+    """
+    if not response_text or not isinstance(response_text, str):
+        return None
+    
+    original_text = response_text
+    response_text = _clean_json_string(response_text)
+    
+    # Remove markdown code blocks if present
+    if "```json" in response_text:
+        json_start = response_text.find("```json") + 7
+        json_end = response_text.find("```", json_start)
+        if json_end != -1:
+            response_text = response_text[json_start:json_end].strip()
+    elif "```" in response_text:
+        json_start = response_text.find("```") + 3
+        json_end = response_text.find("```", json_start)
+        if json_end != -1:
+            response_text = response_text[json_start:json_end].strip()
+    
+    # Try to parse as JSON
+    try:
+        data = json.loads(response_text)
+        
+        # Case 1: Already a list of dicts - perfect!
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            logger.debug(f"Successfully parsed {len(data)} objects directly")
+            return data
+        
+        # Case 2: List of strings - could be JSON strings or plain dish names
+        if isinstance(data, list) and data and isinstance(data[0], str):
+            logger.debug(f"Detected array of {len(data)} strings, parsing each...")
+            parsed_objects = []
+            
+            for idx, json_str in enumerate(data):
+                if not isinstance(json_str, str):
+                    continue
+                
+                clean_str = _clean_json_string(json_str)
+                if not clean_str:
+                    continue
+                
+                # Try to parse as JSON object first
+                try:
+                    obj = json.loads(clean_str)
+                    if isinstance(obj, dict):
+                        parsed_objects.append(obj)
+                        logger.debug(f"Successfully parsed object {idx+1}/{len(data)}")
+                    elif isinstance(obj, list):
+                        parsed_objects.extend([x for x in obj if isinstance(x, dict)])
+                    continue
+                except json.JSONDecodeError:
+                    pass
+                
+                # Try balanced brace extraction
+                extracted = _extract_json_objects(clean_str)
+                if extracted:
+                    parsed_objects.extend(extracted)
+                    logger.debug(f"Extracted {len(extracted)} object(s) from string {idx+1} using balanced braces")
+                    continue
+                
+                # Fallback: If it's a plain string (dish name), convert to object
+                # This handles cases where LLM returns ["Dish name 1", "Dish name 2", ...]
+                if clean_str and not clean_str.startswith('{') and not clean_str.startswith('['):
+                    # It's a plain dish name, create a basic object structure
+                    # We'll let _normalize_suggestion handle the details
+                    logger.debug(f"Detected plain string (dish name) at index {idx+1}: {clean_str[:50]}...")
+                    parsed_objects.append({"dish_name": clean_str})
+            
+            if parsed_objects:
+                logger.debug(f"Successfully parsed {len(parsed_objects)} objects from array of strings")
+                return parsed_objects
+            else:
+                logger.warning(f"Failed to parse any objects from array of {len(data)} strings")
+                return None
+        
+        # Case 3: Single dict
+        if isinstance(data, dict):
+            if "suggestions" in data and isinstance(data["suggestions"], list):
+                return data["suggestions"]
+            return [data]
+            
+    except json.JSONDecodeError as e:
+        logger.debug(f"Initial JSON parse failed: {e}, trying extraction...")
+    
+    # Fallback: Try to extract JSON objects using balanced braces
+    objects = _extract_json_objects(response_text)
+    if objects:
+        logger.debug(f"Extracted {len(objects)} object(s) using balanced braces")
+        return objects
+    
+    # Final fallback - log and return None
+    logger.warning(f"Failed to parse LLM JSON response. First 500 chars: {original_text[:500]}")
+    return None
+
+
+def _normalize_suggestion(item: Dict[str, Any], meal_slot: str) -> Optional[MealDraftSuggestion]:
+    """Normalize a suggestion dict to MealDraftSuggestion schema."""
+    if not isinstance(item, dict):
+        return None
+    
+    # If item only has "dish_name" (from plain string fallback), generate other fields
+    if "dish_name" in item and len(item) == 1:
+        dish_name = str(item["dish_name"])
+        # Generate general_term from dish_name
+        general_term = dish_name.lower()
+        # Remove Vietnamese diacritics and normalize
+        try:
+            import unicodedata
+            general_term = unicodedata.normalize('NFD', general_term)
+            general_term = ''.join(c for c in general_term if unicodedata.category(c) != 'Mn')
+        except ImportError:
+            pass
+        general_term = re.sub(r'[^a-z0-9\s-]', '', general_term)
+        general_term = re.sub(r'\s+', '-', general_term).strip('-')
+        
+        item["general_term"] = general_term
+        item["meal_type"] = meal_slot
+        
+        # Infer role and category from dish_name
+        dish_name_lower = dish_name.lower()
+        if meal_slot == "breakfast":
+            item["role"] = "breakfast"
+            if any(kw in dish_name_lower for kw in ["bánh mì", "banh mi", "bread"]):
+                item["category"] = "bread"
+            elif any(kw in dish_name_lower for kw in ["phở", "pho", "bún", "bun", "mì", "mi", "noodle"]):
+                item["category"] = "noodle"
+            else:
+                item["category"] = "bread"  # Default for breakfast
+        else:
+            # For lunch/dinner, infer role and category
+            if any(kw in dish_name_lower for kw in ["cơm", "com", "rice"]):
+                item["role"] = "carb"
+                item["category"] = "rice"
+            elif any(kw in dish_name_lower for kw in ["phở", "pho", "bún", "bun", "mì", "mi", "noodle"]):
+                item["role"] = "carb"
+                item["category"] = "noodle"
+            elif any(kw in dish_name_lower for kw in ["rau", "salad", "vegetable"]):
+                item["role"] = "vegetable"
+                item["category"] = "vegetable"
+            elif any(kw in dish_name_lower for kw in ["trái cây", "trai cay", "fruit", "quả", "qua"]):
+                item["role"] = "fruit"
+                item["category"] = "fruit"
+            else:
+                item["role"] = "main"
+                item["category"] = "main_dish"
+    
+    # Field mapping
+    field_mapping = {
+        "dish_name": "dish_name",
+        "name": "dish_name",
+        "general_term": "general_term",
+        "term": "general_term",
+        "role": "role",
+        "meal_type": "meal_type",
+        "meal": "meal_type",
+        "category": "category",
+    }
+    
+    # Role mapping
+    role_mapping = {
+        "main_course": "main", "main course": "main", "main dish": "main", "main": "main",
+        "món chính": "main", "món mặn": "main", "món ăn chính": "main",
+        "carb": "carb", "carbohydrate": "carb", "món tinh bột": "carb", "cơm": "carb", "mì": "carb",
+        "vegetable": "vegetable", "món phụ": "vegetable", "món rau": "vegetable", "rau": "vegetable",
+        "fruit": "fruit", "trái cây": "fruit",
+        "breakfast": "breakfast", "bữa sáng": "breakfast"
+    }
+    
+    # Category mapping
+    category_mapping = {
+        "seafood": "main_dish", "italian": "main_dish", "asian": "main_dish",
+        "main_dish": "main_dish", "món mặn": "main_dish", "thịt": "main_dish", "cá": "main_dish",
+        "protein": "main_dish", "healthy": "main_dish", "high_protein": "main_dish", "high protein": "main_dish",
+        "vegetarian": "main_dish", "balanced": "main_dish",
+        "salad": "vegetable",
+        "rice": "rice", "cơm": "rice",
+        "noodle": "noodle", "mì": "noodle", "bún": "noodle",
+        "soup": "soup", "canh": "soup",
+        "bread": "bread", "bánh mì": "bread",
+        "bakery": "bakery", "bánh": "bakery",
+        "vegetable": "vegetable", "rau": "vegetable",
+        "fruit": "fruit", "trái cây": "fruit"
+    }
+    
+    normalized = {}
+    
+    # Map fields
+    for key, value in item.items():
+        mapped_key = field_mapping.get(key.lower(), key)
+        value_str = str(value).lower().strip() if value else ""
+        
+        if mapped_key == "role":
+            normalized[mapped_key] = role_mapping.get(value_str, "main")
+        elif mapped_key == "category":
+            normalized[mapped_key] = category_mapping.get(value_str, "main_dish")
+        else:
+            normalized[mapped_key] = value
+    
+    # Set defaults
+    if "meal_type" not in normalized:
+        normalized["meal_type"] = meal_slot
+    
+    # Infer category from role or dish_name if invalid
+    category = normalized.get("category", "")
+    valid_categories = ["rice", "noodle", "soup", "bread", "bakery", "main_dish", "vegetable", "fruit"]
+    
+    if category not in valid_categories:
+        role = normalized.get("role", "").lower()
+        dish_name = str(normalized.get("dish_name", "")).lower()
+        
+        if role in ["main", "món chính", "món mặn"]:
+            category = "main_dish"
+        elif role in ["carb", "cơm", "mì"]:
+            category = "rice"
+        elif role in ["vegetable", "món phụ", "rau"]:
+            category = "vegetable"
+        elif role in ["fruit", "trái cây"]:
+            category = "fruit"
+        elif role in ["breakfast", "bữa sáng"]:
+            category = "bread"
+        elif any(kw in dish_name for kw in ["cơm", "com", "rice"]):
+            category = "rice"
+        elif any(kw in dish_name for kw in ["mì", "mi", "bún", "bun", "noodle"]):
+            category = "noodle"
+        elif any(kw in dish_name for kw in ["canh", "soup"]):
+            category = "soup"
+        elif any(kw in dish_name for kw in ["bánh mì", "banh mi", "bread"]):
+            category = "bread"
+        elif any(kw in dish_name for kw in ["rau", "salad", "vegetable"]):
+            category = "vegetable"
+        elif any(kw in dish_name for kw in ["trái cây", "trai cay", "fruit"]):
+            category = "fruit"
+        else:
+            category = "main_dish"
+        
+        normalized["category"] = category
+    
+    try:
+        return MealDraftSuggestion(**normalized)
+    except Exception as e:
+        logger.warning(f"Failed to create MealDraftSuggestion: {e}")
+        return None
+
+
 async def _llm_draft_meal_suggestions(
     base_lm,
     meal_history: List[str],
     constraints: Dict[str, Any],
-    meal_slot: str,  # "breakfast", "lunch", "dinner"
+    meal_slot: str,
     user_preferences: Optional[str] = None,
-    tree_data=None,  # TreeData for ElysiaChainOfThought
+    tree_data=None,
 ) -> Optional[MealSlotDraft]:
     """
     Use LLM to suggest meal framework for a specific meal slot.
-    
-    Args:
-        base_lm: LLM client (optional, can be None for fallback)
-        meal_history: List of recently used dish names to avoid
-        constraints: Dictionary with diet_types, exclude_allergens, etc.
-        meal_slot: "breakfast", "lunch", or "dinner"
-        user_preferences: Optional user preferences text
-    
-    Returns:
-        MealSlotDraft with 2-3 suggestions, or None if LLM fails
     """
     if not base_lm:
         logger.debug("No LLM available, skipping LLM draft")
         return None
     
     # Build prompt
-    meal_history_text = ", ".join(meal_history[:10]) if meal_history else "không có"
+    meal_history_text = ", ".join(meal_history[:15]) if meal_history else "không có"
+    diversity_note = f"\n⚠️ QUAN TRỌNG: Đã có {len(meal_history)} món đã dùng gần đây. Bạn PHẢI chọn các món HOÀN TOÀN KHÁC, không được lặp lại: {meal_history_text}" if meal_history else ""
     
     diet_types = constraints.get("diet_types", [])
     allergens = constraints.get("exclude_allergens", [])
-    
     diet_text = f"Chế độ ăn: {', '.join(diet_types)}" if diet_types else "Không có chế độ ăn đặc biệt"
     allergen_text = f"Tránh: {', '.join(allergens)}" if allergens else "Không có dị ứng"
     
-    # Vietnamese meal pattern guidelines
+    # Meal pattern guidelines
     if meal_slot == "breakfast":
-        pattern_guide = """
-Bữa sáng Việt Nam thường nhẹ, gồm:
-- Bánh mì, xôi, phở, bún, hủ tiếu, bánh cuốn
-- Bánh ngọt, croissant, brioche (nếu không cấm)
-- Cơm tấm, xôi mặn (ít phổ biến hơn)
-"""
+        pattern_guide = "Bữa sáng Việt Nam: Bánh mì, xôi, phở, bún, hủ tiếu, bánh cuốn, bánh ngọt"
         roles_needed = ["breakfast"]
-    elif meal_slot == "lunch":
-        pattern_guide = """
-Bữa trưa Việt Nam thường gồm:
-- Cơm hoặc món nước (phở, bún, mì) làm carb chính
-- Món mặn (thịt, cá, tôm, gà) làm main
-- Rau xanh làm vegetable
-- Trái cây làm fruit
-"""
-        roles_needed = ["carb", "main", "vegetable", "fruit"]
-    else:  # dinner
-        pattern_guide = """
-Bữa tối Việt Nam thường gồm:
-- Cơm hoặc món nước (phở, bún, mì) làm carb chính
-- Món mặn (thịt, cá, tôm, gà) làm main
-- Rau xanh làm vegetable
-- Trái cây làm fruit
-"""
-        roles_needed = ["carb", "main", "vegetable", "fruit"]
-    
-    # Build role-specific examples
-    if meal_slot == "breakfast":
-        example_output = """[
-  {
-    "dish_name": "Bánh mì thịt nướng",
-    "general_term": "banh-mi-thit-nuong",
-    "role": "breakfast",
-    "meal_type": "breakfast",
-    "category": "bread"
-  },
-  {
-    "dish_name": "Phở bò",
-    "general_term": "pho-bo",
-    "role": "breakfast",
-    "meal_type": "breakfast",
-    "category": "noodle"
-  }
+        example = """[
+  {"dish_name": "Bánh mì thịt nướng", "general_term": "banh-mi-thit-nuong", "role": "breakfast", "meal_type": "breakfast", "category": "bread"},
+  {"dish_name": "Phở bò", "general_term": "pho-bo", "role": "breakfast", "meal_type": "breakfast", "category": "noodle"}
 ]"""
-    elif meal_slot == "lunch":
-        example_output = """[
-  {
-    "dish_name": "Cơm trắng",
-    "general_term": "com-trang",
-    "role": "carb",
-    "meal_type": "lunch",
-    "category": "rice"
-  },
-  {
-    "dish_name": "Thịt kho tàu",
-    "general_term": "thit-kho-tau",
-    "role": "main",
-    "meal_type": "lunch",
-    "category": "main_dish"
-  },
-  {
-    "dish_name": "Rau muống xào tỏi",
-    "general_term": "rau-muong-xao-toi",
-    "role": "vegetable",
-    "meal_type": "lunch",
-    "category": "vegetable"
-  }
-]"""
-    else:  # dinner
-        example_output = """[
-  {
-    "dish_name": "Cơm trắng",
-    "general_term": "com-trang",
-    "role": "carb",
-    "meal_type": "dinner",
-    "category": "rice"
-  },
-  {
-    "dish_name": "Cá kho tộ",
-    "general_term": "ca-kho-to",
-    "role": "main",
-    "meal_type": "dinner",
-    "category": "main_dish"
-  },
-  {
-    "dish_name": "Canh chua cá",
-    "general_term": "canh-chua-ca",
-    "role": "main",
-    "meal_type": "dinner",
-    "category": "soup"
-  }
+    else:  # lunch or dinner
+        pattern_guide = "Bữa trưa/tối Việt Nam: Cơm hoặc món nước (phở, bún, mì) + Món mặn (thịt, cá, tôm, gà) + Rau xanh + Trái cây"
+        roles_needed = ["carb", "main", "vegetable", "fruit"]
+        example = """[
+  {"dish_name": "Cơm trắng", "general_term": "com-trang", "role": "carb", "meal_type": "lunch", "category": "rice"},
+  {"dish_name": "Thịt kho tàu", "general_term": "thit-kho-tau", "role": "main", "meal_type": "lunch", "category": "main_dish"},
+  {"dish_name": "Rau muống xào tỏi", "general_term": "rau-muong-xao-toi", "role": "vegetable", "meal_type": "lunch", "category": "vegetable"}
 ]"""
     
-    prompt = f"""Bạn là chuyên gia ẩm thực Việt Nam. Nhiệm vụ của bạn là đề xuất 2-3 món ăn cho bữa {meal_slot} theo khẩu vị Việt Nam.
+    prompt = f"""Bạn là chuyên gia ẩm thực Việt Nam. Đề xuất 2-3 món ăn cho bữa {meal_slot}.
 
-## YÊU CẦU VỀ MÓN ĂN:
+## ⚠️ QUAN TRỌNG - ƯU TIÊN MÓN ĂN VIỆT NAM:
+- PHẢI ưu tiên các món ăn Việt Nam 
+- Chỉ đề xuất món Tây/ngoại nếu không có món Việt phù hợp
+- Tên món PHẢI bằng tiếng Việt (VD: "Phở bò", "Cơm trắng", "Thịt kho tàu")
+
+## YÊU CẦU:
 {pattern_guide}
-
-## RÀNG BUỘC:
-- Tránh các món đã dùng gần đây: {meal_history_text}
+{diversity_note}
 - {diet_text}
 - {allergen_text}
-- KHÔNG được ước lượng kcal/protein/carb - chỉ đưa ra tên món và phân loại
 
 ## FORMAT OUTPUT (BẮT BUỘC - ĐỌC KỸ):
 
-BẠN PHẢI TRẢ VỀ MỘT JSON ARRAY TRỰC TIẾP, KHÔNG CÓ WRAPPER OBJECT, KHÔNG CÓ KEY "suggestions".
+BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PHẢI ARRAY CỦA STRINGS HOẶC TÊN MÓN THUẦN TÚY.
 
-### ✅ FORMAT ĐÚNG (Copy format này):
-{example_output}
+### ✅ FORMAT ĐÚNG (Copy format này CHÍNH XÁC):
+{example}
 
-### ❌ FORMAT SAI (KHÔNG ĐƯỢC LÀM THẾ NÀY):
-```json
-{{"suggestions": [...]}}  // SAI - không được có wrapper object
-```
-```json
-"[{{...}}]"  // SAI - không được là string chứa JSON
-```
-```json
-[{{...}}, {{...}}, {{...}}, {{...}}]  // SAI - không được nhiều hơn 3 items
-```
+### ❌ FORMAT SAI - TUYỆT ĐỐI KHÔNG ĐƯỢC LÀM:
+- ["Bánh mì trứng nướng", "Chía pudding", "Sinh tố trái cây"]  // SAI - chỉ là array of strings
+- ["{{...}}", "{{...}}"]  // SAI - không được là array của JSON strings
+- {{"suggestions": [...]}}  // SAI - không được có wrapper object
+- ["Grilled Chicken Salad", "general_term": "salad", ...]  // SAI - không có key "dish_name"
 
-## QUY TẮC BẮT BUỘC:
+## QUY TẮC:
 
-1. **Số lượng**: Trả về ĐÚNG 2-3 món (KHÔNG được 1, 4, 5, hoặc nhiều hơn)
-2. **Format**: JSON array trực tiếp `[...]`, KHÔNG có wrapper `{{"suggestions": [...]}}`
-3. **Fields bắt buộc**: Mỗi object PHẢI có đầy đủ:
-   - `dish_name`: Tên món bằng tiếng Việt (VD: "Phở bò", "Cơm trắng")
-   - `general_term`: Tên không dấu, dùng dấu gạch ngang (VD: "pho-bo", "com-trang")
-   - `role`: Một trong các giá trị: "breakfast", "carb", "main", "vegetable", "fruit"
+1. **Số lượng**: ĐÚNG 2-3 món (KHÔNG được 1, 4, hoặc nhiều hơn)
+
+2. **Format**: JSON array trực tiếp `[...]` chứa các OBJECT, KHÔNG phải strings
+   - Mỗi item trong array PHẢI là một object `{{...}}`
+   - KHÔNG được là string `"..."`
+
+3. **Fields bắt buộc** (mỗi object PHẢI có đầy đủ):
+   - `dish_name`: Tên món bằng tiếng Việt (VD: "Phở bò", "Cơm trắng", "Thịt kho tàu")
+   - `general_term`: Tên không dấu, dùng dấu gạch ngang (VD: "pho-bo", "com-trang", "thit-kho-tau")
+   - `role`: "breakfast" (cho bữa sáng) hoặc "carb", "main", "vegetable", "fruit" (cho bữa trưa/tối)
    - `meal_type`: "{meal_slot}"
-   - `category`: Một trong các giá trị: "rice", "noodle", "soup", "bread", "bakery", "main_dish", "vegetable", "fruit"
+   - `category`: "rice", "noodle", "soup", "bread", "bakery", "main_dish", "vegetable", hoặc "fruit"
 
-4. **Role values (CHỈ được dùng các giá trị này)**:
-   - Bữa sáng: role = "breakfast" (KHÔNG được dùng "main_course", "main dish", v.v.)
-   - Bữa trưa/tối: 
-     * role = "carb" (cho cơm/phở/bún/mì)
-     * role = "main" (cho món mặn - KHÔNG được dùng "main_course", "main dish")
-     * role = "vegetable" (cho rau)
-     * role = "fruit" (cho trái cây)
+4. **Role values** (CHỈ được dùng):
+   - Bữa sáng: "breakfast"
+   - Bữa trưa/tối: "carb", "main", "vegetable", "fruit"
 
-5. **Category values (CHỈ được dùng các giá trị này)**:
-   - "rice" (cho cơm)
-   - "noodle" (cho phở, bún, mì)
-   - "soup" (cho canh)
-   - "bread" (cho bánh mì)
-   - "main_dish" (cho món mặn - KHÔNG được dùng "healthy", "protein", "seafood", v.v.)
-   - "vegetable" (cho rau)
-   - "fruit" (cho trái cây)
-   
-   ⚠️ QUAN TRỌNG: KHÔNG được dùng các giá trị như "healthy", "protein", "main_course", "salad" - chỉ dùng các giá trị trên.
+5. **Category values** (CHỈ được dùng):
+   - "rice", "noodle", "soup", "bread", "bakery", "main_dish", "vegetable", "fruit"
+   - KHÔNG được dùng: "healthy", "protein", "high_protein", "balanced", "vegetarian", "salad"
 
 6. **JSON hoàn chỉnh**: 
    - Đảm bảo JSON hoàn chỉnh, không bị cắt cụt
    - Mỗi object phải có đầy đủ dấu đóng ngoặc `}}`
-   - Không có control characters
    - Không có trailing commas
    - Tất cả string values phải có dấu đóng ngoặc kép `"`
 
-7. **Validation**: Trước khi trả về, kiểm tra lại:
-   - JSON có thể parse được không?
-   - Tất cả fields có đầy đủ không?
-   - Role và category có đúng giá trị cho phép không?
-
-## VÍ DỤ OUTPUT ĐÚNG:
-
-Cho bữa {meal_slot}, bạn nên trả về format giống như ví dụ trên, với các món phù hợp với bữa {meal_slot}.
-
-⚠️ LƯU Ý CUỐI CÙNG: 
-- Trả về JSON array trực tiếp, không có text thêm, không có markdown code blocks
-- Đảm bảo JSON hoàn chỉnh, không bị cắt cụt
-- Chỉ dùng role và category values đã liệt kê ở trên
-- Kiểm tra lại JSON trước khi trả về
+⚠️ LƯU Ý CUỐI - ĐỌC KỸ: 
+- Trả về JSON array trực tiếp chứa OBJECTS: `[{{"dish_name": "...", ...}}, {{"dish_name": "...", ...}}]`
+- KHÔNG được trả về array của strings: `["Bánh mì", "Phở bò"]` - SAI!
+- KHÔNG được trả về array của JSON strings: `["{{...}}", "{{...}}"]` - SAI!
+- Mỗi object PHẢI có đầy đủ các fields: dish_name, general_term, role, meal_type, category
 """
     
     if user_preferences:
         prompt += f"\nSở thích người dùng: {user_preferences}"
     
     try:
-        # Call LLM - try different interfaces
+        # Call LLM
         response_text = None
         
-        # Method 1: Try dspy/ElysiaChainOfThought (most common in this codebase)
-        if DSPY_AVAILABLE and base_lm is not None:
+        # Method 1: Try dspy/ElysiaChainOfThought
+        if DSPY_AVAILABLE and base_lm is not None and tree_data is not None:
             try:
                 class MealDraftSignature(dspy.Signature):
                     """Generate meal suggestions for a meal slot."""
                     meal_slot = dspy.InputField(desc="Meal slot: breakfast, lunch, or dinner")
                     meal_history = dspy.InputField(desc="Recently used dish names to avoid")
                     constraints = dspy.InputField(desc="Dietary constraints and preferences")
-                    suggestions = dspy.OutputField(desc="JSON array of meal suggestions with dish_name, general_term, role, category")
-                
-                # Use tree_data from parameter (passed from plan_day_e2e_tool)
-                # ElysiaChainOfThought requires tree_data to have user_prompt attribute
-                # If tree_data is None, skip this method and try others
-                if tree_data is None:
-                    raise ValueError("tree_data is required for ElysiaChainOfThought")
+                    suggestions = dspy.OutputField(desc="JSON array of meal suggestions")
                 
                 cot = ElysiaChainOfThought(
                     MealDraftSignature,
-                    tree_data=tree_data,  # Use tree_data from parameter
+                    tree_data=tree_data,
                     reasoning=False,
                     impossible=False,
                     message_update=False,
                 )
                 
-                # Build input dict
                 input_dict = {
                     "meal_slot": meal_slot,
                     "meal_history": ", ".join(meal_history) if meal_history else "None",
                     "constraints": json.dumps(constraints) if constraints else "None",
                 }
                 
-                # Call with await if it's async, otherwise sync
                 import inspect
                 if inspect.iscoroutinefunction(cot.aforward):
                     pred = await cot.aforward(lm=base_lm, **input_dict)
                 else:
                     pred = cot.forward(lm=base_lm, **input_dict)
                 
-                # Extract suggestions from prediction
                 suggestions_str = getattr(pred, "suggestions", "")
                 if suggestions_str:
                     response_text = suggestions_str
@@ -284,814 +475,121 @@ Cho bữa {meal_slot}, bạn nên trả về format giống như ví dụ trên,
             except Exception as e:
                 logger.debug(f"LLM dspy/ElysiaChainOfThought failed: {e}")
         
-        # Method 2: Try generate() method
-        if not response_text and hasattr(base_lm, "generate"):
-            try:
-                response_text = base_lm.generate(prompt)
-                if response_text:
-                    logger.debug("LLM draft: Used generate() method")
-            except Exception as e:
-                logger.debug(f"LLM generate() failed: {e}")
-        
-        # Method 3: Try __call__ (dspy-style)
-        if not response_text and callable(base_lm):
-            try:
-                result = base_lm(prompt)
-                if isinstance(result, str):
-                    response_text = result
-                elif hasattr(result, "content"):
-                    response_text = result.content
-                elif hasattr(result, "text"):
-                    response_text = result.text
-                elif hasattr(result, "generations") and result.generations:
-                    # Handle dspy-style response
-                    response_text = result.generations[0].text if hasattr(result.generations[0], "text") else str(result.generations[0])
-                if response_text:
-                    logger.debug("LLM draft: Used __call__ method")
-            except Exception as e:
-                logger.debug(f"LLM __call__ failed: {e}")
-        
-        # Method 4: Try invoke() (LangChain-style)
-        if not response_text and hasattr(base_lm, "invoke"):
-            try:
-                result = base_lm.invoke(prompt)
-                if isinstance(result, str):
-                    response_text = result
-                elif hasattr(result, "content"):
-                    response_text = result.content
-                if response_text:
-                    logger.debug("LLM draft: Used invoke() method")
-            except Exception as e:
-                logger.debug(f"LLM invoke() failed: {e}")
+        # Method 2: Try other interfaces
+        if not response_text:
+            if hasattr(base_lm, "generate"):
+                try:
+                    response_text = base_lm.generate(prompt)
+                    if response_text:
+                        logger.debug("LLM draft: Used generate() method")
+                except Exception:
+                    pass
+            
+            if not response_text and callable(base_lm):
+                try:
+                    result = base_lm(prompt)
+                    if isinstance(result, str):
+                        response_text = result
+                    elif hasattr(result, "content"):
+                        response_text = result.content
+                    elif hasattr(result, "text"):
+                        response_text = result.text
+                    if response_text:
+                        logger.debug("LLM draft: Used __call__ method")
+                except Exception:
+                    pass
+            
+            if not response_text and hasattr(base_lm, "invoke"):
+                try:
+                    result = base_lm.invoke(prompt)
+                    if isinstance(result, str):
+                        response_text = result
+                    elif hasattr(result, "content"):
+                        response_text = result.content
+                    if response_text:
+                        logger.debug("LLM draft: Used invoke() method")
+                except Exception:
+                    pass
         
         if not response_text:
             logger.warning("LLM client does not have recognized interface, skipping LLM draft")
             return None
         
         # Parse JSON response
-        # Try to extract JSON from markdown code blocks if present
-        response_text = response_text.strip()
-        if "```json" in response_text:
-            json_start = response_text.find("```json") + 7
-            json_end = response_text.find("```", json_start)
-            response_text = response_text[json_start:json_end].strip()
-        elif "```" in response_text:
-            json_start = response_text.find("```") + 3
-            json_end = response_text.find("```", json_start)
-            response_text = response_text[json_start:json_end].strip()
+        suggestions_data = _parse_json_response(response_text)
         
-        # Clean response text: remove control characters and normalize
-        import re
-        # Remove control characters except newlines and tabs (which might be in JSON)
-        response_text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', response_text)
-        # Normalize whitespace
-        response_text = response_text.strip()
+        if suggestions_data is None:
+            logger.warning(f"Failed to parse LLM JSON response. First 500 chars: {response_text[:500]}")
+            return None
         
-        # Try to parse as JSON
-        suggestions_data = None
-        try:
-            suggestions_data = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            # If parsing fails, try to handle common LLM response formats
-            logger.debug(f"Initial JSON parse failed: {e}, trying alternative formats...")
-            
-            # Case 0: LLM returns plain text with JSON embedded - extract JSON objects using balanced braces
-            # This handles cases like "Đây là gợi ý bữa sáng cho hôm nay: {...}"
-            if "Expecting value" in str(e) or (not response_text.startswith('{') and not response_text.startswith('[')):
-                logger.debug("Response appears to be plain text, trying to extract JSON objects...")
-                objects = []
-                brace_count = 0
-                start_idx = None
-                for idx, char in enumerate(response_text):
-                    if char == '{':
-                        if brace_count == 0:
-                            start_idx = idx
-                        brace_count += 1
-                    elif char == '}':
-                        brace_count -= 1
-                        if brace_count == 0 and start_idx is not None:
-                            # Found complete object
-                            obj_str = response_text[start_idx:idx+1]
-                            try:
-                                obj = json.loads(obj_str)
-                                if isinstance(obj, dict):
-                                    objects.append(obj)
-                            except json.JSONDecodeError:
-                                pass
-                            start_idx = None
-                
-                if objects:
-                    suggestions_data = objects
-                    logger.debug(f"Successfully extracted {len(objects)} JSON objects from plain text response")
-            
-            # Case 1: LLM returns a string containing multiple JSON objects (not an array)
-            # Example: '{"dish_name": "A"}, {"dish_name": "B"}' -> should be '[{"dish_name": "A"}, {"dish_name": "B"}]'
-            if suggestions_data is None and response_text.startswith('{') and not response_text.startswith('['):
-                # Try to wrap in array if it looks like multiple objects
-                if response_text.count('{') > 1:
-                    try:
-                        # Wrap in array brackets
-                        normalized = '[' + response_text + ']'
-                        suggestions_data = json.loads(normalized)
-                        logger.debug("Successfully parsed as multiple objects wrapped in array")
-                    except json.JSONDecodeError:
-                        # If that fails, try to split by '}, {' pattern
-                        try:
-                            # Split by '}, {' or '},\n{' or '}, \n{'
-                            import re
-                            # Find all JSON objects separated by commas
-                            objects_str = re.split(r'\},\s*\{', response_text)
-                            objects = []
-                            for i, obj_str in enumerate(objects_str):
-                                if i == 0:
-                                    obj_str = obj_str + '}'
-                                elif i == len(objects_str) - 1:
-                                    obj_str = '{' + obj_str
-                                else:
-                                    obj_str = '{' + obj_str + '}'
-                                try:
-                                    obj = json.loads(obj_str)
-                                    objects.append(obj)
-                                except json.JSONDecodeError:
-                                    continue
-                            if objects:
-                                suggestions_data = objects
-                                logger.debug(f"Successfully parsed {len(objects)} objects by splitting")
-                        except Exception:
-                            pass
-            
-            # Case 2: Try to extract JSON array from text
-            if suggestions_data is None:
-                # CRITICAL: Clean control characters from response_text BEFORE extracting array pattern
-                # This fixes "Invalid control character" errors
-                cleaned_response = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', response_text)
-                
-                # First, try to find JSON array pattern [...]
-                array_match = re.search(r'\[.*\]', cleaned_response, re.DOTALL)
-                if array_match:
-                    try:
-                        array_str = array_match.group(0)
-                        # Try to parse the array
-                        try:
-                            suggestions_data = json.loads(array_str)
-                        except json.JSONDecodeError as array_parse_err:
-                            # If parsing fails, try to handle case where array contains JSON strings
-                            # Pattern: ["{...}"] or ['{...}'] - array with single JSON string
-                            logger.debug(f"Array parse failed: {array_parse_err}, trying to extract JSON string from array...")
-                            
-                            # Try to match: ["..."] or ['...']
-                            string_array_match = re.match(r'^\s*\[\s*"([^"]*(?:\\.[^"]*)*)"\s*\]\s*$', array_str, re.DOTALL)
-                            if not string_array_match:
-                                string_array_match = re.match(r"^\s*\[\s*'([^']*(?:\\.[^']*)*)'\s*\]\s*$", array_str, re.DOTALL)
-                            
-                            if string_array_match:
-                                # Extract the string content (with proper unescaping)
-                                inner_str = string_array_match.group(1)
-                                # Unescape JSON escape sequences properly
-                                try:
-                                    # Use json.loads to properly unescape the string
-                                    inner_str = json.loads('"' + inner_str + '"')
-                                except:
-                                    # Fallback: manual unescaping
-                                    inner_str = inner_str.replace('\\"', '"').replace("\\'", "'").replace('\\n', '\n').replace('\\t', '\t').replace('\\\\', '\\')
-                                
-                                # Clean any remaining control characters
-                                inner_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', inner_str)
-                                
-                                # Try to parse as JSON
-                                try:
-                                    inner_obj = json.loads(inner_str)
-                                    # Handle {"suggestions": [...]} case
-                                    if isinstance(inner_obj, dict) and "suggestions" in inner_obj:
-                                        suggestions_data = inner_obj["suggestions"]
-                                        logger.debug(f"Extracted {len(suggestions_data)} suggestions from nested structure")
-                                    elif isinstance(inner_obj, dict):
-                                        suggestions_data = [inner_obj]
-                                        logger.debug("Extracted single object from array string")
-                                    elif isinstance(inner_obj, list):
-                                        suggestions_data = inner_obj
-                                        logger.debug(f"Extracted {len(inner_obj)} items from nested array")
-                                except json.JSONDecodeError as inner_err:
-                                    logger.debug(f"Failed to parse inner JSON string: {inner_err}")
-                                    # suggestions_data remains None, will continue to existing logic below
-                            # If string_array_match failed or parsing failed, suggestions_data is still None
-                            # Continue to existing logic below
-                        
-                        # Check if array contains JSON strings instead of objects
-                        # This handles cases like: ["{...}", "{...}"] or ['{...}', '{...}'] or ["[{...}]"]
-                        # Only process if suggestions_data was successfully parsed as a list
-                        if suggestions_data is not None and isinstance(suggestions_data, list) and suggestions_data:
-                            # Check if first element is a string that looks like JSON
-                            first_item = suggestions_data[0] if suggestions_data else None
-                            if isinstance(first_item, str):
-                                first_clean = first_item.strip()
-                                # Remove quotes if present
-                                if (first_clean.startswith('"') and first_clean.endswith('"')) or \
-                                   (first_clean.startswith("'") and first_clean.endswith("'")):
-                                    first_clean = first_clean[1:-1]
-                                
-                                # Check if it looks like JSON (object or array)
-                                if first_clean.startswith('{') or first_clean.startswith('['):
-                                    # Parse each string as JSON
-                                    parsed_objects = []
-                                    for item in suggestions_data:
-                                        try:
-                                            # Skip empty items
-                                            if not item or (isinstance(item, str) and not item.strip()):
-                                                continue
-                                            
-                                            # Handle case where item is already a list (empty or not)
-                                            if isinstance(item, list):
-                                                # If it's a list, extract dicts from it
-                                                parsed_objects.extend([x for x in item if isinstance(x, dict)])
-                                                continue
-                                            
-                                            # If item is not a string, skip
-                                            if not isinstance(item, str):
-                                                continue
-                                            
-                                            # Remove quotes if present (handle both " and ')
-                                            item_clean = item.strip()
-                                            if not item_clean:
-                                                continue
-                                                
-                                            # Remove outer quotes if present
-                                            if (item_clean.startswith('"') and item_clean.endswith('"')) or \
-                                               (item_clean.startswith("'") and item_clean.endswith("'")):
-                                                item_clean = item_clean[1:-1]
-                                            
-                                            # Skip if empty after removing quotes
-                                            if not item_clean.strip():
-                                                continue
-                                            
-                                            # Remove any remaining control characters that might interfere with parsing
-                                            # But preserve newlines and tabs as they might be part of JSON structure
-                                            item_clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', item_clean)
-                                            
-                                            # Try to parse as JSON
-                                            # json.loads will automatically handle escape sequences like \n, \t, \", etc.
-                                            try:
-                                                obj = json.loads(item_clean)
-                                                if isinstance(obj, dict):
-                                                    # CRITICAL: Handle case where obj is {"suggestions": [...]}
-                                                    if "suggestions" in obj and isinstance(obj["suggestions"], list):
-                                                        # Extract suggestions array
-                                                        parsed_objects.extend([x for x in obj["suggestions"] if isinstance(x, dict)])
-                                                        logger.debug(f"Extracted {len(obj['suggestions'])} suggestions from wrapper object")
-                                                    else:
-                                                        # Regular dict, add it
-                                                        parsed_objects.append(obj)
-                                                elif isinstance(obj, list):
-                                                    # If it's a list, extract dicts from it (skip empty lists)
-                                                    if obj:  # Only process non-empty lists
-                                                        parsed_objects.extend([x for x in obj if isinstance(x, dict)])
-                                            except json.JSONDecodeError as json_err:
-                                                # If parsing fails, try to extract JSON objects using balanced braces
-                                                # This handles truncated or malformed JSON
-                                                logger.debug(f"JSON parse failed for item, trying balanced braces: {json_err}")
-                                                # Try to find complete JSON objects in the string
-                                                brace_count = 0
-                                                start_idx = None
-                                                for idx, char in enumerate(item_clean):
-                                                    if char == '{':
-                                                        if brace_count == 0:
-                                                            start_idx = idx
-                                                        brace_count += 1
-                                                    elif char == '}':
-                                                        brace_count -= 1
-                                                        if brace_count == 0 and start_idx is not None:
-                                                            # Found a complete object
-                                                            obj_str = item_clean[start_idx:idx+1]
-                                                            try:
-                                                                obj = json.loads(obj_str)
-                                                                if isinstance(obj, dict):
-                                                                    parsed_objects.append(obj)
-                                                            except json.JSONDecodeError:
-                                                                pass
-                                                            start_idx = None
-                                        except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as parse_err:
-                                            logger.debug(f"Failed to parse item in array: {parse_err}, item: {str(item)[:100]}")
-                                            continue
-                                    if parsed_objects:
-                                        suggestions_data = parsed_objects
-                                        logger.debug(f"Successfully parsed array of JSON strings: {len(parsed_objects)} objects")
-                        else:
-                            logger.debug("Successfully extracted array from text")
-                    except json.JSONDecodeError as array_err:
-                        logger.debug(f"Failed to parse array: {array_err}")
-                        pass
-            
-            # Case 3: Try to find and parse individual JSON objects using balanced braces
-            if suggestions_data is None:
-                objects = []
-                i = 0
-                while i < len(response_text):
-                    if response_text[i] == '{':
-                        # Find matching closing brace
-                        brace_count = 0
-                        start = i
-                        j = i
-                        while j < len(response_text):
-                            if response_text[j] == '{':
-                                brace_count += 1
-                            elif response_text[j] == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    # Found complete object
-                                    obj_str = response_text[start:j+1]
-                                    try:
-                                        obj = json.loads(obj_str)
-                                        if isinstance(obj, dict):
-                                            objects.append(obj)
-                                    except json.JSONDecodeError:
-                                        pass
-                                    i = j + 1
-                                    break
-                            j += 1
-                        else:
-                            # No matching closing brace found
-                            i += 1
-                    else:
-                        i += 1
-                
-                if objects:
-                    suggestions_data = objects
-                    logger.debug(f"Successfully parsed {len(objects)} individual JSON objects using balanced braces")
-            
-            # If still failed, log and return None
-            if suggestions_data is None:
-                logger.warning(f"Failed to parse LLM JSON response after all attempts: {e}")
-                logger.debug(f"Response text (first 500 chars): {response_text[:500]}")
-                # Last resort: try to extract any JSON objects using balanced braces
-                objects = []
-                brace_count = 0
-                start_idx = None
-                for idx, char in enumerate(response_text):
-                    if char == '{':
-                        if brace_count == 0:
-                            start_idx = idx
-                        brace_count += 1
-                    elif char == '}':
-                        brace_count -= 1
-                        if brace_count == 0 and start_idx is not None:
-                            obj_str = response_text[start_idx:idx+1]
-                            try:
-                                obj = json.loads(obj_str)
-                                if isinstance(obj, dict):
-                                    objects.append(obj)
-                            except json.JSONDecodeError:
-                                pass
-                            start_idx = None
-                
-                if objects:
-                    suggestions_data = objects
-                    logger.debug(f"Last resort: extracted {len(objects)} JSON objects using balanced braces")
-                else:
-                    return None
-        
-        # Handle case where LLM returns {'suggestions': [...]} instead of list directly
-        # Also handle case where suggestions_data is a dict that should be treated as a single suggestion
+        # Handle wrapper dict
         if isinstance(suggestions_data, dict):
             if "suggestions" in suggestions_data:
-                # Extract suggestions array
                 suggestions_data = suggestions_data["suggestions"]
+            elif any(key in suggestions_data for key in ["dish_name", "name", "general_term", "role"]):
+                suggestions_data = [suggestions_data]
             else:
-                # If it's a single dict (not wrapped in suggestions), wrap it in a list
-                # But first check if it looks like a valid suggestion object
-                if any(key in suggestions_data for key in ["dish_name", "name", "general_term", "role"]):
-                    suggestions_data = [suggestions_data]
-                else:
-                    # Invalid format, try to find suggestions in nested structure
-                    logger.warning(f"Unexpected dict format from LLM: {list(suggestions_data.keys())[:5]}")
-                    suggestions_data = None
-        
-        # Validate and create MealSlotDraft
-        if isinstance(suggestions_data, list):
-            suggestions = []
-            # Limit to max 3 suggestions (schema requirement)
-            items_to_process = suggestions_data[:3] if len(suggestions_data) > 3 else suggestions_data
-            if len(suggestions_data) > 3:
-                logger.debug(f"LLM returned {len(suggestions_data)} suggestions, limiting to 3")
-            
-            # Helper function to process a single item dict
-            def process_item_dict(item_dict):
-                """Process a dict item and return normalized MealDraftSuggestion or None"""
-                if not isinstance(item_dict, dict):
-                    return None
-                
-                # Handle case where item is {'suggestions': [...]}
-                if "suggestions" in item_dict and isinstance(item_dict["suggestions"], list):
-                    # Extract and process all suggestions
-                    results = []
-                    for sub_item in item_dict["suggestions"]:
-                        if isinstance(sub_item, dict):
-                            result = process_item_dict(sub_item)
-                            if result:
-                                results.append(result)
-                        elif isinstance(sub_item, list):
-                            for sub_sub_item in sub_item:
-                                if isinstance(sub_sub_item, dict):
-                                    result = process_item_dict(sub_sub_item)
-                                    if result:
-                                        results.append(result)
-                    return results if results else None
-                
-                # Normal process for regular dict
-                try:
-                    # Normalize LLM response fields to match schema
-                    normalized_item = {}
-                    # Map common LLM field names to schema fields
-                    field_mapping = {
-                        "dish_name": "dish_name",
-                        "name": "dish_name",
-                        "general_term": "general_term",
-                        "term": "general_term",
-                        "role": "role",
-                        "meal_type": "meal_type",
-                        "meal": "meal_type",
-                        "category": "category",
-                        "note": "note",
-                        "description": "note"
-                    }
-                    
-                    # Map role values (comprehensive mapping for Vietnamese and English)
-                    role_mapping = {
-                        "main_course": "main",
-                        "main course": "main",
-                        "main dish": "main",
-                        "main": "main",
-                        "món chính": "main",
-                        "món mặn": "main",
-                        "món ăn chính": "main",
-                        "carb": "carb",
-                        "carbohydrate": "carb",
-                        "món tinh bột": "carb",
-                        "cơm": "carb",
-                        "mì": "carb",
-                        "vegetable": "vegetable",
-                        "món phụ": "vegetable",
-                        "món rau": "vegetable",
-                        "rau": "vegetable",
-                        "fruit": "fruit",
-                        "trái cây": "fruit",
-                        "breakfast": "breakfast",
-                        "bữa sáng": "breakfast"
-                    }
-                    
-                    # Map category values (comprehensive mapping for Vietnamese and English)
-                    category_mapping = {
-                        # Main dish categories
-                        "seafood": "main_dish",
-                        "italian": "main_dish",
-                        "asian": "main_dish",
-                        "main_dish": "main_dish",
-                        "món mặn": "main_dish",
-                        "đồ ăn nhanh": "main_dish",
-                        "đồ ăn lành": "main_dish",
-                        "đồ ăn chăn nuôi": "main_dish",
-                        "thịt": "main_dish",
-                        "cá": "main_dish",
-                        "protein": "main_dish",
-                        "healthy": "main_dish",  # Fallback for "healthy" category
-                        "high_protein": "main_dish",  # Fallback for "high_protein" category
-                        "high protein": "main_dish",  # Fallback for "high protein" category
-                        "salad": "vegetable",  # Salad is usually vegetable
-                        # Carb categories
-                        "rice": "rice",
-                        "cơm": "rice",
-                        "noodle": "noodle",
-                        "mì": "noodle",
-                        "bún": "noodle",
-                        # Soup categories
-                        "soup": "soup",
-                        "canh": "soup",
-                        # Bread/Bakery
-                        "bread": "bread",
-                        "bánh mì": "bread",
-                        "bakery": "bakery",
-                        "bánh": "bakery",
-                        # Vegetable
-                        "vegetable": "vegetable",
-                        "rau": "vegetable",
-                        # Fruit
-                        "fruit": "fruit",
-                        "trái cây": "fruit"
-                    }
-                    
-                    for key, value in item_dict.items():
-                        mapped_key = field_mapping.get(key.lower(), key)
-                        # Normalize value (convert to string and lowercase for comparison)
-                        value_str = str(value).lower().strip() if value else ""
-                        
-                        if mapped_key == "role":
-                            # Try exact match first, then partial match
-                            if value_str in role_mapping:
-                                normalized_item[mapped_key] = role_mapping[value_str]
-                            else:
-                                # Try partial matching (e.g., "món chính" contains "chính")
-                                matched = False
-                                for role_key, role_value in role_mapping.items():
-                                    if role_key in value_str or value_str in role_key:
-                                        normalized_item[mapped_key] = role_value
-                                        matched = True
-                                        break
-                                if not matched:
-                                    # Default to "main" if unclear
-                                    normalized_item[mapped_key] = "main"
-                        elif mapped_key == "category":
-                            # Try exact match first, then partial match
-                            if value_str in category_mapping:
-                                normalized_item[mapped_key] = category_mapping[value_str]
-                            else:
-                                # Try partial matching
-                                matched = False
-                                for cat_key, cat_value in category_mapping.items():
-                                    if cat_key in value_str or value_str in cat_key:
-                                        normalized_item[mapped_key] = cat_value
-                                        matched = True
-                                        break
-                                # If still not matched, will be handled by smart inference below
-                                if not matched:
-                                    normalized_item[mapped_key] = value_str  # Keep original for inference
-                        else:
-                            normalized_item[mapped_key] = value
-                    
-                    # Set default meal_type if missing
-                    if "meal_type" not in normalized_item:
-                        normalized_item["meal_type"] = meal_slot
-                    
-                    # Smart category inference from role if category is invalid
-                    final_category = normalized_item.get("category", "")
-                    if not final_category or final_category not in ["rice", "noodle", "soup", "bread", "bakery", "main_dish", "vegetable", "fruit"]:
-                        # Try to infer category from role
-                        role_value = normalized_item.get("role", "").lower()
-                        if role_value in ["main", "món chính", "món mặn"]:
-                            final_category = "main_dish"
-                        elif role_value in ["carb", "cơm", "mì"]:
-                            final_category = "rice"  # Default to rice for carbs
-                        elif role_value in ["vegetable", "món phụ", "rau"]:
-                            final_category = "vegetable"
-                        elif role_value in ["fruit", "trái cây"]:
-                            final_category = "fruit"
-                        elif role_value in ["breakfast", "bữa sáng"]:
-                            final_category = "bread"  # Default to bread for breakfast
-                        else:
-                            # Try to infer from dish_name
-                            dish_name = str(normalized_item.get("dish_name", "")).lower()
-                            if any(kw in dish_name for kw in ["cơm", "com", "rice"]):
-                                final_category = "rice"
-                            elif any(kw in dish_name for kw in ["mì", "mi", "bún", "bun", "noodle"]):
-                                final_category = "noodle"
-                            elif any(kw in dish_name for kw in ["canh", "soup"]):
-                                final_category = "soup"
-                            elif any(kw in dish_name for kw in ["bánh mì", "banh mi", "bread"]):
-                                final_category = "bread"
-                            elif any(kw in dish_name for kw in ["rau", "salad", "vegetable"]):
-                                final_category = "vegetable"
-                            elif any(kw in dish_name for kw in ["trái cây", "trai cay", "fruit"]):
-                                final_category = "fruit"
-                            else:
-                                # Default fallback
-                                final_category = "main_dish"
-                        normalized_item["category"] = final_category
-                    
-                    return MealDraftSuggestion(**normalized_item)
-                except Exception as e:
-                    logger.warning(f"Failed to create MealDraftSuggestion from {item_dict}: {e}")
-                    return None
-            
-            for item in items_to_process:
-                # Early exit if we already have 3 suggestions (schema limit)
-                if len(suggestions) >= 3:
-                    logger.debug(f"Already have {len(suggestions)} suggestions, stopping processing")
-                    break
-                
-                # Skip empty items
-                if not item:
-                    continue
-                
-                # Handle case where item might be a string (JSON string)
-                if isinstance(item, str):
-                    try:
-                        item = json.loads(item)
-                    except json.JSONDecodeError as e:
-                        # Try to fix various JSON issues
-                        item_str = item.strip()
-                        error_msg = str(e).lower()
-                        logger.debug(f"JSON parse failed: {e}, trying to fix...")
-                        
-                        # Case 1: "Extra data" - multiple JSON objects in one string
-                        # Example: '{"a":1}{"b":2}' or '{"a":1}, {"b":2}'
-                        if "extra data" in error_msg:
-                            logger.debug("Detected 'Extra data' error, trying to split multiple JSON objects...")
-                            # Try to split by '}{' or '}, {'
-                            import re
-                            # Find all complete JSON objects using balanced braces
-                            objects = []
-                            brace_count = 0
-                            start_idx = None
-                            for idx, char in enumerate(item_str):
-                                if char == '{':
-                                    if brace_count == 0:
-                                        start_idx = idx
-                                    brace_count += 1
-                                elif char == '}':
-                                    brace_count -= 1
-                                    if brace_count == 0 and start_idx is not None:
-                                        # Found complete object
-                                        obj_str = item_str[start_idx:idx+1]
-                                        try:
-                                            obj = json.loads(obj_str)
-                                            if isinstance(obj, dict):
-                                                objects.append(obj)
-                                        except json.JSONDecodeError:
-                                            pass
-                                        start_idx = None
-                            
-                            if objects:
-                                # Process all extracted objects
-                                if len(objects) == 1:
-                                    item = objects[0]
-                                    logger.debug(f"Successfully extracted 1 JSON object from 'Extra data' error")
-                                else:
-                                    # Multiple objects - process them all by setting item to list
-                                    # This will be caught by the isinstance(item, list) check below
-                                    item = objects
-                                    logger.debug(f"Successfully extracted {len(objects)} JSON objects from 'Extra data' error")
-                                # Break out of the error handling and continue to process item
-                                # (item is now either a dict or list, which will be handled below)
-                            else:
-                                # If extraction failed, continue to truncated JSON handling below
-                                logger.debug("Failed to extract objects from 'Extra data', trying truncated JSON fix...")
-                                # item remains a string, will continue to Case 2 handling
-                        
-                        # Case 2: Truncated JSON object (missing closing brace)
-                        # Only process if item is still a string (not already parsed)
-                        if isinstance(item, str) and item_str.startswith('{') and not item_str.endswith('}'):
-                            # Try to find and close missing braces
-                            open_braces = item_str.count('{')
-                            close_braces = item_str.count('}')
-                            missing_braces = open_braces - close_braces
-                            
-                            if missing_braces > 0:
-                                # Try to fix by closing braces and quotes
-                                fixed_str = item_str
-                                
-                                # Close any unclosed string values
-                                # Check if the string ends with an unclosed value
-                                # Pattern: "key": "value (missing closing quote)
-                                if not fixed_str.rstrip().endswith('"'):
-                                    # Try to find the last colon to see if there's an unclosed value
-                                    last_colon_idx = fixed_str.rfind(':')
-                                    if last_colon_idx > 0:
-                                        after_colon = fixed_str[last_colon_idx+1:].strip()
-                                        # If after colon doesn't end with quote or }, it's likely unclosed
-                                        if after_colon and not after_colon.endswith('"') and not after_colon.endswith('}'):
-                                            # Try to close the string value
-                                            # Remove any trailing whitespace and add quote
-                                            fixed_str = fixed_str.rstrip()
-                                            # If it doesn't end with quote, add it
-                                            if not fixed_str.endswith('"'):
-                                                fixed_str += '"'
-                                
-                                # Add missing closing braces
-                                fixed_str += '}' * missing_braces
-                                
-                                try:
-                                    item = json.loads(fixed_str)
-                                    logger.debug("Successfully fixed truncated JSON")
-                                except json.JSONDecodeError:
-                                    # If still fails, try balanced brace extraction
-                                    brace_count = 0
-                                    start_idx = None
-                                    for idx, char in enumerate(item_str):
-                                        if char == '{':
-                                            if brace_count == 0:
-                                                start_idx = idx
-                                            brace_count += 1
-                                        elif char == '}':
-                                            brace_count -= 1
-                                            if brace_count == 0 and start_idx is not None:
-                                                obj_str = item_str[start_idx:idx+1]
-                                                try:
-                                                    item = json.loads(obj_str)
-                                                    logger.debug("Extracted complete JSON object from truncated string")
-                                                    break
-                                                except json.JSONDecodeError:
-                                                    pass
-                                    else:
-                                        logger.warning(f"Failed to parse or fix truncated JSON: {item[:100] if len(item) > 100 else item}")
-                                        continue
-                            else:
-                                # No missing braces but still failed - might be other issue
-                                logger.warning(f"Failed to parse item as JSON (no missing braces): {item[:100] if len(item) > 100 else item}")
-                                continue
-                        else:
-                            # Not a truncated JSON object, and not Extra data - try one more time to extract JSON
-                            if isinstance(item, str) and not isinstance(item, (dict, list)):
-                                # Try to extract JSON objects from the string using balanced braces
-                                objects = []
-                                brace_count = 0
-                                start_idx = None
-                                for idx, char in enumerate(item_str):
-                                    if char == '{':
-                                        if brace_count == 0:
-                                            start_idx = idx
-                                        brace_count += 1
-                                    elif char == '}':
-                                        brace_count -= 1
-                                        if brace_count == 0 and start_idx is not None:
-                                            obj_str = item_str[start_idx:idx+1]
-                                            try:
-                                                obj = json.loads(obj_str)
-                                                if isinstance(obj, dict):
-                                                    objects.append(obj)
-                                            except json.JSONDecodeError:
-                                                pass
-                                            start_idx = None
-                                
-                                if objects:
-                                    # If we found objects, process them
-                                    if len(objects) == 1:
-                                        item = objects[0]
-                                        logger.debug(f"Extracted 1 JSON object from text string")
-                                    else:
-                                        item = objects
-                                        logger.debug(f"Extracted {len(objects)} JSON objects from text string")
-                                else:
-                                    # No JSON found in the string
-                                    logger.warning(f"Failed to parse item as JSON (no JSON objects found): {item[:100] if len(item) > 100 else item}")
-                                    continue
-                            elif not isinstance(item, (dict, list)):
-                                logger.warning(f"Failed to parse item as JSON: {item[:100] if len(item) > 100 else item}")
-                                continue
-                
-                # Skip if item is empty list/array
-                if isinstance(item, list):
-                    if not item:  # Empty list
-                        logger.debug("Skipping empty list item")
-                        continue
-                    # If it's a non-empty list, extract dicts and process them
-                    for sub_item in item:
-                        # Early exit if we already have 3 suggestions
-                        if len(suggestions) >= 3:
-                            break
-                        result = process_item_dict(sub_item) if isinstance(sub_item, dict) else None
-                        if result:
-                            if isinstance(result, list):
-                                # Limit the list to not exceed 3 total
-                                remaining_slots = 3 - len(suggestions)
-                                if remaining_slots > 0:
-                                    suggestions.extend(result[:remaining_slots])
-                            else:
-                                suggestions.append(result)
-                    continue
-                
-                # Process dict item
-                result = process_item_dict(item)
-                if result:
-                    if isinstance(result, list):
-                        # Limit the list to not exceed 3 total
-                        remaining_slots = 3 - len(suggestions)
-                        if remaining_slots > 0:
-                            suggestions.extend(result[:remaining_slots])
-                    else:
-                        suggestions.append(result)
-                else:
-                    logger.debug(f"Item could not be processed as dict: {type(item)}")
-            
-            # Filter out None values and ensure we have valid suggestions
-            valid_suggestions = [s for s in suggestions if s is not None]
-            
-            # CRITICAL: Limit to max 3 suggestions (schema requirement)
-            # This prevents validation errors when LLM returns too many suggestions
-            if len(valid_suggestions) > 3:
-                logger.warning(f"LLM returned {len(valid_suggestions)} suggestions, limiting to 3 for schema compliance")
-                valid_suggestions = valid_suggestions[:3]
-            
-            if valid_suggestions:
-                try:
-                    return MealSlotDraft(meal_type=meal_slot, suggestions=valid_suggestions)
-                except Exception as e:
-                    logger.warning(f"Failed to create MealSlotDraft: {e}, suggestions count: {len(valid_suggestions)}")
-                    # Try with first 3 if still fails
-                    if len(valid_suggestions) > 3:
-                        try:
-                            return MealSlotDraft(meal_type=meal_slot, suggestions=valid_suggestions[:3])
-                        except Exception as e2:
-                            logger.warning(f"Failed to create MealSlotDraft even with 3 suggestions: {e2}")
-                            return None
-                    return None
-            else:
-                logger.warning("No valid suggestions created from LLM response")
+                logger.warning(f"Unexpected dict format from LLM: {list(suggestions_data.keys())[:5]}")
                 return None
-        else:
+        
+        # Process suggestions
+        if not isinstance(suggestions_data, list):
             logger.warning("LLM returned invalid format, expected list")
             return None
+        
+        # Limit to 3 suggestions
+        items_to_process = suggestions_data[:3]
+        if len(suggestions_data) > 3:
+            logger.debug(f"LLM returned {len(suggestions_data)} suggestions, limiting to 3")
+        
+        suggestions = []
+        for item in items_to_process:
+            if len(suggestions) >= 3:
+                break
             
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse LLM JSON response: {e}")
-        return None
+            # Handle nested structures
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except json.JSONDecodeError:
+                    extracted = _extract_json_objects(item)
+                    if extracted:
+                        for obj in extracted:
+                            if len(suggestions) >= 3:
+                                break
+                            result = _normalize_suggestion(obj, meal_slot)
+                            if result:
+                                suggestions.append(result)
+                    continue
+            
+            if isinstance(item, list):
+                for sub_item in item:
+                    if len(suggestions) >= 3:
+                        break
+                    if isinstance(sub_item, dict):
+                        result = _normalize_suggestion(sub_item, meal_slot)
+                        if result:
+                            suggestions.append(result)
+                continue
+            
+            if isinstance(item, dict):
+                result = _normalize_suggestion(item, meal_slot)
+                if result:
+                    suggestions.append(result)
+        
+        # Filter and limit
+        valid_suggestions = [s for s in suggestions if s is not None][:3]
+        
+        if valid_suggestions:
+            try:
+                return MealSlotDraft(meal_type=meal_slot, suggestions=valid_suggestions)
+            except Exception as e:
+                logger.warning(f"Failed to create MealSlotDraft: {e}")
+                return None
+        else:
+            logger.warning("No valid suggestions created from LLM response")
+            return None
+            
     except Exception as e:
         logger.warning(f"LLM draft failed: {e}")
         return None
@@ -1102,19 +600,10 @@ async def generate_llm_draft(
     meal_history: List[str],
     constraints: Dict[str, Any],
     user_preferences: Optional[str] = None,
-    tree_data=None,  # TreeData for ElysiaChainOfThought
+    tree_data=None,
 ) -> Optional[LLMDraftResponse]:
     """
     Generate complete LLM draft for all meal slots (breakfast, lunch, dinner).
-    
-    Args:
-        base_lm: LLM client (optional)
-        meal_history: List of recently used dish names
-        constraints: Dictionary with diet_types, exclude_allergens
-        user_preferences: Optional user preferences
-    
-    Returns:
-        LLMDraftResponse with suggestions for all meals, or None if LLM fails
     """
     if not base_lm:
         logger.debug("No LLM available, skipping LLM draft")
@@ -1143,4 +632,3 @@ async def generate_llm_draft(
     except Exception as e:
         logger.warning(f"LLM draft generation failed: {e}")
         return None
-

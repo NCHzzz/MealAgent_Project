@@ -27,11 +27,13 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
   if (plans.length === 0) return null;
 
   const formatMacro = (value: number, unit: string = "g") => {
-    return `${value.toFixed(1)}${unit}`;
+    // Round to 1 decimal place for consistency
+    return `${Math.round(value * 10) / 10}${unit}`;
   };
 
   const formatKcal = (value: number) => {
-    return `${value.toFixed(0)} kcal`;
+    // Round to nearest integer for kcal display
+    return `${Math.round(value)} kcal`;
   };
 
   const renderAccompaniments = (
@@ -101,93 +103,114 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           {/* Meals */}
           <div className="space-y-3">
             {meals.map((meal, idx) => (
-              <div
+              <motion.div
                 key={meal.key}
-                className="p-3 bg-background rounded-lg border border-secondary/5"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: idx * 0.1 }}
+                className="p-4 bg-background rounded-lg border border-secondary/10 shadow-sm hover:shadow-md transition-shadow"
               >
-                <div className="flex justify-between items-start mb-2">
+                <div className="flex justify-between items-start mb-3">
                   <div className="flex-1">
-                    <h4 className="font-semibold text-primary capitalize">
-                      {meal.meal_type}
-                    </h4>
-                    <p className="text-sm text-secondary">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h4 className="font-bold text-primary capitalize text-base">
+                        {meal.meal_type === "breakfast" ? "🌅" : meal.meal_type === "lunch" ? "🍽️" : "🌙"} {meal.meal_type}
+                      </h4>
+                      <Badge variant="outline" className="text-xs">
+                        {meal.servings}x serving{meal.servings !== 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                    <p className="text-sm font-medium text-primary mt-1">
                       {meal.recipe?.dish_name || "Unknown dish"}
                     </p>
                     {meal.recipe?.cooking_time && (
-                      <p className="text-xs text-secondary mt-1">
-                        ⏱️ {meal.recipe.cooking_time} min
+                      <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+                        <span>⏱️</span>
+                        <span>{meal.recipe.cooking_time} min</span>
                       </p>
                     )}
                   </div>
-                  <div className="flex flex-col items-end gap-1">
-                  <Badge className="text-xs border border-secondary/20">
-                    {meal.servings}x serving{meal.servings !== 1 ? "s" : ""}
-                  </Badge>
-                    {meal.recipe?.image_link && (
-                      <div className="w-12 h-12 rounded overflow-hidden bg-secondary/5">
-                        <img 
-                          src={meal.recipe.image_link} 
-                          alt={meal.recipe.dish_name}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
+                  {meal.recipe?.image_link && (
+                    <div className="w-16 h-16 rounded-lg overflow-hidden bg-secondary/5 border border-secondary/10 shadow-sm ml-3">
+                      <img 
+                        src={meal.recipe.image_link} 
+                        alt={meal.recipe.dish_name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
                 {/* Macros per meal */}
-                <div className="flex gap-4 text-xs text-secondary mt-2">
+                <div className="mt-3 pt-2 border-t border-secondary/5">
                   {(() => {
                     const main = meal.macros_main || meal.recipe?.macros_per_serving || meal.macros;
                     const total = meal.macros_total || meal.macros;
-                    const useTotal = total && total !== main;
+                    const useTotal = total && total !== main && 
+                      (Math.abs((total?.kcal || 0) - (main?.kcal || 0)) > 1);
                     return (
-                      <span className="space-x-1">
-                        <span>
-                          {formatKcal(main?.kcal || 0)} | {formatMacro(main?.protein_g || 0)} P |{" "}
-                          {formatMacro(main?.fat_g || 0)} F | {formatMacro(main?.carb_g || 0)} C
-                        </span>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="text-secondary/80 font-medium">Nutrition:</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="px-2 py-0.5 bg-primary/10 text-primary rounded font-medium">
+                              {formatKcal(main?.kcal || 0)}
+                            </span>
+                            <span className="text-secondary">
+                              {formatMacro(main?.protein_g || 0)} P
+                            </span>
+                            <span className="text-secondary">
+                              {formatMacro(main?.fat_g || 0)} F
+                            </span>
+                            <span className="text-secondary">
+                              {formatMacro(main?.carb_g || 0)} C
+                            </span>
+                          </div>
+                        </div>
                         {useTotal && (
-                          <span className="text-[11px] text-secondary/80">
-                            (with sides: {formatKcal(total?.kcal || 0)})
-                          </span>
+                          <div className="text-[11px] text-secondary/70 pl-16">
+                            Total with sides: <span className="font-medium text-primary">{formatKcal(total?.kcal || 0)}</span>
+                          </div>
                         )}
-                      </span>
+                      </div>
                     );
                   })()}
                 </div>
                 {renderAccompaniments(meal.accompaniments)}
-              </div>
+              </motion.div>
             ))}
           </div>
 
           {/* Total Macros */}
-          <div className="pt-3 border-t border-secondary/10">
-            <h5 className="font-semibold text-sm mb-2">Total Daily Macros</h5>
-            <div className="grid grid-cols-4 gap-2 text-sm">
-              <div>
-                <p className="text-secondary text-xs">Calories</p>
-                <p className="font-semibold text-primary">
+          <div className="pt-4 border-t border-secondary/10 bg-background/50 rounded-lg p-4">
+            <h5 className="font-semibold text-sm mb-3 flex items-center gap-2">
+              <span className="text-lg">📊</span>
+              Total Daily Macros
+            </h5>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="flex flex-col items-center p-3 bg-primary/5 rounded-lg border border-primary/10">
+                <p className="text-secondary text-xs mb-1 font-medium">Calories</p>
+                <p className="font-bold text-lg text-primary">
                   {formatKcal(plan.total_macros.kcal)}
                 </p>
               </div>
-              <div>
-                <p className="text-secondary text-xs">Protein</p>
-                <p className="font-semibold text-primary">
+              <div className="flex flex-col items-center p-3 bg-blue-500/5 rounded-lg border border-blue-500/10">
+                <p className="text-secondary text-xs mb-1 font-medium">Protein</p>
+                <p className="font-bold text-lg text-blue-600 dark:text-blue-400">
                   {formatMacro(plan.total_macros.protein_g)}
                 </p>
               </div>
-              <div>
-                <p className="text-secondary text-xs">Fat</p>
-                <p className="font-semibold text-primary">
+              <div className="flex flex-col items-center p-3 bg-yellow-500/5 rounded-lg border border-yellow-500/10">
+                <p className="text-secondary text-xs mb-1 font-medium">Fat</p>
+                <p className="font-bold text-lg text-yellow-600 dark:text-yellow-400">
                   {formatMacro(plan.total_macros.fat_g)}
                 </p>
               </div>
-              <div>
-                <p className="text-secondary text-xs">Carbs</p>
-                <p className="font-semibold text-primary">
+              <div className="flex flex-col items-center p-3 bg-green-500/5 rounded-lg border border-green-500/10">
+                <p className="text-secondary text-xs mb-1 font-medium">Carbs</p>
+                <p className="font-bold text-lg text-green-600 dark:text-green-400">
                   {formatMacro(plan.total_macros.carb_g)}
                 </p>
               </div>

@@ -22,35 +22,12 @@ from MealAgent.tools.utils.planning_helpers import (
 )
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 from MealAgent.tools.utils.recipe_refresh import fetch_latest_recipe
+from MealAgent.tools.utils.recipe_classifiers import (
+    _is_main_dish,
+    _is_carb_dish,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _is_main_dish(recipe: Dict[str, Any]) -> bool:
-    """Check if recipe is a main dish (món mặn)."""
-    dish_name = str(recipe.get("dish_name", "")).lower()
-    dish_type = str(recipe.get("dish_type", "")).lower()
-    
-    main_keywords = [
-        "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga",
-        "heo", "bò", "bo", "meat", "fish", "chicken", "pork", "beef",
-        "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien"
-    ]
-    
-    return any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)
-
-
-def _is_carb_dish(recipe: Dict[str, Any]) -> bool:
-    """Check if recipe is a carb dish (rice/noodle/soup)."""
-    dish_name = str(recipe.get("dish_name", "")).lower()
-    dish_type = str(recipe.get("dish_type", "")).lower()
-    
-    carb_keywords = [
-        "cơm", "com", "rice", "phở", "pho", "bún", "bun", "mì", "mi",
-        "noodle", "soup", "canh", "cháo", "chao"
-    ]
-    
-    return any(keyword in dish_name or keyword in dish_type for keyword in carb_keywords)
 
 
 @tool

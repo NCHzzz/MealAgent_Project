@@ -151,14 +151,39 @@ export default function ChatPage() {
     );
   }, [currentConversation, conversations]);
 
+  // Improved smooth scrolling during streaming
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
+      // Use requestAnimationFrame for smoother scrolling
+      requestAnimationFrame(() => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({
+            behavior: "smooth",
+            block: "end",
+          });
+        }
       });
     }
   }, [currentQuery, currentStatus]);
+
+  // Throttled scroll for better performance during rapid updates
+  useEffect(() => {
+    if (!messagesEndRef.current) return;
+    
+    const scrollToBottom = () => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "end",
+        });
+      }
+    };
+
+    // Throttle scroll updates to avoid excessive scrolling
+    const timeoutId = setTimeout(scrollToBottom, 100);
+    
+    return () => clearTimeout(timeoutId);
+  }, [currentQuery]);
 
   useEffect(() => {
     if (messagesEndRef.current) {

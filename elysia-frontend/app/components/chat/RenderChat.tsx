@@ -18,12 +18,13 @@ import {
 import UserMessageDisplay from "./displays/SystemMessages/UserMessageDisplay";
 import ErrorMessageDisplay from "./displays/SystemMessages/ErrorMessageDisplay";
 import TextDisplay from "./displays/Generic/TextDisplay";
+import StreamingTextDisplay from "./displays/Generic/StreamingTextDisplay";
 import WarningDisplay from "./displays/SystemMessages/WarningDisplay";
 import SummaryDisplay from "./displays/Summary/SummaryDisplay";
 import CodeDisplay from "./components/ViewCodeButton";
 import FeedbackButtons from "./components/FeedbackButtons";
 import InfoMessageDisplay from "./displays/SystemMessages/InfoMessageDisplay";
-import { Skeleton } from "@/components/ui/skeleton";
+import StreamingSkeleton from "./components/StreamingSkeleton";
 import { SocketContext } from "../contexts/SocketContext";
 import RateLimitMessageDisplay from "./displays/SystemMessages/RateLimitMessageDisplay";
 import SuggestionDisplay from "./displays/SystemMessages/SuggestionDisplay";
@@ -294,12 +295,7 @@ const RenderChat: React.FC<RenderChatProps> = ({
             displayMessages.length < 2 &&
             socketOnline &&
             !finished && (
-              <div className="w-full flex-col flex gap-2 justify-start items-start fade-in">
-                <Skeleton className="w-full h-[1rem]" />
-                <Skeleton className="w-1/2 h-[1rem]" />
-                <Skeleton className="w-2/5 h-[1rem]" />
-                <Skeleton className="w-2/5 h-[1rem]" />
-              </div>
+              <StreamingSkeleton lines={4} variant="default" />
             )}
           {!collapsed && (
             <div className="flex flex-col gap-4">
@@ -358,12 +354,13 @@ const RenderChat: React.FC<RenderChatProps> = ({
                             <div className="w-full flex flex-col justify-start items-start ">
                               {(message.payload as ResponsePayload).type ===
                                 "response" && (
-                                <TextDisplay
+                                <StreamingTextDisplay
                                   key={`${index}-${message.id}-response`}
                                   payload={
                                     (message.payload as ResponsePayload)
                                       .objects as TextPayload[]
                                   }
+                                  isStreaming={!finished && index === processedOutputItems.length - 1}
                                 />
                               )}
                               {/* TODO Replace with text_with_title */}
