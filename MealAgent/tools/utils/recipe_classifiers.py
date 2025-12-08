@@ -7,26 +7,98 @@ from typing import Dict, Any
 
 
 def _is_vietnamese_breakfast(recipe: Dict[str, Any]) -> bool:
-    """Check if recipe is a Vietnamese breakfast dish."""
+    """
+    Check if recipe is a Vietnamese breakfast dish.
+    
+    Vietnamese breakfast dishes typically include:
+    - Phở, bún, hủ tiếu, mì, miến, bánh canh (noodles)
+    - Bánh mì, bánh ngọt, xôi, bánh (breads, cakes, sticky rice)
+    - Cơm tấm (broken rice)
+    - Cháo (porridge)
+    - Ngô/khoai luộc (boiled corn/sweet potato)
+    - Súp (soup)
+    """
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # CRITICAL: Vietnamese breakfast keywords - dishes that start with these are breakfast
     breakfast_keywords = [
-        "phở", "pho", "bun", "bún", "bun bo", "bún bò", "bun rieu", "bún riêu", "bun cha", "bún chả",
-        "hu tieu", "hủ tiếu", "banh mi", "bánh mì", "banh cuon", "bánh cuốn",
-        "banh canh", "bánh canh", "banh bao", "bánh bao",
-        "xoi", "xôi", "chao", "cháo", "sandwich", "bánh ngọt", "banh ngot", "croissant", "brioche",
-        "cơm tấm", "com tam", "xoi man", "xôi mặn", "xoi ngo", "xôi ngô"
+        # Noodles
+        "phở", "pho", "bun", "bún", "bun bo", "bún bò", "bun rieu", "bún riêu", 
+        "bun cha", "bún chả", "bun thang", "bún thang", "bun oc", "bún ốc",
+        "hu tieu", "hủ tiếu", "hu tiu", "hủ tiu",
+        "mì", "mi", "miến", "mien",
+        "banh canh", "bánh canh",
+        # Breads and cakes
+        "banh mi", "bánh mì", "banh ngot", "bánh ngọt", "banh bao", "bánh bao",
+        "banh cuon", "bánh cuốn", "banh xeo", "bánh xèo",
+        "banh", "bánh",  # General cake/bread (but check context)
+        # Sticky rice
+        "xoi", "xôi", "xoi man", "xôi mặn", "xoi ngo", "xôi ngô", "xoi gac", "xôi gấc",
+        # Rice dishes
+        "cơm tấm", "com tam", "com suon", "cơm sườn",
+        # Porridge
+        "chao", "cháo", "chao ga", "cháo gà", "chao bo", "cháo bò",
+        # Boiled items
+        "ngô luộc", "ngo luoc", "khoai luoc", "khoai luộc", "ngô", "ngo",
+        # Soup
+        "súp", "sup", "soup",
+        # Western breakfast items (also common in Vietnam)
+        "sandwich", "croissant", "brioche", "toast", "pancake", "trứng chiên", "trung chien"
     ]
     
-    if any(keyword in dish_name for keyword in breakfast_keywords):
-        return True
+    # Check if dish name starts with or contains breakfast keywords
+    dish_name_lower = dish_name.lower().strip()
     
+    # CRITICAL: Exclude main dishes that are NOT breakfast (e.g., "Ba Chỉ Và Mực Nướng Sữa Đặc")
+    # Main dish keywords that should NOT be breakfast
+    main_dish_keywords = [
+        "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga", "heo", "bò", "bo",
+        "meat", "fish", "chicken", "pork", "beef", "kho", "nướng", "nuong", 
+        "rang", "xào", "xao", "chiên", "chien", "sườn", "suon", "mực", "muc"
+    ]
+    
+    # CRITICAL: Exclude main dishes that are NOT breakfast
+    # Check if dish name starts with or contains main dish keywords (not breakfast)
+    for main_keyword in main_dish_keywords:
+        # Check startswith first (most common case)
+        if dish_name_lower.startswith(main_keyword):
+            return False  # This is a main dish, not breakfast
+        # Also check if keyword appears prominently in the name (not just as part of another word)
+        # For example: "Ba Chỉ Và Mực Nướng" contains "mực" and "nướng"
+        if len(main_keyword) >= 3 and main_keyword in dish_name_lower:
+            # Additional check: if it's a standalone word or part of a compound dish name
+            # This helps catch cases like "mực nướng", "thịt kho", etc.
+            return False  # This is likely a main dish, not breakfast
+    
+    # Check breakfast keywords
+    for keyword in breakfast_keywords:
+        # CRITICAL: For "banh" or "bánh", be more specific - only match if it's a breakfast bread/cake
+        if keyword in ["banh", "bánh"]:
+            # Only match if it's a specific breakfast bread/cake (banh mi, banh bao, etc.)
+            if keyword in dish_name_lower:
+                # Check if it's a breakfast bread/cake (banh mi, banh bao, banh cuon, banh xeo, banh ngot)
+                breakfast_bread_keywords = ["banh mi", "bánh mì", "banh bao", "bánh bao", "banh cuon", "bánh cuốn", 
+                                           "banh xeo", "bánh xèo", "banh ngot", "bánh ngọt", "banh canh", "bánh canh"]
+                if any(bread_kw in dish_name_lower for bread_kw in breakfast_bread_keywords):
+                    return True
+                # Otherwise, don't match generic "banh" to avoid false positives
+                continue
+        
+        # Check if dish name starts with the keyword (most common case)
+        if dish_name_lower.startswith(keyword):
+            return True
+        # Also check if keyword is in the dish name (for compound names)
+        if keyword in dish_name_lower:
+            return True
+    
+    # Check dish_type field
     if any(keyword in dish_type for keyword in breakfast_keywords):
         return True
     
+    # Check meal_type field
     meal_type = str(recipe.get("meal_type", "")).lower()
-    if "breakfast" in meal_type or "sáng" in meal_type:
+    if "breakfast" in meal_type or "sáng" in meal_type or "buổi sáng" in meal_type:
         return True
     
     return False
@@ -37,22 +109,30 @@ def _is_rice_dish(recipe: Dict[str, Any]) -> bool:
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # CRITICAL: Rice dishes must explicitly contain "cơm" or "com" or "rice"
     rice_keywords = ["cơm", "com", "rice"]
     has_rice = any(keyword in dish_name or keyword in dish_type for keyword in rice_keywords)
     
     if not has_rice:
         return False
     
-    # Exclude main dishes that don't have rice in name
+    # CRITICAL: Exclude main dishes - if dish contains main ingredients, it's NOT plain rice
     main_keywords = [
         "thịt", "thit", "cá", "ca", "tôm", "tom", "gà", "ga",
         "heo", "bò", "bo", "meat", "fish", "chicken", "pork", "beef",
-        "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien"
+        "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien",
+        "sườn", "suon", "mực", "muc", "tôm", "tom", "cua", "crab",
+        "lẩu", "lau", "nướng", "nuong", "cuốn", "cuon"
     ]
     has_main_keywords = any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)
     
-    if has_main_keywords and not any(kw in dish_name for kw in rice_keywords):
-        return False
+    # If it has main keywords, it's likely a main dish (even if it has "cơm" in name like "Cơm Gà")
+    # Only allow if it's explicitly "Cơm Trắng" (white rice) or similar plain rice
+    if has_main_keywords:
+        # Allow only if it's a simple rice dish name like "Cơm Trắng", "Cơm", "Rice"
+        plain_rice_names = ["cơm trắng", "com trang", "cơm", "com", "rice", "white rice"]
+        if not any(plain_name in dish_name for plain_name in plain_rice_names):
+            return False  # This is a main dish with rice, not plain rice
     
     # Exclude breakfast dishes
     breakfast_keywords = ["bánh mì", "banh mi", "bánh cuốn", "banh cuon", "xôi", "xoi", "cháo", "chao", "phở", "pho"]
@@ -66,6 +146,10 @@ def _is_rice_dish(recipe: Dict[str, Any]) -> bool:
     
     # Exclude bean dishes
     if "đậu" in dish_name or "dau" in dish_name or "bean" in dish_name:
+        return False
+    
+    # Exclude soup dishes (canh) - they are accompaniments, not rice
+    if "canh" in dish_name or "canh" in dish_type:
         return False
     
     return True

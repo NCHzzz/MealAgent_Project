@@ -168,6 +168,8 @@ def _calculate_meal_targets(
 def _scale_main_by_protein(
     recipe: Dict[str, Any],
     target_protein: float,
+    *,
+    min_scale: float = 0.5,
     max_scale: float = 1.2,
 ) -> float:
     """
@@ -188,12 +190,14 @@ def _scale_main_by_protein(
         return 1.0
     
     scale = target_protein / current_protein
-    return max(0.5, min(max_scale, scale))
+    return max(min_scale, min(max_scale, scale))
 
 
 def _scale_carb_by_kcal(
     recipe: Dict[str, Any],
     target_kcal: float,
+    *,
+    min_scale: float = 0.5,
     max_scale: float = 1.5,
 ) -> float:
     """
@@ -214,7 +218,7 @@ def _scale_carb_by_kcal(
         return 1.0
     
     scale = target_kcal / current_kcal
-    return max(0.5, min(max_scale, scale))
+    return max(min_scale, min(max_scale, scale))
 
 
 def _calculate_macro_deviation(
@@ -441,7 +445,8 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "meal_type": meal_data.get("meal_type", meal_key),
                     "recipe_id": str(recipe_id),
                     "servings": servings,
-                    "actual_macros": total_macros,
+                    # Store as JSON string to match schema (TEXT)
+                    "actual_macros": json.dumps(total_macros),
                 }
             )
 

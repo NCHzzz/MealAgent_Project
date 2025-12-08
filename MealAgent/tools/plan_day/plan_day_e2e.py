@@ -17,8 +17,6 @@ from MealAgent.tools.utils.planning_helpers import (
     _calculate_plan_micronutrients,
     ensure_rfc3339_datetime,
     _calculate_meal_targets,
-    _scale_main_by_protein,
-    _scale_carb_by_kcal,
     _calculate_total_deviation_score,
     _try_swap_alternatives,
 )
@@ -32,6 +30,15 @@ from MealAgent.tools.utils.recipe_classifiers import (
     _is_fruit,
     _is_combined_dish,
     _matches_meal_slot,
+)
+from MealAgent.tools.utils.meal_selection import (
+    select_meal_by_strategy,
+    calculate_recipe_fit_score,
+)
+from MealAgent.tools.utils.meal_assembly import (
+    add_supplementary_dishes,
+    select_accompaniments,
+    calculate_meal_macros,
 )
 from MealAgent.tools.utils.llm_draft import generate_llm_draft
 from MealAgent.schemas.llm_draft import LLMDraftResponse
@@ -81,6 +88,42 @@ def _clear_missing_macro_state(tree_data: TreeData) -> None:
         logging.debug("plan_day_e2e_tool: failed to clear missing macros state.")
 
 
+def _strip_device_filters(filters_results: list[Dict[str, Any]] | None) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+    """
+    Remove any device-based constraints from constraints_guard_tool output so the
+    planner does not depend on recipe.devices availability.
+    """
+    if not filters_results or not filters_results[0].get("objects"):
+        return None, None
+
+    filters_entry = filters_results[0]
+    metadata = dict(filters_entry.get("metadata") or {})
+    where = filters_entry["objects"][0].get("where") or {}
+
+    def _clean(node: Dict[str, Any] | None) -> Dict[str, Any] | None:
+        if not isinstance(node, dict):
+            return node
+        path = node.get("path")
+        if path and "devices" in path:
+            return None
+        if "operator" in node and "operands" in node:
+            cleaned = [o for o in (_clean(op) for op in node.get("operands", [])) if o]
+            if not cleaned:
+                return {}
+            if len(cleaned) == 1:
+                return cleaned[0]
+            return {k: v for k, v in node.items() if k != "operands"} | {"operands": cleaned}
+        return node
+
+    cleaned_where = _clean(where) or {}
+    filters_entry["objects"][0]["where"] = cleaned_where
+    for key in ("required_device", "exclude_devices"):
+        if key in metadata:
+            metadata[key] = None if key == "required_device" else []
+    filters_entry["metadata"] = metadata
+    return cleaned_where, metadata
+
+
 # Recipe classification functions moved to MealAgent.tools.utils.recipe_classifiers
 
 
@@ -122,114 +165,7 @@ def _create_default_white_rice_recipe() -> Dict[str, Any]:
 # Recipe classification functions moved to MealAgent.tools.utils.recipe_classifiers
 
 
-def _calculate_recipe_fit_score(
-    recipe: Dict[str, Any],
-    target_macros: Dict[str, float] | None = None,
-    meal_type: str | None = None,
-    remaining_targets: Dict[str, float] | None = None,
-) -> float:
-    """
-    Calculate how well a recipe fits the target macros for a specific meal.
-    Higher score = better fit.
-    
-    Args:
-        recipe: Recipe to score
-        target_macros: Daily macro targets (used if remaining_targets not provided)
-        meal_type: Meal type (breakfast/lunch/dinner)
-        remaining_targets: Remaining macro targets after previous meals (preferred)
-    """
-    if not target_macros and not remaining_targets:
-        return recipe.get("fit_score", 50.0)
-    
-    recipe_macros = _get_meal_macros(recipe)
-    if not recipe_macros.get("kcal"):
-        return 0.0
-    
-    # Use remaining targets if provided, otherwise calculate per-meal targets
-    if remaining_targets:
-        meal_targets = remaining_targets.copy()
-    else:
-        # Calculate per-meal targets (divide daily by 3)
-        meal_targets = {
-            "kcal": target_macros.get("tdee_kcal", 2000) / 3.0,
-            "protein_g": target_macros.get("protein_g", 150) / 3.0,
-            "fat_g": target_macros.get("fat_g", 67) / 3.0,
-            "carb_g": target_macros.get("carb_g", 200) / 3.0,
-        }
-        
-        # Adjust targets by meal type
-        if meal_type == "breakfast":
-            # Breakfast typically lighter (25% of daily)
-            meal_targets = {k: v * 0.75 for k, v in meal_targets.items()}
-        elif meal_type in ["lunch", "dinner"]:
-            # Lunch/dinner typically heavier (35-40% of daily)
-            meal_targets = {k: v * 1.1 for k, v in meal_targets.items()}
-    
-    # Calculate fit score with dynamic weights based on remaining needs
-    # If protein is critically low, prioritize it heavily
-    protein_remaining = meal_targets.get("protein_g", 0.0)
-    protein_ratio = protein_remaining / target_macros.get("protein_g", 150.0) if target_macros else 0.33
-    
-    # Dynamic weights: increase protein weight if remaining protein is high (need more)
-    if protein_ratio > 0.4:  # Still need >40% of daily protein
-        macro_weights = {
-            "protein_g": 0.60,  # VERY high priority when protein is critically needed (increased from 0.50)
-            "carb_g": 0.15,
-            "kcal": 0.15,
-            "fat_g": 0.10,
-        }
-    elif protein_ratio > 0.2:  # Still need >20% of daily protein
-        macro_weights = {
-            "protein_g": 0.50,  # High priority when protein is still needed
-            "carb_g": 0.20,
-            "kcal": 0.20,
-            "fat_g": 0.10,
-        }
-    else:
-        macro_weights = {
-            "protein_g": 0.40,  # High priority - essential for muscle/health (increased from 0.35)
-            "carb_g": 0.25,     # High priority - energy source
-            "kcal": 0.20,       # Important but not the only factor
-            "fat_g": 0.15,      # Important but lower priority
-        }
-    
-    weighted_scores = []
-    for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
-        recipe_val = recipe_macros.get(macro, 0.0)
-        target_val = meal_targets.get(macro, 1.0)
-        weight = macro_weights.get(macro, 0.25)
-        
-        if target_val > 0:
-            ratio = recipe_val / target_val
-            # Best fit is when ratio is close to 1.0 (within 0.7-1.3 range)
-            if 0.7 <= ratio <= 1.3:
-                score = 100.0 - abs(ratio - 1.0) * 50.0  # Max score when ratio = 1.0
-            elif 0.5 <= ratio < 0.7 or 1.3 < ratio <= 1.5:
-                score = 60.0 - abs(ratio - 1.0) * 20.0  # Medium score
-            else:
-                score = max(0.0, 30.0 - abs(ratio - 1.0) * 10.0)  # Low score
-            
-            # CRITICAL: Heavy bonus for protein when remaining protein is high
-            if macro == "protein_g":
-                if protein_ratio > 0.4 and ratio > 0.8:  # High remaining need + good protein content
-                    score *= 2.0  # Stronger bonus for high-protein recipes when protein is needed (increased from 1.5)
-                elif protein_ratio > 0.4 and ratio > 0.5:  # High remaining need + moderate protein
-                    score *= 1.5  # Moderate bonus
-                elif ratio < 0.3:  # Very low protein
-                    score *= 0.2  # Heavier penalty for low protein (decreased from 0.3)
-                elif ratio < 0.5:  # Low protein
-                    score *= 0.5  # Penalty for low protein
-            
-            weighted_scores.append(score * weight)
-        else:
-            weighted_scores.append(0.0)
-    
-    # Sum weighted scores (not average) to emphasize balanced nutrition
-    total_fit = sum(weighted_scores) / sum(macro_weights.values()) if weighted_scores else 0.0
-    
-    # Combine with original fit_score if available (lower weight on original)
-    original_fit = recipe.get("fit_score", 50.0)
-    return (total_fit * 0.8) + (original_fit * 0.2)
+# _calculate_recipe_fit_score moved to MealAgent.tools.utils.meal_selection.calculate_recipe_fit_score
 
 
 def _try_select_from_llm_suggestions(
@@ -311,7 +247,7 @@ def _select_carb_with_validation(
     
     # Fallback to rule-based selection
     if not carb_recipe:
-        carb_recipe = _select_meal_by_strategy(
+        carb_recipe = select_meal_by_strategy(
             recipes, selection_strategy if targets else "balanced",
             exclude=excluded,
             used_recipe_ids=recent_recipe_ids_set,
@@ -357,319 +293,10 @@ def _select_carb_with_validation(
     return carb_recipe, is_combined, is_noodle
 
 
-def _select_accompaniments(
-    llm_draft,
-    meal_slot: str,
-    is_combined: bool,
-    is_noodle: bool,
-    recipes: List[Dict[str, Any]],
-    excluded: List[Dict[str, Any]],
-    recent_recipe_ids_set: set[str],
-    selection_strategy: str,
-    targets: Optional[Dict[str, float]],
-) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """
-    Select meal accompaniments (main, soup, vegetable, fruit).
-    
-    Returns: (main, soup, vegetable, fruit)
-    """
-    main = None
-    soup = None
-    vegetable = None
-    fruit = None
-    
-    if is_combined or is_noodle:
-        # Combined/noodle: only fruit
-        fruit = _try_select_from_llm_suggestions(
-            llm_draft, meal_slot, "fruit",
-            recipes, excluded, recent_recipe_ids_set,
-            min_kcal=30.0,
-            max_kcal=150.0  # CRITICAL: Limit fruit kcal
-        )
-        if not fruit:
-            fruit = _select_meal_by_strategy(
-                recipes, "balanced",
-                exclude=excluded,
-                used_recipe_ids=recent_recipe_ids_set,
-                preferred_meal_type=meal_slot,
-                dish_category="fruit",
-                target_macros=targets,
-                require_macros=True,
-                min_kcal=30.0,
-                max_kcal=150.0,  # CRITICAL: Limit fruit kcal
-            )
-        # CRITICAL: Final validation - ensure fruit is actually a fruit and within kcal limit
-        if fruit:
-            fruit_macros = _get_meal_macros(fruit)
-            fruit_kcal = fruit_macros.get("kcal", 0)
-            if fruit_kcal > 150.0:
-                logging.warning(f"Fruit '{fruit.get('dish_name', 'Unknown')}' kcal ({fruit_kcal:.1f}) exceeds limit (150.0), rejecting...")
-                fruit = None
-            elif not _is_fruit(fruit):
-                logging.warning(f"Selected 'fruit' is not actually a fruit: {fruit.get('dish_name', 'Unknown')}")
-                fruit = None
-    else:
-        # Plain rice: main + soup + vegetable/fruit
-        # Select main dish - prioritize protein if remaining protein is high
-        remaining_targets = targets.get("_remaining_targets") if targets else None
-        
-        # CRITICAL: If no remaining_targets provided, assume we need full protein (starting fresh)
-        # This ensures we prioritize protein even when remaining_targets is not set
-        if not remaining_targets and targets:
-            # Initialize remaining_targets with full targets (we're starting fresh)
-            remaining_targets = {
-                "kcal": targets.get("tdee_kcal", 2000.0),
-                "protein_g": targets.get("protein_g", 150.0),
-                "fat_g": targets.get("fat_g", 65.0),
-                "carb_g": targets.get("carb_g", 200.0),
-            }
-        
-        if remaining_targets:
-            protein_remaining = remaining_targets.get("protein_g", 0.0)
-            daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
-            protein_ratio = protein_remaining / daily_protein if daily_protein > 0 else 1.0
-            
-            # Calculate dynamic max_kcal and min_protein based on remaining protein needs
-            # If protein is critically needed, allow higher kcal dishes (they often have more protein)
-            if protein_ratio > 0.5:  # Still need >50% of daily protein (increased threshold)
-                # CRITICAL: Increase max_kcal to 650 when protein is critically needed
-                max_main_kcal = 650.0
-                min_main_protein = 25.0  # Require at least 25g protein for main dish (increased)
-            elif protein_ratio > 0.4:  # Still need >40% of daily protein
-                max_main_kcal = 600.0
-                min_main_protein = 22.0  # Require at least 22g protein
-            elif protein_ratio > 0.2:  # Still need >20% of daily protein
-                max_main_kcal = 500.0
-                min_main_protein = 18.0  # Require at least 18g protein (increased)
-            else:
-                max_main_kcal = 450.0
-                min_main_protein = 15.0  # Require at least 15g protein (increased)
-            
-            # If still need >40% of daily protein, prioritize highest_protein strategy
-            if protein_ratio > 0.4:
-                # Use highest_protein strategy when protein is critically needed
-                main = _try_select_from_llm_suggestions(
-                    llm_draft, meal_slot, "main",
-                    recipes, excluded, recent_recipe_ids_set,
-                    min_kcal=50.0, max_kcal=max_main_kcal
-                )
-                if not main:
-                    main = _select_meal_by_strategy(
-                        recipes, "highest_protein",
-                        exclude=excluded,
-                        used_recipe_ids=recent_recipe_ids_set,
-                        preferred_meal_type=meal_slot,
-                        dish_category="main",
-                        target_macros=targets,
-                        require_macros=True,
-                        min_kcal=50.0,
-                        max_kcal=max_main_kcal,
-                        min_protein=min_main_protein,  # CRITICAL: Require minimum protein
-                    )
-                if not main:
-                    # Fallback: try without min_protein requirement but still prioritize protein
-                    main = _select_meal_by_strategy(
-                        recipes, "highest_protein",
-                        exclude=excluded,
-                        used_recipe_ids=recent_recipe_ids_set,
-                        preferred_meal_type=meal_slot,
-                        target_macros=targets,
-                        require_macros=True,
-                        min_kcal=50.0,
-                        max_kcal=max_main_kcal,
-                    )
-            else:
-                # Use macro_fit strategy when protein needs are more balanced
-                main = _try_select_from_llm_suggestions(
-                    llm_draft, meal_slot, "main",
-                    recipes, excluded, recent_recipe_ids_set,
-                    min_kcal=50.0, max_kcal=max_main_kcal
-                )
-                if not main:
-                    main = _select_meal_by_strategy(
-                        recipes, selection_strategy if targets else "highest_protein",
-                        exclude=excluded,
-                        used_recipe_ids=recent_recipe_ids_set,
-                        preferred_meal_type=meal_slot,
-                        dish_category="main",
-                        target_macros=targets,
-                        require_macros=True,
-                        min_kcal=50.0,
-                        max_kcal=max_main_kcal,
-                        min_protein=min_main_protein,  # CRITICAL: Require minimum protein
-                    )
-                if not main:
-                    # Fallback: try without min_protein requirement
-                    main = _select_meal_by_strategy(
-                        recipes, "highest_protein",
-                        exclude=excluded,
-                        used_recipe_ids=recent_recipe_ids_set,
-                        preferred_meal_type=meal_slot,
-                        target_macros=targets,
-                        require_macros=True,
-                        min_kcal=50.0,
-                        max_kcal=max_main_kcal,
-                    )
-        else:
-            # No remaining targets and no targets provided - use aggressive protein strategy
-            # This should rarely happen, but if it does, prioritize protein heavily
-            max_main_kcal = 600.0  # Allow higher kcal to get more protein
-            min_main_protein = 20.0  # Require at least 20g protein (increased)
-            
-            # Always use highest_protein strategy when no targets/remaining_targets
-            main = _try_select_from_llm_suggestions(
-                llm_draft, meal_slot, "main",
-                recipes, excluded, recent_recipe_ids_set,
-                min_kcal=50.0, max_kcal=max_main_kcal
-            )
-            if not main:
-                main = _select_meal_by_strategy(
-                    recipes, "highest_protein",  # Always prioritize protein
-                    exclude=excluded,
-                    used_recipe_ids=recent_recipe_ids_set,
-                    preferred_meal_type=meal_slot,
-                    dish_category="main",
-                    target_macros=targets,
-                    require_macros=True,
-                    min_kcal=50.0,
-                    max_kcal=max_main_kcal,
-                    min_protein=min_main_protein,  # CRITICAL: Require minimum protein
-                )
-            if not main:
-                # Fallback: try with lower min_protein but still prioritize protein
-                main = _select_meal_by_strategy(
-                    recipes, "highest_protein",
-                    exclude=excluded,
-                    used_recipe_ids=recent_recipe_ids_set,
-                    preferred_meal_type=meal_slot,
-                    dish_category="main",
-                    target_macros=targets,
-                    require_macros=True,
-                    min_kcal=50.0,
-                    max_kcal=max_main_kcal,
-                    min_protein=15.0,  # Lower requirement but still require protein
-                )
-        
-        if main:
-            # CRITICAL: Validate main is actually a main dish
-            if not _is_main_dish(main):
-                logging.warning(f"Selected main '{main.get('dish_name', 'Unknown')}' is not a main dish, rejecting...")
-                main = None
-            else:
-                excluded.append(main)
-            
-            # Select soup only if main is valid
-            # CRITICAL: Limit soup kcal to max 200 kcal to avoid high-calorie soups
-            if main:
-                soup = _select_meal_by_strategy(
-                    recipes, "balanced",
-                    exclude=excluded,
-                    used_recipe_ids=recent_recipe_ids_set,
-                    preferred_meal_type=meal_slot,
-                    target_macros=targets,
-                    require_macros=True,
-                    min_kcal=30.0,
-                    max_kcal=200.0,  # CRITICAL: Limit soup kcal
-                )
-                if soup and not _is_soup(soup):
-                    logging.warning(f"Selected soup '{soup.get('dish_name', 'Unknown')}' is not a soup, rejecting...")
-                    soup = None
-                if not soup:
-                    for recipe in recipes:
-                        if recipe in excluded:
-                            continue
-                        if _is_soup(recipe):
-                            macros = recipe.get("macros_per_serving", {})
-                            if isinstance(macros, dict):
-                                kcal = macros.get("kcal", 0)
-                                if 30 <= kcal <= 200.0:  # CRITICAL: Enforce kcal limit
-                                    soup = recipe
-                                    break
-                # CRITICAL: Final validation - ensure soup is actually a soup and within kcal limit
-                if soup:
-                    soup_macros = _get_meal_macros(soup)
-                    soup_kcal = soup_macros.get("kcal", 0)
-                    if soup_kcal > 200.0:
-                        logging.warning(f"Soup '{soup.get('dish_name', 'Unknown')}' kcal ({soup_kcal:.1f}) exceeds limit (200.0), rejecting...")
-                        soup = None
-                    elif not _is_soup(soup):
-                        logging.warning(f"Selected soup '{soup.get('dish_name', 'Unknown')}' is not a soup, rejecting...")
-                        soup = None
-                if soup:
-                    excluded.append(soup)
-            
-            # Select vegetable (preferred) or fruit
-            # CRITICAL: Ensure vegetable is actually a vegetable dish, not a main dish
-            vegetable = _try_select_from_llm_suggestions(
-                llm_draft, meal_slot, "vegetable",
-                recipes, excluded, recent_recipe_ids_set,
-                min_kcal=30.0
-            )
-            # Validate vegetable is actually a vegetable dish
-            if vegetable and not _is_vegetable_dish(vegetable):
-                logging.warning(f"LLM suggested vegetable '{vegetable.get('dish_name', 'Unknown')}' is not a vegetable dish, rejecting...")
-                vegetable = None
-            if not vegetable:
-                vegetable = _select_meal_by_strategy(
-                    recipes, "balanced",
-                    exclude=excluded,
-                    used_recipe_ids=recent_recipe_ids_set,
-                    preferred_meal_type=meal_slot,
-                    dish_category="vegetable",
-                    target_macros=targets,
-                    require_macros=True,
-                    min_kcal=30.0,
-                    max_kcal=150.0,  # CRITICAL: Limit vegetable kcal
-                )
-            # CRITICAL: Final validation - ensure vegetable is actually a vegetable dish and within kcal limit
-            if vegetable:
-                veg_macros = _get_meal_macros(vegetable)
-                veg_kcal = veg_macros.get("kcal", 0)
-                if veg_kcal > 150.0:
-                    logging.warning(f"Vegetable '{vegetable.get('dish_name', 'Unknown')}' kcal ({veg_kcal:.1f}) exceeds limit (150.0), rejecting...")
-                    vegetable = None
-                elif not _is_vegetable_dish(vegetable):
-                    logging.warning(f"Selected vegetable '{vegetable.get('dish_name', 'Unknown')}' is not a vegetable dish, rejecting...")
-                    vegetable = None
-                elif _is_main_dish(vegetable):
-                    logging.warning(f"Selected vegetable '{vegetable.get('dish_name', 'Unknown')}' is actually a main dish, rejecting...")
-                    vegetable = None
-            
-            if vegetable:
-                excluded.append(vegetable)
-            else:
-                # Fallback to fruit if no vegetable
-                fruit = _try_select_from_llm_suggestions(
-                    llm_draft, meal_slot, "fruit",
-                    recipes, excluded, recent_recipe_ids_set,
-                    min_kcal=30.0
-                )
-                if not fruit:
-                    fruit = _select_meal_by_strategy(
-                        recipes, "balanced",
-                        exclude=excluded,
-                        used_recipe_ids=recent_recipe_ids_set,
-                        preferred_meal_type=meal_slot,
-                        dish_category="fruit",
-                        target_macros=targets,
-                        require_macros=True,
-                        min_kcal=30.0,
-                        max_kcal=150.0,  # CRITICAL: Limit fruit kcal
-                    )
-                # CRITICAL: Final validation - ensure fruit is actually a fruit and within kcal limit
-                if fruit:
-                    fruit_macros = _get_meal_macros(fruit)
-                    fruit_kcal = fruit_macros.get("kcal", 0)
-                    if fruit_kcal > 150.0:
-                        logging.warning(f"Fruit '{fruit.get('dish_name', 'Unknown')}' kcal ({fruit_kcal:.1f}) exceeds limit (150.0), rejecting...")
-                        fruit = None
-                    elif not _is_fruit(fruit):
-                        logging.warning(f"Selected fruit '{fruit.get('dish_name', 'Unknown')}' is not a fruit, rejecting...")
-                        fruit = None
-                if fruit:
-                    excluded.append(fruit)
-    
-    return main, soup, vegetable, fruit
+# _add_supplementary_dishes moved to MealAgent.tools.utils.meal_assembly.add_supplementary_dishes
+
+
+# _select_accompaniments moved to MealAgent.tools.utils.meal_assembly.select_accompaniments
 
 
 def _map_llm_suggestion_to_recipe(
@@ -818,240 +445,7 @@ def _map_llm_suggestion_to_recipe(
     return None
 
 
-def _select_meal_by_strategy(
-    recipes: List[Dict[str, Any]],
-    strategy: str,
-    exclude: List[Dict[str, Any]] | None = None,
-    used_recipe_ids: set[str] | None = None,
-    preferred_meal_type: str | None = None,
-    dish_category: str | None = None,
-    target_macros: Dict[str, float] | None = None,
-    require_macros: bool = False,
-    min_kcal: float = 30.0,
-    max_kcal: float | None = None,  # Filter out dishes with too high kcal
-    min_protein: float = 0.0,  # Minimum protein requirement (for main dishes)
-) -> Dict[str, Any] | None:
-    """
-    Select recipe based on strategy with improved macro-aware selection.
-    
-    Args:
-        recipes: List of recipe candidates
-        strategy: Selection strategy (highest_carb, highest_protein, balanced, macro_fit)
-        exclude: Recipes to exclude
-        used_recipe_ids: Recently used recipe IDs to avoid for variety
-        preferred_meal_type: Preferred meal type (breakfast/lunch/dinner)
-        dish_category: Specific dish category (rice/main/vegetable/fruit/breakfast)
-        target_macros: Target macros for better selection (optional)
-    """
-    if not recipes:
-        return None
-    exclude_ids = {r.get("food_id") for r in (exclude or []) if r.get("food_id")}
-    if used_recipe_ids:
-        exclude_ids.update(str(rid) for rid in used_recipe_ids)
-    candidates = [r for r in recipes if r.get("food_id") not in exclude_ids]
-    if require_macros or max_kcal or min_protein > 0:
-        filtered = []
-        for r in candidates:
-            macros = r.get("macros_per_serving", {})
-            if isinstance(macros, dict):
-                kcal = macros.get("kcal", 0)
-                protein = macros.get("protein_g", 0)
-                # Filter by min_kcal if require_macros
-                if require_macros and kcal < min_kcal:
-                    continue
-                # Filter by max_kcal to avoid dishes that are too high in calories
-                if max_kcal and kcal > max_kcal:
-                    continue
-                # CRITICAL: Filter by min_protein for main dishes to ensure adequate protein
-                if min_protein > 0 and protein < min_protein:
-                    continue
-                filtered.append(r)
-        if filtered:
-            candidates = filtered
-    if not candidates:
-        candidates = recipes
-
-    # Filter by dish category if specified
-    if dish_category:
-        if dish_category == "breakfast":
-            category_candidates = [r for r in candidates if _is_vietnamese_breakfast(r) and not _is_combined_dish(r)]
-        elif dish_category == "rice":
-            # For rice category, we want plain rice OR standalone noodles, but NOT combined dishes or main dishes
-            # Also exclude breakfast items (pancake, bánh, etc.) and protein-rich dishes
-            category_candidates = [
-                r for r in candidates 
-                if (_is_rice_dish(r) or _is_noodle_soup(r)) 
-                and not _is_combined_dish(r) 
-                and not _is_main_dish(r)  # Exclude main dishes (e.g., "Cá Kho Riềng", "Chả Hoa Ngũ Sắc Phô Mai")
-                and not _is_vietnamese_breakfast(r)  # Exclude breakfast items like "Pancake Trứng Chiên"
-            ]
-            # If still no candidates, try just rice dishes (excluding main dishes and breakfast items)
-            if not category_candidates:
-                category_candidates = [
-                    r for r in candidates 
-                    if _is_rice_dish(r) 
-                    and not _is_main_dish(r)
-                    and not _is_vietnamese_breakfast(r)
-                ]
-            # Final fallback: noodle/soup dishes (standalone, not combined, not main, not breakfast)
-            if not category_candidates:
-                category_candidates = [
-                    r for r in candidates 
-                    if _is_noodle_soup(r) 
-                    and not _is_combined_dish(r) 
-                    and not _is_main_dish(r)
-                    and not _is_vietnamese_breakfast(r)
-                ]
-        elif dish_category == "main":
-            # Main dish should NOT be combined dish
-            category_candidates = [r for r in candidates if _is_main_dish(r) and not _is_combined_dish(r)]
-        elif dish_category == "vegetable":
-            # Vegetable should NOT be combined dish or have protein
-            category_candidates = [r for r in candidates if _is_vegetable_dish(r) and not _is_combined_dish(r)]
-        elif dish_category == "fruit":
-            # Fruit should NOT be combined dish, gỏi, main dish, or breakfast items
-            category_candidates = [
-                r for r in candidates 
-                if _is_fruit(r) 
-                and not _is_combined_dish(r) 
-                and not _is_main_dish(r)  # Exclude main dishes (e.g., "Chả Hoa Ngũ Sắc Phô Mai")
-            ]
-        else:
-            category_candidates = candidates
-        
-        if category_candidates:
-            candidates = category_candidates
-
-    # Filter by meal type
-    if preferred_meal_type:
-        typed_candidates = [r for r in candidates if _matches_meal_slot(r, preferred_meal_type)]
-        if typed_candidates:
-            candidates = typed_candidates
-
-    # Apply strategy with improved macro-aware selection
-    if strategy == "highest_carb":
-        candidates.sort(key=lambda r: _get_meal_macros(r).get("carb_g", 0.0), reverse=True)
-    elif strategy == "highest_protein":
-        candidates.sort(key=lambda r: _get_meal_macros(r).get("protein_g", 0.0), reverse=True)
-    elif strategy == "macro_fit" and target_macros:
-        # New strategy: Select based on macro fit score
-        # Extract remaining_targets from target_macros if present
-        remaining_targets = target_macros.get("_remaining_targets")
-        for r in candidates:
-            r["_macro_fit_score"] = _calculate_recipe_fit_score(
-                r, target_macros, preferred_meal_type, remaining_targets
-            )
-        candidates.sort(key=lambda r: r.get("_macro_fit_score", 0.0), reverse=True)
-    elif strategy == "balanced":
-        # Use macro_fit if targets available, otherwise use fit_score
-        if target_macros:
-            remaining_targets = target_macros.get("_remaining_targets")
-            for r in candidates:
-                r["_macro_fit_score"] = _calculate_recipe_fit_score(
-                    r, target_macros, preferred_meal_type, remaining_targets
-                )
-            candidates.sort(key=lambda r: r.get("_macro_fit_score", r.get("fit_score", 0.0)), reverse=True)
-        else:
-            candidates.sort(key=lambda r: r.get("fit_score", 0.0), reverse=True)
-    
-    # CRITICAL: After sorting, add random factor to break ties and ensure variety
-    # This prevents always selecting the same top candidates
-    if len(candidates) > 1:
-        # Shuffle candidates with similar scores to ensure variety
-        # Group candidates by score ranges and shuffle within groups
-        if target_macros:
-            # For macro_fit strategy, add small random variation to scores
-            for r in candidates:
-                base_score = r.get("_macro_fit_score", r.get("fit_score", 0.0))
-                # Add random variation (±5%) to break ties
-                r["_variety_score"] = base_score * (1.0 + random.uniform(-0.05, 0.05))
-            candidates.sort(key=lambda r: r.get("_variety_score", 0.0), reverse=True)
-        else:
-            # For other strategies, shuffle candidates with similar fit_score
-            # Group by score ranges and shuffle within groups
-            score_groups = {}
-            for r in candidates:
-                score = r.get("fit_score", 0.0)
-                # Round to nearest 10 to group similar scores
-                score_group = int(score / 10) * 10
-                if score_group not in score_groups:
-                    score_groups[score_group] = []
-                score_groups[score_group].append(r)
-            
-            # Shuffle within each group, then combine
-            shuffled_candidates = []
-            for score_group in sorted(score_groups.keys(), reverse=True):
-                group = score_groups[score_group]
-                random.shuffle(group)
-                shuffled_candidates.extend(group)
-            candidates = shuffled_candidates
-    
-    # IMPROVED VARIETY: Randomly select from a larger pool to ensure better variety
-    # Instead of always picking top 5, use a weighted random selection from top candidates
-    if len(candidates) > 1:
-        # Use larger pool for better variety (top 20% or at least 10, max 30)
-        pool_size = max(10, min(30, int(len(candidates) * 0.2)))
-        top_candidates = candidates[:pool_size]
-        
-        # Weighted random: higher weight for better candidates, but still allow lower-ranked ones
-        # This ensures variety while maintaining quality
-        weights = [1.0 / (i + 1) for i in range(len(top_candidates))]  # Decreasing weights
-        total_weight = sum(weights)
-        weights = [w / total_weight for w in weights]  # Normalize
-        
-        selected = random.choices(top_candidates, weights=weights, k=1)[0]
-        
-        # CRITICAL: Final validation - ensure selected recipe matches dish_category if specified
-        if dish_category:
-            if dish_category == "main" and not _is_main_dish(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'main', trying next candidate...")
-                # Try next candidate
-                for candidate in top_candidates[1:]:
-                    if _is_main_dish(candidate):
-                        selected = candidate
-                        break
-            elif dish_category == "vegetable" and not _is_vegetable_dish(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'vegetable', trying next candidate...")
-                # Try next candidate
-                for candidate in top_candidates[1:]:
-                    if _is_vegetable_dish(candidate) and not _is_main_dish(candidate):
-                        selected = candidate
-                        break
-            elif dish_category == "fruit" and not _is_fruit(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'fruit', trying next candidate...")
-                # Try next candidate
-                for candidate in top_candidates[1:]:
-                    if _is_fruit(candidate):
-                        selected = candidate
-                        break
-            elif dish_category == "rice" and not _is_rice_dish(selected) and not _is_noodle_soup(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'rice', trying next candidate...")
-                # Try next candidate
-                for candidate in top_candidates[1:]:
-                    if (_is_rice_dish(candidate) or _is_noodle_soup(candidate)) and not _is_main_dish(candidate):
-                        selected = candidate
-                        break
-        
-        return selected
-    elif candidates:
-        selected = candidates[0]
-        # CRITICAL: Final validation for single candidate
-        if dish_category:
-            if dish_category == "main" and not _is_main_dish(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'main'")
-                return None
-            elif dish_category == "vegetable" and not _is_vegetable_dish(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'vegetable'")
-                return None
-            elif dish_category == "fruit" and not _is_fruit(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'fruit'")
-                return None
-            elif dish_category == "rice" and not _is_rice_dish(selected) and not _is_noodle_soup(selected):
-                logging.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'rice'")
-                return None
-        return selected
-    else:
-        return None
+# select_meal_by_strategy moved to MealAgent.tools.utils.meal_selection.select_meal_by_strategy
 
 
 async def _ensure_recipe_macros_cached(
@@ -1129,7 +523,7 @@ async def plan_day_e2e_tool(
     user_id: str | None = None,
     plan_id: str | None = None,
     start_date: str | None = None,
-    recent_plan_window_minutes: int = 10,  # for testing; set to 10080 (7 days) in production
+    recent_plan_window_minutes: int = 10080,  # 7 days (7 * 24 * 60 = 10080 minutes) - recipes won't repeat within 7 days
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -1207,6 +601,7 @@ async def plan_day_e2e_tool(
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
         filters_metadata: Dict[str, Any] | None = None
         if filters_results and filters_results[0]["objects"]:
+            _strip_device_filters(filters_results)
             filters_metadata = filters_results[0].get("metadata") or {}
             diet_types = filters_metadata.get("diet_types", [])
             allergens = filters_metadata.get("exclude_allergens", [])
@@ -1422,6 +817,7 @@ async def plan_day_e2e_tool(
             client = client_manager.get_client()
             plan_collection = client.collections.get("MealPlan")
             item_collection = client.collections.get("MealPlanItem")
+            recent_recipe_names: set[str] = set()
             
             # Get recent plans within configured window (days) for this user
             # Use 7 days to ensure better variety and avoid repetition
@@ -1453,10 +849,18 @@ async def plan_day_e2e_tool(
                                 recipe_id = item_obj.properties.get("recipe_id")
                                 if recipe_id:
                                     recent_recipe_ids.add(str(recipe_id))
+                                dish_name = item_obj.properties.get("dish_name")
+                                if dish_name:
+                                    recent_recipe_names.add(str(dish_name).lower().strip())
                     
                     # Also add meal history recipe IDs to exclusion
                     if 'meal_history_recipe_ids' in locals():
                         recent_recipe_ids.update(meal_history_recipe_ids)
+                    # And add meal history names to name-based exclusion
+                    if 'meal_history_dish_names' in locals():
+                        recent_recipe_names.update(
+                            str(name).lower().strip() for name in meal_history_dish_names if name
+                        )
                     
                     # Filter out recently used recipes (but keep at least 30 recipes for better variety)
                     # This ensures we have enough candidates even after exclusion
@@ -1480,6 +884,28 @@ async def plan_day_e2e_tool(
                                 f"⚠️ Limited recipe variety: only {len(recipes)} unique recipes available "
                                 f"after excluding {original_count - len(recipes)} recently used ones"
                             )
+                    
+                    # Additional safeguard: exclude by dish name from recent plans + meal history
+                    if recent_recipe_names:
+                        name_blocklist = {name for name in recent_recipe_names if name}
+                        if name_blocklist and len(recipes) > 30:
+                            original_count = len(recipes)
+                            recipes = [r for r in recipes if str(r.get("dish_name", "")).lower().strip() not in name_blocklist]
+                            random.shuffle(recipes)
+                            if original_count > len(recipes):
+                                yield Response(
+                                    f"🔄 Excluded {original_count - len(recipes)} recently eaten dish(es) (name match) "
+                                    f"to avoid repetition"
+                                )
+                        elif name_blocklist and len(recipes) <= 30:
+                            original_count = len(recipes)
+                            recipes = [r for r in recipes if str(r.get("dish_name", "")).lower().strip() not in name_blocklist]
+                            random.shuffle(recipes)
+                            if len(recipes) < 10:
+                                yield Response(
+                                    f"⚠️ Limited variety after excluding recently eaten dishes by name; "
+                                    f"only {len(recipes)} recipes remain"
+                                )
         except Exception as e:
             logging.debug(f"plan_day_e2e_tool: Could not check recent plans for variety: {e}")
             # Continue with all recipes if check fails
@@ -1604,13 +1030,19 @@ async def plan_day_e2e_tool(
         
         # Calculate max_kcal per meal to avoid selecting dishes that are too high
         # Breakfast: ~25% of daily target, max 550 kcal (strict limit)
-        # Lunch/Dinner: ~35% of daily target, max 800 kcal per meal (strict limit)
+        # Lunch: ~30% of daily target, max 700 kcal (lighter than dinner)
+        # Dinner: ~40% of daily target, max 950 kcal (heavier than lunch - Vietnamese pattern)
         if targets:
             breakfast_max_kcal = min(550.0, targets.get("tdee_kcal", 2000) * 0.25)
-            meal_max_kcal = min(800.0, targets.get("tdee_kcal", 2000) * 0.35)
+            lunch_max_kcal = min(700.0, targets.get("tdee_kcal", 2000) * 0.30)  # Lighter
+            dinner_max_kcal = min(950.0, targets.get("tdee_kcal", 2000) * 0.40)  # Heavier
         else:
             breakfast_max_kcal = 550.0
-            meal_max_kcal = 800.0
+            lunch_max_kcal = 700.0
+            dinner_max_kcal = 950.0
+        
+        # For backward compatibility, keep meal_max_kcal for lunch (will use lunch_max_kcal for lunch, dinner_max_kcal for dinner)
+        meal_max_kcal = lunch_max_kcal  # Default for lunch
         
         # Track remaining targets after each meal for better selection
         remaining_targets = {
@@ -1644,26 +1076,34 @@ async def plan_day_e2e_tool(
                 breakfast_targets["_remaining_targets"] = remaining_targets.copy()
             
             # CRITICAL: Always prioritize protein for breakfast when starting (remaining_targets is full)
-            # Breakfast should contribute significantly to daily protein (at least 20-25g)
+            # Breakfast should contribute significantly to daily protein (at least 25-30g for high protein targets)
             breakfast_strategy = "highest_protein"  # Default to protein priority
-            min_breakfast_protein = 15.0  # Require at least 15g protein for breakfast
+            # CRITICAL: Increase base requirement to ensure adequate protein
+            daily_protein = breakfast_targets.get("protein_g", 150.0) if breakfast_targets else 150.0
+            # Base requirement: at least 20% of daily protein for breakfast (for 192g target = ~38g, but breakfast typically lighter)
+            # For high protein targets (>150g), require at least 25g; for lower targets, require 20g
+            if daily_protein > 180:
+                min_breakfast_protein = 25.0  # High protein target - require more
+            elif daily_protein > 150:
+                min_breakfast_protein = 22.0  # Medium-high protein target
+            else:
+                min_breakfast_protein = 20.0  # Standard protein target
             
             if breakfast_targets and remaining_targets:
                 protein_remaining = remaining_targets.get("protein_g", 0.0)
-                daily_protein = breakfast_targets.get("protein_g", 150.0)
                 protein_ratio = protein_remaining / daily_protein if daily_protein > 0 else 1.0
                 
                 # If we still need >50% of daily protein, require even more protein in breakfast
                 if protein_ratio > 0.5:
-                    min_breakfast_protein = 20.0  # Require 20g+ protein when protein is critically needed
+                    min_breakfast_protein = max(min_breakfast_protein, 30.0)  # Require 30g+ protein when protein is critically needed
                 elif protein_ratio > 0.3:
-                    min_breakfast_protein = 18.0  # Require 18g protein
+                    min_breakfast_protein = max(min_breakfast_protein, 25.0)  # Require 25g protein
                 # If protein needs are lower, still prioritize protein but with lower requirement
                 elif protein_ratio < 0.2:
                     breakfast_strategy = "balanced"  # Use balanced when protein needs are low
-                    min_breakfast_protein = 12.0
+                    min_breakfast_protein = max(min_breakfast_protein, 18.0)  # Still require at least 18g
             
-            breakfast = _select_meal_by_strategy(
+            breakfast = select_meal_by_strategy(
                 recipes, breakfast_strategy, 
                 used_recipe_ids=recent_recipe_ids_set,
                 preferred_meal_type="breakfast",
@@ -1680,23 +1120,29 @@ async def plan_day_e2e_tool(
             if breakfast_targets and remaining_targets:
                 breakfast_targets["_remaining_targets"] = remaining_targets.copy()
             
-            # Still prioritize protein for fallback
+            # Still prioritize protein for fallback, but with lower threshold
             breakfast_strategy = "highest_protein"
-            min_breakfast_protein = 12.0  # Lower requirement for fallback but still require protein
+            daily_protein = breakfast_targets.get("protein_g", 150.0) if breakfast_targets else 150.0
+            if daily_protein > 180:
+                min_breakfast_protein = 20.0  # Lower but still significant for high protein targets
+            elif daily_protein > 150:
+                min_breakfast_protein = 18.0
+            else:
+                min_breakfast_protein = 15.0
             
             if breakfast_targets and remaining_targets:
                 protein_remaining = remaining_targets.get("protein_g", 0.0)
-                daily_protein = breakfast_targets.get("protein_g", 150.0)
                 protein_ratio = protein_remaining / daily_protein if daily_protein > 0 else 1.0
                 if protein_ratio > 0.5:
-                    min_breakfast_protein = 18.0
+                    min_breakfast_protein = max(min_breakfast_protein, 25.0)
                 elif protein_ratio > 0.3:
-                    min_breakfast_protein = 15.0
+                    min_breakfast_protein = max(min_breakfast_protein, 20.0)
             
-            breakfast = _select_meal_by_strategy(
+            breakfast = select_meal_by_strategy(
                 recipes, breakfast_strategy, 
                 used_recipe_ids=recent_recipe_ids_set,
-                preferred_meal_type="breakfast", 
+                preferred_meal_type="breakfast",
+                dish_category="breakfast",  # CRITICAL: Ensure only breakfast dishes are selected
                 target_macros=breakfast_targets,
                 require_macros=True,
                 min_kcal=100.0,
@@ -1704,28 +1150,90 @@ async def plan_day_e2e_tool(
                 min_protein=min_breakfast_protein,  # CRITICAL: Still require minimum protein
             )
         if not breakfast:
-            yield Response("⚠️ No breakfast dish found. Selecting best available option...")
-            # Try to find any breakfast with kcal limit
+            yield Response("⚠️ No breakfast dish found. Selecting best available Vietnamese breakfast option...")
+            # CRITICAL: Only select Vietnamese breakfast dishes, not main dishes
+            best_breakfast = None
+            best_protein = 0.0
             for recipe in recipes:
                 if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                    # CRITICAL: Must be Vietnamese breakfast dish
+                    if not _is_vietnamese_breakfast(recipe):
+                        continue
                     macros = recipe.get("macros_per_serving", {})
                     if isinstance(macros, dict):
                         kcal = macros.get("kcal", 0)
-                        if 100 <= kcal <= breakfast_max_kcal:
-                            breakfast = recipe
-                            break
+                        protein = macros.get("protein_g", 0)
+                        if 100 <= kcal <= breakfast_max_kcal and protein > best_protein:
+                            best_breakfast = recipe
+                            best_protein = protein
+            if best_breakfast:
+                breakfast = best_breakfast
+            elif recipes:
+                # Last resort: find highest protein Vietnamese breakfast regardless of kcal
+                for recipe in recipes:
+                    if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                        # CRITICAL: Must be Vietnamese breakfast dish
+                        if not _is_vietnamese_breakfast(recipe):
+                            continue
+                        macros = recipe.get("macros_per_serving", {})
+                        if isinstance(macros, dict):
+                            protein = macros.get("protein_g", 0)
+                            if protein > best_protein:
+                                best_breakfast = recipe
+                                best_protein = protein
+                if best_breakfast:
+                    breakfast = best_breakfast
+                else:
+                    # Final fallback: find any Vietnamese breakfast dish
+                    for recipe in recipes:
+                        if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                            if _is_vietnamese_breakfast(recipe):
+                                breakfast = recipe
+                                break
             if not breakfast:
-                breakfast = recipes[0] if recipes else None
-            if not breakfast:
-                yield Response("❌ No recipes available for planning. Please search for recipes first.")
+                yield Response("❌ No Vietnamese breakfast dishes available. Please search for breakfast recipes first.")
                 return
         
-        # CRITICAL: Validate breakfast kcal after selection
+        # CRITICAL: Final validation - ensure breakfast is actually a Vietnamese breakfast dish
+        if not _is_vietnamese_breakfast(breakfast):
+            logging.warning(f"BREAKFAST_VALIDATION_FAILED: Selected breakfast '{breakfast.get('dish_name', 'Unknown')}' is not a Vietnamese breakfast dish. Searching for valid breakfast...")
+            # Find any valid Vietnamese breakfast dish
+            valid_breakfast = None
+            for recipe in recipes:
+                if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                    if _is_vietnamese_breakfast(recipe):
+                        macros = recipe.get("macros_per_serving", {})
+                        if isinstance(macros, dict):
+                            kcal = macros.get("kcal", 0)
+                            if 100 <= kcal <= breakfast_max_kcal:
+                                valid_breakfast = recipe
+                                break
+            if valid_breakfast:
+                breakfast = valid_breakfast
+                logging.info(f"BREAKFAST_REPLACED: Replaced with valid breakfast '{breakfast.get('dish_name', 'Unknown')}'")
+            else:
+                yield Response("❌ No valid Vietnamese breakfast dishes found. Please ensure breakfast recipes are available.")
+                return
+        
+        # CRITICAL: Validate breakfast kcal and protein after selection
         breakfast_macros = _get_meal_macros(breakfast)
         breakfast_kcal = breakfast_macros.get("kcal", 0)
-        if breakfast_kcal > breakfast_max_kcal * 1.1:  # Allow 10% tolerance
-            logging.warning(f"Breakfast kcal ({breakfast_kcal:.1f}) exceeds limit ({breakfast_max_kcal:.1f}), trying to find better option...")
-            # Try to find a better breakfast option
+        breakfast_protein = breakfast_macros.get("protein_g", 0)
+        daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
+        
+        # Calculate minimum acceptable protein for breakfast
+        if daily_protein > 180:
+            min_acceptable_protein = 20.0
+        elif daily_protein > 150:
+            min_acceptable_protein = 18.0
+        else:
+            min_acceptable_protein = 15.0
+        
+        # If breakfast protein is too low, try to find a better option
+        if breakfast_protein < min_acceptable_protein:
+            logging.warning(f"Breakfast protein ({breakfast_protein:.1f}g) is below minimum ({min_acceptable_protein:.1f}g), trying to find better option...")
+            best_breakfast = None
+            best_protein = breakfast_protein
             for recipe in recipes:
                 if recipe == breakfast:
                     continue
@@ -1733,25 +1241,79 @@ async def plan_day_e2e_tool(
                     macros = recipe.get("macros_per_serving", {})
                     if isinstance(macros, dict):
                         kcal = macros.get("kcal", 0)
-                        if 100 <= kcal <= breakfast_max_kcal and _is_vietnamese_breakfast(recipe):
-                            breakfast = recipe
-                            logging.info(f"Replaced breakfast with lower kcal option: {breakfast.get('dish_name', 'Unknown')}")
-                            break
+                        protein = macros.get("protein_g", 0)
+                        if (100 <= kcal <= breakfast_max_kcal and 
+                            protein > best_protein and 
+                            _is_vietnamese_breakfast(recipe)):
+                            best_breakfast = recipe
+                            best_protein = protein
+            if best_breakfast and best_protein >= min_acceptable_protein:
+                breakfast = best_breakfast
+                breakfast_macros = _get_meal_macros(breakfast)
+                breakfast_kcal = breakfast_macros.get("kcal", 0)
+                breakfast_protein = breakfast_macros.get("protein_g", 0)
+                logging.info(f"Replaced breakfast with higher protein option: {breakfast.get('dish_name', 'Unknown')} ({breakfast_protein:.1f}g protein)")
+        
+        if breakfast_kcal > breakfast_max_kcal * 1.1:  # Allow 10% tolerance
+            logging.warning(f"Breakfast kcal ({breakfast_kcal:.1f}) exceeds limit ({breakfast_max_kcal:.1f}), trying to find better option...")
+            # Try to find a better breakfast option that balances kcal and protein
+            best_breakfast = None
+            best_score = 0.0
+            for recipe in recipes:
+                if recipe == breakfast:
+                    continue
+                if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                    macros = recipe.get("macros_per_serving", {})
+                    if isinstance(macros, dict):
+                        kcal = macros.get("kcal", 0)
+                        protein = macros.get("protein_g", 0)
+                        if (100 <= kcal <= breakfast_max_kcal and 
+                            _is_vietnamese_breakfast(recipe) and
+                            protein >= min_acceptable_protein):
+                            # Score: prioritize protein, but also consider kcal
+                            score = protein * 2.0 - (kcal / 10.0)
+                            if score > best_score:
+                                best_breakfast = recipe
+                                best_score = score
+            if best_breakfast:
+                breakfast = best_breakfast
+                breakfast_macros = _get_meal_macros(breakfast)
+                logging.info(f"Replaced breakfast with better balanced option: {breakfast.get('dish_name', 'Unknown')}")
         
         # Update remaining targets after breakfast
         if remaining_targets and breakfast:
             breakfast_macros = _get_meal_macros(breakfast)
+            breakfast_name = breakfast.get("dish_name", "Unknown")
+            logging.debug(
+                f"BREAKFAST: {breakfast_name} | "
+                f"kcal={breakfast_macros.get('kcal', 0):.1f} | "
+                f"protein={breakfast_macros.get('protein_g', 0):.1f}g | "
+                f"fat={breakfast_macros.get('fat_g', 0):.1f}g | "
+                f"carb={breakfast_macros.get('carb_g', 0):.1f}g"
+            )
+            
+            # Log remaining targets BEFORE update
+        # Removed verbose logging - only log when there's an issue
+            
             # CRITICAL: Cap remaining targets to prevent negative values and ensure reasonable distribution
             remaining_targets["kcal"] = max(0.0, remaining_targets["kcal"] - breakfast_macros.get("kcal", 0.0))
             remaining_targets["protein_g"] = max(0.0, remaining_targets["protein_g"] - breakfast_macros.get("protein_g", 0.0))
             remaining_targets["fat_g"] = max(0.0, remaining_targets["fat_g"] - breakfast_macros.get("fat_g", 0.0))
             remaining_targets["carb_g"] = max(0.0, remaining_targets["carb_g"] - breakfast_macros.get("carb_g", 0.0))
             
+            # Log remaining targets AFTER update
+        # Removed verbose logging - only log when there's an issue
+            
             # CRITICAL: Don't artificially adjust remaining targets - use actual remaining values
             # Only ensure it doesn't go negative
             if remaining_targets["kcal"] < 0:
                 logging.warning(f"Remaining kcal after breakfast is negative ({remaining_targets['kcal']:.1f}), setting to 0")
                 remaining_targets["kcal"] = 0.0
+        
+        # CRITICAL: Initialize supplementary dishes lists BEFORE they are used
+        # These will store unassigned supplementary dishes to add to plan later
+        lunch_supplementary_dishes = []  # Will store all supplementary dishes for lunch
+        dinner_supplementary_dishes = []  # Will store all supplementary dishes for dinner
         
         # Lunch: Vietnamese lunch pattern - use helper functions
         excluded = [breakfast]
@@ -1761,11 +1323,11 @@ async def plan_day_e2e_tool(
         if lunch_targets and remaining_targets:
             lunch_targets["_remaining_targets"] = remaining_targets.copy()
         
-        # Select lunch carb with validation
+        # Select lunch carb with validation (use lunch_max_kcal for lighter lunch)
         lunch_carb, is_lunch_combined, is_lunch_noodle = _select_carb_with_validation(
             llm_draft, "lunch",
             recipes, excluded, recent_recipe_ids_set,
-            selection_strategy, lunch_targets, meal_max_kcal
+            selection_strategy, lunch_targets, lunch_max_kcal
         )
         
         if lunch_carb:
@@ -1787,51 +1349,16 @@ async def plan_day_e2e_tool(
                 else:
                     yield Response("ℹ️ Selected noodle dish for lunch (standalone meal). Adding fruit only.")
             
-            lunch_main, lunch_soup, lunch_veg, lunch_fruit = _select_accompaniments(
-                llm_draft, "lunch", is_lunch_combined, is_lunch_noodle,
+            lunch_main, lunch_soup, lunch_veg, lunch_fruit = select_accompaniments(
+                "lunch", is_lunch_combined, is_lunch_noodle,
                 recipes, excluded, recent_recipe_ids_set,
-                selection_strategy, lunch_targets
+                selection_strategy, lunch_targets,
+                llm_draft=llm_draft,
+                try_select_from_llm_suggestions=_try_select_from_llm_suggestions,
             )
             
-            # Update remaining targets after lunch
-            # CRITICAL: Calculate lunch total and validate against meal_max_kcal
-            if remaining_targets:
-                lunch_total_macros = _get_meal_macros(lunch_rice)
-                if lunch_main:
-                    main_macros = _get_meal_macros(lunch_main)
-                    for k in lunch_total_macros:
-                        lunch_total_macros[k] += main_macros.get(k, 0.0)
-                if lunch_soup:
-                    soup_macros = _get_meal_macros(lunch_soup)
-                    for k in lunch_total_macros:
-                        lunch_total_macros[k] += soup_macros.get(k, 0.0)
-                if lunch_veg:
-                    veg_macros = _get_meal_macros(lunch_veg)
-                    for k in lunch_total_macros:
-                        lunch_total_macros[k] += veg_macros.get(k, 0.0)
-                if lunch_fruit:
-                    fruit_macros = _get_meal_macros(lunch_fruit)
-                    for k in lunch_total_macros:
-                        lunch_total_macros[k] += fruit_macros.get(k, 0.0)
-                
-                lunch_total_kcal = lunch_total_macros.get("kcal", 0.0)
-                # CRITICAL: If lunch total exceeds meal_max_kcal, log warning but don't adjust remaining targets artificially
-                if lunch_total_kcal > meal_max_kcal * 1.1:  # Allow 10% tolerance
-                    logging.warning(
-                        f"Lunch total kcal ({lunch_total_kcal:.1f}) exceeds limit ({meal_max_kcal:.1f}) by "
-                        f"{((lunch_total_kcal / meal_max_kcal - 1.0) * 100):.1f}%"
-                    )
-                
-                remaining_targets["kcal"] = max(0.0, remaining_targets["kcal"] - lunch_total_kcal)
-                remaining_targets["protein_g"] = max(0.0, remaining_targets["protein_g"] - lunch_total_macros.get("protein_g", 0.0))
-                remaining_targets["fat_g"] = max(0.0, remaining_targets["fat_g"] - lunch_total_macros.get("fat_g", 0.0))
-                remaining_targets["carb_g"] = max(0.0, remaining_targets["carb_g"] - lunch_total_macros.get("carb_g", 0.0))
-                
-                # CRITICAL: Don't artificially adjust remaining targets - use actual remaining values
-                # Only ensure it doesn't go negative
-                if remaining_targets["kcal"] < 0:
-                    logging.warning(f"Remaining kcal after lunch is negative ({remaining_targets['kcal']:.1f}), setting to 0")
-                    remaining_targets["kcal"] = 0.0
+            # CRITICAL: DO NOT update remaining_targets here - wait until AFTER supplementary dishes are added
+            # This will be done after supplementary dishes are processed
             
             # CRITICAL: Validate lunch main is actually a main dish
             if lunch_main and not _is_main_dish(lunch_main):
@@ -1872,6 +1399,424 @@ async def plan_day_e2e_tool(
                 yield Response(f"✅ Selected lunch vegetable from AI suggestion: {lunch_veg.get('dish_name', 'Unknown')}")
             if lunch_fruit and _try_select_from_llm_suggestions(llm_draft, "lunch", "fruit", recipes, [], recent_recipe_ids_set, 30.0):
                 yield Response(f"✅ Selected lunch fruit from AI suggestion: {lunch_fruit.get('dish_name', 'Unknown')}")
+            
+            # CRITICAL: Add supplementary dishes if still deficient in nutrition
+            # IMPORTANT: Also add for noodle dishes if nutrition is still deficient
+            if remaining_targets and targets:
+                current_lunch_dishes = [d for d in [lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit] if d]
+                # For noodle/combined dishes, allow adding more dishes if nutrition is still deficient
+                # Use iterative approach to keep adding until nutrition targets are met
+                max_iterations = 5  # Increased from 3 to 5 to allow more dishes to be added
+                iteration = 0
+                all_supplementary_dishes = []
+                
+                while iteration < max_iterations:
+                    # CRITICAL: Calculate what we ACTUALLY need based on original targets, not just remaining_targets
+                    # This ensures we don't stop too early if remaining_targets was incorrectly calculated
+                    breakfast_macros = _get_meal_macros(breakfast) if breakfast else {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                    current_lunch_macros = calculate_meal_macros(current_lunch_dishes)
+                    total_consumed_kcal = breakfast_macros.get("kcal", 0.0) + current_lunch_macros.get("kcal", 0.0)
+                    total_consumed_protein = breakfast_macros.get("protein_g", 0.0) + current_lunch_macros.get("protein_g", 0.0)
+                    
+                    daily_protein = targets.get("protein_g", 150.0)
+                    daily_kcal = targets.get("tdee_kcal", 2000.0)
+                    
+                    # Calculate ACTUAL remaining needs from original targets
+                    actual_protein_needed = max(0.0, daily_protein - total_consumed_protein)
+                    actual_kcal_needed = max(0.0, daily_kcal - total_consumed_kcal)
+                    
+                    # Also check remaining_targets (may be updated in loop)
+                    protein_needed_from_remaining = remaining_targets.get("protein_g", 0.0)
+                    kcal_needed_from_remaining = remaining_targets.get("kcal", 0.0)
+                    
+                    # Use the MAXIMUM of actual_needed and remaining_targets to ensure we don't stop too early
+                    protein_needed = max(protein_needed_from_remaining, actual_protein_needed)
+                    kcal_needed = max(kcal_needed_from_remaining, actual_kcal_needed)
+                    
+                    # CRITICAL: Update remaining_targets to reflect actual needs if it's incorrect
+                    if actual_protein_needed > protein_needed_from_remaining or actual_kcal_needed > kcal_needed_from_remaining:
+                        logging.warning(
+                            f"LUNCH_SUPP_CORRECTION: remaining_targets was incorrect! "
+                            f"actual_protein_needed={actual_protein_needed:.1f}g vs remaining={protein_needed_from_remaining:.1f}g | "
+                            f"actual_kcal_needed={actual_kcal_needed:.1f} vs remaining={kcal_needed_from_remaining:.1f} | "
+                            f"Updating remaining_targets to reflect actual needs"
+                        )
+                        remaining_targets["protein_g"] = actual_protein_needed
+                        remaining_targets["kcal"] = actual_kcal_needed
+                    
+                    # Calculate deficit ratios
+                    protein_deficit_ratio = protein_needed / daily_protein if daily_protein > 0 else 0.0
+                    kcal_deficit_ratio = kcal_needed / daily_kcal if daily_kcal > 0 else 0.0
+                    
+                    # CRITICAL: Calculate fat/carb excess based on total consumed
+                    daily_fat = targets.get("fat_g", 60.0)
+                    daily_carb = targets.get("carb_g", 219.0)
+                    total_consumed_fat = breakfast_macros.get("fat_g", 0.0) + current_lunch_macros.get("fat_g", 0.0)
+                    total_consumed_carb = breakfast_macros.get("carb_g", 0.0) + current_lunch_macros.get("carb_g", 0.0)
+                    fat_excess_ratio = (total_consumed_fat - daily_fat) / daily_fat if daily_fat > 0 and total_consumed_fat > daily_fat else 0.0
+                    carb_excess_ratio = (total_consumed_carb - daily_carb) / daily_carb if daily_carb > 0 and total_consumed_carb > daily_carb else 0.0
+                    kcal_excess_ratio = (total_consumed_kcal - daily_kcal) / daily_kcal if daily_kcal > 0 and total_consumed_kcal > daily_kcal else 0.0
+                    has_severe_fat_excess = fat_excess_ratio > 0.15  # Balanced: 15% to prevent over-eating but allow nutrition
+                    has_severe_carb_excess = carb_excess_ratio > 0.15  # Balanced: 15%
+                    has_severe_kcal_excess = kcal_excess_ratio > 0.15  # Balanced: 15%
+                    
+                    logging.debug(
+                        f"LUNCH_SUPP_ITERATION_{iteration + 1}: "
+                        f"protein_needed={protein_needed:.1f}g ({protein_deficit_ratio*100:.1f}% of daily) | "
+                        f"kcal_needed={kcal_needed:.1f} ({kcal_deficit_ratio*100:.1f}% of daily) | "
+                        f"fat_excess={fat_excess_ratio*100:.1f}% | carb_excess={carb_excess_ratio*100:.1f}% | "
+                        f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
+                        f"current_dishes_count={len(current_lunch_dishes)} | "
+                        f"current_lunch_kcal={current_lunch_macros.get('kcal', 0):.1f} | "
+                        f"current_lunch_protein={current_lunch_macros.get('protein_g', 0):.1f}g | "
+                        f"total_consumed_kcal={total_consumed_kcal:.1f} | "
+                        f"total_consumed_protein={total_consumed_protein:.1f}g | "
+                        f"total_consumed_fat={total_consumed_fat:.1f}g | "
+                        f"total_consumed_carb={total_consumed_carb:.1f}g | "
+                        f"actual_protein_needed={actual_protein_needed:.1f}g | "
+                        f"actual_kcal_needed={actual_kcal_needed:.1f}"
+                    )
+                    
+                    # CRITICAL: Stop immediately if fat excess is very high (>40%) - this is unhealthy
+                    if fat_excess_ratio > 0.40:
+                        # Only continue if we REALLY need protein/kcal (very high threshold: >35% protein or >40% kcal)
+                        if protein_deficit_ratio > 0.35 or kcal_deficit_ratio > 0.40:
+                            # Continue only if deficit is critical
+                            pass
+                        else:
+                            logging.warning(
+                                f"LUNCH_SUPP_STOP_EXCESS: High fat excess detected! "
+                                f"fat_excess={fat_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent unhealthy fat excess"
+                            )
+                            break
+                    # CRITICAL: Stop if carb excess is extremely high (>50%)
+                    elif carb_excess_ratio > 0.50:
+                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                            pass
+                        else:
+                            logging.warning(
+                                f"LUNCH_SUPP_STOP_EXCESS: Extreme carb excess detected! "
+                                f"carb_excess={carb_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent unhealthy carb excess"
+                            )
+                            break
+                    # CRITICAL: Stop if kcal excess is extremely high (>50%)
+                    elif kcal_excess_ratio > 0.50:
+                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                            pass
+                        else:
+                            logging.warning(
+                                f"LUNCH_SUPP_STOP_EXCESS: Extreme kcal excess detected! "
+                                f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent unhealthy kcal excess"
+                            )
+                            break
+                    # For moderate excess (15-50%), use balanced logic
+                    elif has_severe_fat_excess or has_severe_carb_excess or has_severe_kcal_excess:
+                        # Continue if we still have significant deficit (prioritize nutrition)
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.25:
+                            # Continue adding despite moderate excess because deficit is high
+                            pass
+                        elif protein_deficit_ratio < 0.20 and kcal_deficit_ratio < 0.25:  # Only stop if deficit is low
+                            logging.warning(
+                                f"LUNCH_SUPP_STOP_EXCESS: Moderate excess detected! "
+                                f"fat_excess={fat_excess_ratio*100:.1f}% | "
+                                f"carb_excess={carb_excess_ratio*100:.1f}% | "
+                                f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent further over-eating"
+                            )
+                            break
+                    
+                    # CRITICAL: Stop only if we're very close to targets (within 5% for kcal, 10% for protein)
+                    # This ensures we keep adding dishes until nutrition is truly sufficient
+                    if kcal_deficit_ratio < 0.05 and protein_deficit_ratio < 0.10:
+                        logging.debug(
+                            f"LUNCH_SUPP_STOP: Close enough to targets "
+                            f"(kcal_deficit={kcal_deficit_ratio*100:.1f}% < 5%, "
+                            f"protein_deficit={protein_deficit_ratio*100:.1f}% < 10%)"
+                        )
+                        break
+                    
+                    # CRITICAL: Calculate total consumed so far for accurate excess detection
+                    total_consumed_so_far = {
+                        "kcal": total_consumed_kcal,
+                        "protein_g": total_consumed_protein,
+                        "fat_g": breakfast_macros.get("fat_g", 0.0) + current_lunch_macros.get("fat_g", 0.0),
+                        "carb_g": breakfast_macros.get("carb_g", 0.0) + current_lunch_macros.get("carb_g", 0.0),
+                    }
+                    
+                    # Add supplementary dishes
+                    # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
+                    # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
+                    if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
+                        effective_meal_max_kcal = lunch_max_kcal * 1.4  # Allow 40% when deficit is very high
+                    elif is_lunch_noodle or is_lunch_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
+                        effective_meal_max_kcal = lunch_max_kcal * 1.3  # Allow 30% for combined/noodle or medium deficit
+                    else:
+                        effective_meal_max_kcal = lunch_max_kcal * 1.2  # Normal case: 20%
+                    supplementary_dishes = add_supplementary_dishes(
+                        "lunch",
+                        current_lunch_dishes,
+                        remaining_targets,
+                        targets,
+                        recipes,
+                        excluded,
+                        recent_recipe_ids_set,
+                        effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
+                        macro_tolerance_percent,
+                        total_consumed_so_far=total_consumed_so_far,  # CRITICAL: Pass total consumed for accurate excess detection
+                    )
+                    
+                    if not supplementary_dishes:
+                        logging.debug(f"LUNCH_SUPP_ITERATION_{iteration + 1}: No more supplementary dishes found, stopping")
+                        break  # No more dishes to add
+                    
+                    logging.debug(
+                        f"LUNCH_SUPP_ITERATION_{iteration + 1}: Found {len(supplementary_dishes)} supplementary dish(es): "
+                        f"{[d.get('dish_name', 'Unknown') for d in supplementary_dishes]}"
+                    )
+                    
+                    # Update current_lunch_dishes and remaining_targets for next iteration
+                    for supp_dish in supplementary_dishes:
+                        all_supplementary_dishes.append(supp_dish)
+                        current_lunch_dishes.append(supp_dish)
+                        excluded.append(supp_dish)
+                        recent_recipe_ids_set.add(str(supp_dish.get("food_id", "")))
+                        # Update remaining_targets
+                        dish_macros = _get_meal_macros(supp_dish)
+                        dish_name = supp_dish.get("dish_name", "Unknown")
+                        # Simplified logging - only log dish name and macros
+                        logging.debug(
+                            f"LUNCH_SUPP_ADD: {dish_name} | "
+                            f"kcal={dish_macros.get('kcal', 0):.1f} | "
+                            f"protein={dish_macros.get('protein_g', 0):.1f}g"
+                        )
+                        for k in remaining_targets:
+                            remaining_targets[k] = max(0.0, remaining_targets[k] - dish_macros.get(k, 0.0))
+                    
+                    iteration += 1
+                
+                logging.debug(
+                    f"LUNCH_SUPP_COMPLETE: Total iterations={iteration}, "
+                    f"total_supplementary_dishes={len(all_supplementary_dishes)}, "
+                    f"final_remaining_kcal={remaining_targets.get('kcal', 0):.1f}, "
+                    f"final_remaining_protein={remaining_targets.get('protein_g', 0):.1f}g"
+                )
+                
+                supplementary_dishes = all_supplementary_dishes
+                
+                # CRITICAL: Log all supplementary dishes before assigning
+                logging.debug(
+                    f"LUNCH_SUPP_DISHES_TO_ASSIGN: {len(supplementary_dishes)} dish(es): "
+                    f"{[d.get('dish_name', 'Unknown') for d in supplementary_dishes]}"
+                )
+                
+                # Add supplementary dishes to lunch components
+                # Track which supplementary dishes were assigned to existing slots to avoid double-counting
+                assigned_supp_dishes = []
+                for supp_dish in supplementary_dishes:
+                    dish_name = supp_dish.get('dish_name', 'Unknown')
+                    dish_macros = _get_meal_macros(supp_dish)
+                    assigned = False
+                    if _is_main_dish(supp_dish):
+                        # If we already have a main, add as additional main
+                        if lunch_main:
+                            # Store as additional main (we'll handle this in plan structure)
+                            logging.info(f"Added additional main dish to lunch: {dish_name}")
+                        else:
+                            lunch_main = supp_dish
+                            assigned = True  # Assigned to lunch_main, don't double-count
+                            yield Response(f"✅ Added main dish to meet nutrition targets: {dish_name}")
+                    elif _is_vegetable_dish(supp_dish):
+                        if not lunch_veg:
+                            lunch_veg = supp_dish
+                            assigned = True  # Assigned to lunch_veg, don't double-count
+                            yield Response(f"✅ Added vegetable to meet nutrition targets: {dish_name}")
+                        else:
+                            logging.info(f"Added additional vegetable to lunch: {dish_name}")
+                    elif _is_soup(supp_dish):
+                        if not lunch_soup:
+                            lunch_soup = supp_dish
+                            assigned = True  # Assigned to lunch_soup, don't double-count
+                            yield Response(f"✅ Added soup to meet nutrition targets: {dish_name}")
+                        else:
+                            logging.info(f"Added additional soup to lunch: {dish_name}")
+                    
+                    # Update excluded (remaining_targets already updated in iterative loop above)
+                    # Only append if not already in excluded (to avoid duplicates)
+                    if supp_dish not in excluded:
+                        excluded.append(supp_dish)
+                    if str(supp_dish.get("food_id", "")) not in recent_recipe_ids_set:
+                        recent_recipe_ids_set.add(str(supp_dish.get("food_id", "")))
+                    
+                    # Track if this dish was assigned to an existing slot (to avoid double-counting in recalculation)
+                    if assigned:
+                        assigned_supp_dishes.append(supp_dish)
+                    else:
+                        # CRITICAL: Store unassigned supplementary dishes to add to plan later
+                        # These are additional dishes that don't fit into existing slots
+                        lunch_supplementary_dishes.append(supp_dish)
+                        logging.debug(
+                            f"LUNCH_SUPP_UNASSIGNED: {dish_name} will be added to plan accompaniments"
+                        )
+                
+                # Recalculate lunch total macros after adding supplementary dishes (for validation only)
+                # NOTE: Only add supplementary dishes that were NOT assigned to existing slots
+                # (assigned ones are already included in lunch_main/lunch_veg/lunch_soup)
+                if supplementary_dishes:
+                    lunch_total_macros = _get_meal_macros(lunch_rice)
+                    if lunch_main:
+                        main_macros = _get_meal_macros(lunch_main)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += main_macros.get(k, 0.0)
+                    if lunch_soup:
+                        soup_macros = _get_meal_macros(lunch_soup)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += soup_macros.get(k, 0.0)
+                    if lunch_veg:
+                        veg_macros = _get_meal_macros(lunch_veg)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += veg_macros.get(k, 0.0)
+                    if lunch_fruit:
+                        fruit_macros = _get_meal_macros(lunch_fruit)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += fruit_macros.get(k, 0.0)
+                    # Add only supplementary dishes that were NOT assigned to existing slots
+                    unassigned_supp_dishes = [d for d in supplementary_dishes if d not in assigned_supp_dishes]
+                    for supp_dish in unassigned_supp_dishes:
+                        supp_macros = _get_meal_macros(supp_dish)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += supp_macros.get(k, 0.0)
+                else:
+                    # No supplementary dishes - calculate lunch_total_macros from base dishes
+                    lunch_total_macros = _get_meal_macros(lunch_rice)
+                    if lunch_main:
+                        main_macros = _get_meal_macros(lunch_main)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += main_macros.get(k, 0.0)
+                    if lunch_soup:
+                        soup_macros = _get_meal_macros(lunch_soup)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += soup_macros.get(k, 0.0)
+                    if lunch_veg:
+                        veg_macros = _get_meal_macros(lunch_veg)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += veg_macros.get(k, 0.0)
+                    if lunch_fruit:
+                        fruit_macros = _get_meal_macros(lunch_fruit)
+                        for k in lunch_total_macros:
+                            lunch_total_macros[k] += fruit_macros.get(k, 0.0)
+                
+                # CRITICAL: Update remaining_targets AFTER calculating final lunch_total_macros (including supplementary dishes)
+                if remaining_targets:
+                    lunch_total_kcal = lunch_total_macros.get("kcal", 0.0)
+                    lunch_total_protein = lunch_total_macros.get("protein_g", 0.0)
+                    lunch_total_fat = lunch_total_macros.get("fat_g", 0.0)
+                    lunch_total_carb = lunch_total_macros.get("carb_g", 0.0)
+                    
+                    # Log breakdown of lunch components
+                    logging.debug(
+                        f"LUNCH_COMPONENTS_BREAKDOWN: "
+                        f"rice={lunch_rice.get('dish_name', 'None') if lunch_rice else 'None'} | "
+                        f"main={lunch_main.get('dish_name', 'None') if lunch_main else 'None'} | "
+                        f"soup={lunch_soup.get('dish_name', 'None') if lunch_soup else 'None'} | "
+                        f"veg={lunch_veg.get('dish_name', 'None') if lunch_veg else 'None'} | "
+                        f"fruit={lunch_fruit.get('dish_name', 'None') if lunch_fruit else 'None'} | "
+                        f"supplementary_count={len(supplementary_dishes)}"
+                    )
+                    
+                    logging.debug(
+                        f"LUNCH_TOTAL_MACROS: "
+                        f"kcal={lunch_total_kcal:.1f} | "
+                        f"protein={lunch_total_protein:.1f}g | "
+                        f"fat={lunch_total_fat:.1f}g | "
+                        f"carb={lunch_total_carb:.1f}g | "
+                        f"lunch_max_kcal={lunch_max_kcal:.1f} | "
+                        f"exceeds_by={((lunch_total_kcal / lunch_max_kcal - 1.0) * 100) if lunch_max_kcal > 0 else 0:.1f}%"
+                    )
+                    
+                    # CRITICAL: If lunch total exceeds lunch_max_kcal, log warning but allow for better nutrition
+                    # Increased tolerance to 50% to ensure we meet nutritional targets
+                    if lunch_total_kcal > lunch_max_kcal * 1.4:  # Allow up to 40% when deficit is high
+                        logging.warning(
+                            f"Lunch total kcal ({lunch_total_kcal:.1f}) exceeds limit ({lunch_max_kcal:.1f}) by "
+                            f"{((lunch_total_kcal / lunch_max_kcal - 1.0) * 100):.1f}%"
+                        )
+                    elif lunch_total_kcal > lunch_max_kcal * 1.2:
+                        logging.debug(
+                            f"Lunch total kcal ({lunch_total_kcal:.1f}) exceeds limit ({lunch_max_kcal:.1f}) by "
+                            f"{((lunch_total_kcal / lunch_max_kcal - 1.0) * 100):.1f}% (within tolerance for nutrition)"
+                        )
+                    
+                    # Removed verbose logging - only log when there's an issue
+                    
+                    # CRITICAL: Calculate what we actually consumed vs what we need
+                    # Don't just subtract - calculate from original targets
+                    breakfast_macros_check = _get_meal_macros(breakfast) if breakfast else {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                    total_consumed_so_far_kcal = breakfast_macros_check.get("kcal", 0.0) + lunch_total_kcal
+                    total_consumed_so_far_protein = breakfast_macros_check.get("protein_g", 0.0) + lunch_total_protein
+                    total_consumed_so_far_fat = breakfast_macros_check.get("fat_g", 0.0) + lunch_total_fat
+                    total_consumed_so_far_carb = breakfast_macros_check.get("carb_g", 0.0) + lunch_total_carb
+                    
+                    daily_protein_check = targets.get("protein_g", 150.0)
+                    daily_kcal_check = targets.get("tdee_kcal", 2000.0)
+                    daily_fat_check = targets.get("fat_g", 60.0)
+                    daily_carb_check = targets.get("carb_g", 219.0)
+                    
+                    # Calculate ACTUAL remaining needs from original targets
+                    actual_remaining_kcal = max(0.0, daily_kcal_check - total_consumed_so_far_kcal)
+                    actual_remaining_protein = max(0.0, daily_protein_check - total_consumed_so_far_protein)
+                    actual_remaining_fat = max(0.0, daily_fat_check - total_consumed_so_far_fat)
+                    actual_remaining_carb = max(0.0, daily_carb_check - total_consumed_so_far_carb)
+                    
+                    # Update remaining_targets using subtraction method (for tracking)
+                    remaining_targets["kcal"] = max(0.0, remaining_targets["kcal"] - lunch_total_kcal)
+                    remaining_targets["protein_g"] = max(0.0, remaining_targets["protein_g"] - lunch_total_protein)
+                    remaining_targets["fat_g"] = max(0.0, remaining_targets["fat_g"] - lunch_total_fat)
+                    remaining_targets["carb_g"] = max(0.0, remaining_targets["carb_g"] - lunch_total_carb)
+                    
+                    # CRITICAL: If subtraction method gives wrong result, use actual calculation
+                    # This happens when lunch exceeds remaining_targets (e.g., lunch has more kcal than remaining)
+                    if abs(remaining_targets["kcal"] - actual_remaining_kcal) > 5.0 or abs(remaining_targets["protein_g"] - actual_remaining_protein) > 5.0:
+                        logging.warning(
+                            f"LUNCH_REMAINING_TARGETS_MISMATCH: "
+                            f"subtraction_method: kcal={remaining_targets['kcal']:.1f}, protein={remaining_targets['protein_g']:.1f}g | "
+                            f"actual_calculation: kcal={actual_remaining_kcal:.1f}, protein={actual_remaining_protein:.1f}g | "
+                            f"lunch_total_kcal={lunch_total_kcal:.1f} | lunch_total_protein={lunch_total_protein:.1f}g | "
+                            f"Correcting remaining_targets to match actual needs"
+                        )
+                        remaining_targets["kcal"] = actual_remaining_kcal
+                        remaining_targets["protein_g"] = actual_remaining_protein
+                        remaining_targets["fat_g"] = actual_remaining_fat
+                        remaining_targets["carb_g"] = actual_remaining_carb
+                    
+                    # Log remaining targets AFTER update
+                    logging.debug(
+                        f"REMAINING_TARGETS (after lunch update): "
+                        f"kcal={remaining_targets.get('kcal', 0):.1f} | "
+                        f"protein={remaining_targets.get('protein_g', 0):.1f}g | "
+                        f"fat={remaining_targets.get('fat_g', 0):.1f}g | "
+                        f"carb={remaining_targets.get('carb_g', 0):.1f}g | "
+                        f"total_consumed_kcal={total_consumed_so_far_kcal:.1f} | "
+                        f"total_consumed_protein={total_consumed_so_far_protein:.1f}g | "
+                        f"coverage_kcal={((total_consumed_so_far_kcal / daily_kcal_check) * 100) if daily_kcal_check > 0 else 0:.1f}% | "
+                        f"coverage_protein={((total_consumed_so_far_protein / daily_protein_check) * 100) if daily_protein_check > 0 else 0:.1f}%"
+                    )
+                    
+                    # CRITICAL: Don't artificially adjust remaining targets - use actual remaining values
+                    # Only ensure it doesn't go negative
+                    if remaining_targets["kcal"] < 0:
+                        logging.warning(f"Remaining kcal after lunch is negative ({remaining_targets['kcal']:.1f}), setting to 0")
+                        remaining_targets["kcal"] = 0.0
         
         # Validate lunch components
         if not lunch_rice:
@@ -1884,26 +1829,42 @@ async def plan_day_e2e_tool(
             # If plain rice but no main dish, try to find one
             excluded = [breakfast, lunch_rice]
             # Calculate dynamic requirements based on remaining protein
+            daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
+            if daily_protein > 180:
+                base_min_protein = 35.0
+            elif daily_protein > 150:
+                base_min_protein = 30.0
+            else:
+                base_min_protein = 25.0
+            
             max_main_kcal = 550.0
-            min_main_protein = 18.0
+            min_main_protein = base_min_protein
             if remaining_targets:
                 protein_remaining = remaining_targets.get("protein_g", 0.0)
-                daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
                 protein_ratio = protein_remaining / daily_protein if daily_protein > 0 else 1.0
                 if protein_ratio > 0.5:
                     max_main_kcal = 650.0
-                    min_main_protein = 25.0
+                    min_main_protein = max(base_min_protein, 40.0)
                 elif protein_remaining > daily_protein * 0.4:
                     max_main_kcal = 600.0
-                    min_main_protein = 22.0
+                    min_main_protein = max(base_min_protein, 35.0)
                 elif protein_remaining > daily_protein * 0.2:
-                    min_main_protein = 18.0
+                    min_main_protein = max(base_min_protein, 30.0)
             elif targets:
                 # If no remaining_targets but have targets, assume we need protein
                 max_main_kcal = 600.0
-                min_main_protein = 20.0
+                min_main_protein = base_min_protein
             
-            lunch_main = _select_meal_by_strategy(
+            logging.debug(
+                f"LUNCH_MAIN_SELECTION: "
+                f"min_protein={min_main_protein:.1f}g | "
+                f"min_kcal={min_main_kcal:.1f} | "
+                f"max_kcal={max_main_kcal:.1f} | "
+                f"remaining_protein={remaining_targets.get('protein_g', 0):.1f}g | "
+                f"remaining_kcal={remaining_targets.get('kcal', 0):.1f}"
+            )
+            
+            lunch_main = select_meal_by_strategy(
                 recipes, "highest_protein", 
                 exclude=excluded, 
                 used_recipe_ids=recent_recipe_ids_set,
@@ -1911,14 +1872,43 @@ async def plan_day_e2e_tool(
                 dish_category="main",  # CRITICAL: Specify category to ensure correct selection
                 target_macros=targets,
                 require_macros=True,
-                min_kcal=50.0,
+                min_kcal=min_main_kcal,  # CRITICAL: Require minimum kcal for better nutrition
                 max_kcal=max_main_kcal,  # CRITICAL: Dynamic kcal limit
                 min_protein=min_main_protein,  # CRITICAL: Require minimum protein
             )
+            
+            if lunch_main:
+                main_macros = _get_meal_macros(lunch_main)
+                logging.debug(
+                    f"LUNCH_MAIN_SELECTED: {lunch_main.get('dish_name', 'Unknown')} | "
+                    f"protein={main_macros.get('protein_g', 0):.1f}g | "
+                    f"kcal={main_macros.get('kcal', 0):.1f} | "
+                    f"fat={main_macros.get('fat_g', 0):.1f}g | "
+                    f"carb={main_macros.get('carb_g', 0):.1f}g"
+                )
+            else:
+                logging.warning(f"LUNCH_MAIN_NOT_FOUND: No main dish found with requirements (min_protein={min_main_protein:.1f}g, min_kcal={min_main_kcal:.1f})")
             # CRITICAL: Validate lunch main is actually a main dish
             if lunch_main and not _is_main_dish(lunch_main):
                 logging.warning(f"Selected lunch main '{lunch_main.get('dish_name', 'Unknown')}' is not a main dish, rejecting...")
                 lunch_main = None
+            # CRITICAL: If still no main, try without category restriction but still prioritize protein
+            if not lunch_main:
+                logging.warning("No lunch main found with category restriction, trying without category but prioritizing protein...")
+                lunch_main = select_meal_by_strategy(
+                    recipes, "highest_protein",
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="lunch",
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=min_main_kcal,  # CRITICAL: Require minimum kcal for better nutrition
+                    max_kcal=max_main_kcal,
+                    min_protein=min_main_protein,
+                )
+                # Validate it's actually a main dish
+                if lunch_main and not _is_main_dish(lunch_main):
+                    lunch_main = None
         
         # Dinner: Vietnamese dinner pattern - use helper functions
         excluded = [breakfast, lunch_rice]
@@ -1936,11 +1926,11 @@ async def plan_day_e2e_tool(
         if dinner_targets and remaining_targets:
             dinner_targets["_remaining_targets"] = remaining_targets.copy()
         
-        # Select dinner carb with validation
+        # Select dinner carb with validation (use dinner_max_kcal for heavier dinner)
         dinner_carb, is_dinner_combined, is_dinner_noodle = _select_carb_with_validation(
             llm_draft, "dinner",
             recipes, excluded, recent_recipe_ids_set,
-            selection_strategy, dinner_targets, meal_max_kcal
+            selection_strategy, dinner_targets, dinner_max_kcal
         )
         
         if dinner_carb:
@@ -1962,10 +1952,12 @@ async def plan_day_e2e_tool(
                 else:
                     yield Response("ℹ️ Selected noodle dish for dinner (standalone meal). Adding fruit only.")
             
-            dinner_main, dinner_soup, dinner_veg, dinner_fruit = _select_accompaniments(
-                llm_draft, "dinner", is_dinner_combined, is_dinner_noodle,
+            dinner_main, dinner_soup, dinner_veg, dinner_fruit = select_accompaniments(
+                "dinner", is_dinner_combined, is_dinner_noodle,
                 recipes, excluded, recent_recipe_ids_set,
-                selection_strategy, dinner_targets
+                selection_strategy, dinner_targets,
+                llm_draft=llm_draft,
+                try_select_from_llm_suggestions=_try_select_from_llm_suggestions,
             )
             
             # CRITICAL: Validate dinner main is actually a main dish
@@ -2008,6 +2000,423 @@ async def plan_day_e2e_tool(
                 yield Response(f"✅ Selected dinner vegetable from AI suggestion: {dinner_veg.get('dish_name', 'Unknown')}")
             if dinner_fruit and _try_select_from_llm_suggestions(llm_draft, "dinner", "fruit", recipes, [], recent_recipe_ids_set, 30.0):
                 yield Response(f"✅ Selected dinner fruit from AI suggestion: {dinner_fruit.get('dish_name', 'Unknown')}")
+            
+            # CRITICAL: Add supplementary dishes if still deficient in nutrition
+            # IMPORTANT: Also add for noodle dishes if nutrition is still deficient
+            if remaining_targets and targets:
+                current_dinner_dishes = [d for d in [dinner_rice, dinner_main, dinner_soup, dinner_veg, dinner_fruit] if d]
+                # For noodle/combined dishes, allow adding more dishes if nutrition is still deficient
+                # Use iterative approach to keep adding until nutrition targets are met
+                max_iterations = 5  # Increased from 3 to 5 to allow more dishes to be added
+                iteration = 0
+                all_supplementary_dishes = []  # dinner supplementary dishes collected in this loop
+                
+                # CRITICAL: Get lunch supplementary dishes to calculate accurate total consumed
+                # Use the actual lunch_supplementary_dishes collected during lunch phase
+                lunch_supp_dishes_for_calc = lunch_supplementary_dishes if 'lunch_supplementary_dishes' in locals() else []
+                
+                while iteration < max_iterations:
+                    # CRITICAL: Calculate what we ACTUALLY need based on original targets, not just remaining_targets
+                    # This ensures we don't stop too early if remaining_targets was incorrectly calculated
+                    breakfast_macros = _get_meal_macros(breakfast) if breakfast else {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                    # CRITICAL: Include lunch supplementary dishes in calculation
+                    lunch_base_dishes = [d for d in [lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit] if d]
+                    lunch_all_dishes = lunch_base_dishes + lunch_supp_dishes_for_calc
+                    lunch_total_macros_calc = calculate_meal_macros(lunch_all_dishes)
+                    current_dinner_macros = calculate_meal_macros(current_dinner_dishes)
+                    total_consumed_kcal = breakfast_macros.get("kcal", 0.0) + lunch_total_macros_calc.get("kcal", 0.0) + current_dinner_macros.get("kcal", 0.0)
+                    total_consumed_protein = breakfast_macros.get("protein_g", 0.0) + lunch_total_macros_calc.get("protein_g", 0.0) + current_dinner_macros.get("protein_g", 0.0)
+                    total_consumed_fat = breakfast_macros.get("fat_g", 0.0) + lunch_total_macros_calc.get("fat_g", 0.0) + current_dinner_macros.get("fat_g", 0.0)
+                    total_consumed_carb = breakfast_macros.get("carb_g", 0.0) + lunch_total_macros_calc.get("carb_g", 0.0) + current_dinner_macros.get("carb_g", 0.0)
+                    
+                    daily_protein = targets.get("protein_g", 150.0)
+                    daily_kcal = targets.get("tdee_kcal", 2000.0)
+                    
+                    # Calculate ACTUAL remaining needs from original targets
+                    actual_protein_needed = max(0.0, daily_protein - total_consumed_protein)
+                    actual_kcal_needed = max(0.0, daily_kcal - total_consumed_kcal)
+                    
+                    # Also check remaining_targets (may be updated in loop)
+                    protein_needed_from_remaining = remaining_targets.get("protein_g", 0.0)
+                    kcal_needed_from_remaining = remaining_targets.get("kcal", 0.0)
+                    
+                    # Use the MAXIMUM of actual_needed and remaining_targets to ensure we don't stop too early
+                    protein_needed = max(protein_needed_from_remaining, actual_protein_needed)
+                    kcal_needed = max(kcal_needed_from_remaining, actual_kcal_needed)
+                    
+                    # CRITICAL: Update remaining_targets to reflect actual needs if it's incorrect
+                    if actual_protein_needed > protein_needed_from_remaining or actual_kcal_needed > kcal_needed_from_remaining:
+                        logging.warning(
+                            f"DINNER_SUPP_CORRECTION: remaining_targets was incorrect! "
+                            f"actual_protein_needed={actual_protein_needed:.1f}g vs remaining={protein_needed_from_remaining:.1f}g | "
+                            f"actual_kcal_needed={actual_kcal_needed:.1f} vs remaining={kcal_needed_from_remaining:.1f} | "
+                            f"Updating remaining_targets to reflect actual needs"
+                        )
+                        remaining_targets["protein_g"] = actual_protein_needed
+                        remaining_targets["kcal"] = actual_kcal_needed
+                    
+                    # Calculate deficit ratios
+                    protein_deficit_ratio = protein_needed / daily_protein if daily_protein > 0 else 0.0
+                    kcal_deficit_ratio = kcal_needed / daily_kcal if daily_kcal > 0 else 0.0
+                    
+                    # CRITICAL: Calculate fat/carb excess based on total consumed
+                    daily_fat = targets.get("fat_g", 60.0)
+                    daily_carb = targets.get("carb_g", 219.0)
+                    fat_excess_ratio = (total_consumed_fat - daily_fat) / daily_fat if daily_fat > 0 and total_consumed_fat > daily_fat else 0.0
+                    carb_excess_ratio = (total_consumed_carb - daily_carb) / daily_carb if daily_carb > 0 and total_consumed_carb > daily_carb else 0.0
+                    kcal_excess_ratio = (total_consumed_kcal - daily_kcal) / daily_kcal if daily_kcal > 0 and total_consumed_kcal > daily_kcal else 0.0
+                    has_severe_fat_excess = fat_excess_ratio > 0.15  # Balanced: 15% to prevent over-eating but allow nutrition
+                    has_severe_carb_excess = carb_excess_ratio > 0.15  # Balanced: 15%
+                    has_severe_kcal_excess = kcal_excess_ratio > 0.15  # Balanced: 15%
+                    
+                    logging.debug(
+                        f"DINNER_SUPP_ITERATION_{iteration + 1}: "
+                        f"protein_needed={protein_needed:.1f}g ({protein_deficit_ratio*100:.1f}% of daily) | "
+                        f"kcal_needed={kcal_needed:.1f} ({kcal_deficit_ratio*100:.1f}% of daily) | "
+                        f"fat_excess={fat_excess_ratio*100:.1f}% | carb_excess={carb_excess_ratio*100:.1f}% | "
+                        f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
+                        f"current_dishes_count={len(current_dinner_dishes)} | "
+                        f"current_dinner_kcal={current_dinner_macros.get('kcal', 0):.1f} | "
+                        f"current_dinner_protein={current_dinner_macros.get('protein_g', 0):.1f}g | "
+                        f"total_consumed_kcal={total_consumed_kcal:.1f} | "
+                        f"total_consumed_protein={total_consumed_protein:.1f}g | "
+                        f"total_consumed_fat={total_consumed_fat:.1f}g | "
+                        f"total_consumed_carb={total_consumed_carb:.1f}g | "
+                        f"actual_protein_needed={actual_protein_needed:.1f}g | "
+                        f"actual_kcal_needed={actual_kcal_needed:.1f}"
+                    )
+                    
+                    # CRITICAL: Stop immediately if fat excess is very high (>40%) - this is unhealthy
+                    if fat_excess_ratio > 0.40:
+                        # Only continue if we REALLY need protein/kcal (very high threshold: >35% protein or >40% kcal)
+                        if protein_deficit_ratio > 0.35 or kcal_deficit_ratio > 0.40:
+                            # Continue only if deficit is critical
+                            pass
+                        else:
+                            logging.warning(
+                                f"DINNER_SUPP_STOP_EXCESS: High fat excess detected! "
+                                f"fat_excess={fat_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent unhealthy fat excess"
+                            )
+                            break
+                    # CRITICAL: Stop if carb excess is extremely high (>50%)
+                    elif carb_excess_ratio > 0.50:
+                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                            pass
+                        else:
+                            logging.warning(
+                                f"DINNER_SUPP_STOP_EXCESS: Extreme carb excess detected! "
+                                f"carb_excess={carb_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent unhealthy carb excess"
+                            )
+                            break
+                    # CRITICAL: Stop if kcal excess is extremely high (>50%)
+                    elif kcal_excess_ratio > 0.50:
+                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                            pass
+                        else:
+                            logging.warning(
+                                f"DINNER_SUPP_STOP_EXCESS: Extreme kcal excess detected! "
+                                f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent unhealthy kcal excess"
+                            )
+                            break
+                    # For moderate excess (15-40%), use balanced logic
+                    elif has_severe_fat_excess or has_severe_carb_excess or has_severe_kcal_excess:
+                        # Continue if we still have significant deficit (prioritize nutrition)
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.25:
+                            # Continue adding despite moderate excess because deficit is high
+                            pass
+                        elif protein_deficit_ratio < 0.20 and kcal_deficit_ratio < 0.25:  # Only stop if deficit is low
+                            logging.warning(
+                                f"DINNER_SUPP_STOP_EXCESS: Moderate excess detected! "
+                                f"fat_excess={fat_excess_ratio*100:.1f}% | "
+                                f"carb_excess={carb_excess_ratio*100:.1f}% | "
+                                f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
+                                f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
+                                f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
+                                f"Stopping to prevent further over-eating"
+                            )
+                            break
+                    
+                    # CRITICAL: Stop only if we're very close to targets (within 5% for kcal, 10% for protein)
+                    # This ensures we keep adding dishes until nutrition is truly sufficient
+                    if kcal_deficit_ratio < 0.05 and protein_deficit_ratio < 0.10:
+                        logging.debug(
+                            f"DINNER_SUPP_STOP: Close enough to targets "
+                            f"(kcal_deficit={kcal_deficit_ratio*100:.1f}% < 5%, "
+                            f"protein_deficit={protein_deficit_ratio*100:.1f}% < 10%)"
+                        )
+                        break
+                    
+                    # CRITICAL: Calculate total consumed so far for accurate excess detection
+                    # Use already calculated values from above
+                    total_consumed_so_far_dinner = {
+                        "kcal": total_consumed_kcal,
+                        "protein_g": total_consumed_protein,
+                        "fat_g": total_consumed_fat,
+                        "carb_g": total_consumed_carb,
+                    }
+                    
+                    # Add supplementary dishes
+                    # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
+                    # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
+                    if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
+                        effective_meal_max_kcal = dinner_max_kcal * 1.4  # Allow 40% when deficit is very high
+                    elif is_dinner_noodle or is_dinner_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
+                        effective_meal_max_kcal = dinner_max_kcal * 1.3  # Allow 30% for combined/noodle or medium deficit
+                    else:
+                        effective_meal_max_kcal = dinner_max_kcal * 1.2  # Normal case: 20%
+                    supplementary_dishes = add_supplementary_dishes(
+                        "dinner",
+                        current_dinner_dishes,
+                        remaining_targets,
+                        targets,
+                        recipes,
+                        excluded,
+                        recent_recipe_ids_set,
+                        effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
+                        macro_tolerance_percent,
+                        total_consumed_so_far=total_consumed_so_far_dinner,  # CRITICAL: Pass total consumed for accurate excess detection
+                    )
+                    
+                    if not supplementary_dishes:
+                        logging.debug(f"DINNER_SUPP_ITERATION_{iteration + 1}: No more supplementary dishes found, stopping")
+                        break  # No more dishes to add
+                    
+                    logging.debug(
+                        f"DINNER_SUPP_ITERATION_{iteration + 1}: Found {len(supplementary_dishes)} supplementary dish(es): "
+                        f"{[d.get('dish_name', 'Unknown') for d in supplementary_dishes]}"
+                    )
+                    
+                    # Update current_dinner_dishes and remaining_targets for next iteration
+                    for supp_dish in supplementary_dishes:
+                        all_supplementary_dishes.append(supp_dish)
+                        current_dinner_dishes.append(supp_dish)
+                        excluded.append(supp_dish)
+                        recent_recipe_ids_set.add(str(supp_dish.get("food_id", "")))
+                        # Update remaining_targets
+                        dish_macros = _get_meal_macros(supp_dish)
+                        dish_name = supp_dish.get("dish_name", "Unknown")
+                        # Simplified logging - only log dish name and macros
+                        logging.debug(
+                            f"DINNER_SUPP_ADD: {dish_name} | "
+                            f"kcal={dish_macros.get('kcal', 0):.1f} | "
+                            f"protein={dish_macros.get('protein_g', 0):.1f}g"
+                        )
+                        for k in remaining_targets:
+                            remaining_targets[k] = max(0.0, remaining_targets[k] - dish_macros.get(k, 0.0))
+                    
+                    iteration += 1
+                
+                logging.debug(
+                    f"DINNER_SUPP_COMPLETE: Total iterations={iteration}, "
+                    f"total_supplementary_dishes={len(all_supplementary_dishes)}, "
+                    f"final_remaining_kcal={remaining_targets.get('kcal', 0):.1f}, "
+                    f"final_remaining_protein={remaining_targets.get('protein_g', 0):.1f}g"
+                )
+                
+                supplementary_dishes = all_supplementary_dishes
+                
+                # Add supplementary dishes to dinner components
+                # Track which supplementary dishes were assigned to existing slots to avoid double-counting
+                assigned_supp_dishes = []
+                for supp_dish in supplementary_dishes:
+                    dish_name = supp_dish.get('dish_name', 'Unknown')
+                    dish_macros = _get_meal_macros(supp_dish)
+                    assigned = False
+                    if _is_main_dish(supp_dish):
+                        # If we already have a main, add as additional main
+                        if dinner_main:
+                            # Store as additional main (we'll handle this in plan structure)
+                            logging.info(f"Added additional main dish to dinner: {dish_name}")
+                        else:
+                            dinner_main = supp_dish
+                            assigned = True  # Assigned to dinner_main, don't double-count
+                            yield Response(f"✅ Added main dish to meet nutrition targets: {dish_name}")
+                    elif _is_vegetable_dish(supp_dish):
+                        if not dinner_veg:
+                            dinner_veg = supp_dish
+                            assigned = True  # Assigned to dinner_veg, don't double-count
+                            yield Response(f"✅ Added vegetable to meet nutrition targets: {dish_name}")
+                        else:
+                            logging.info(f"Added additional vegetable to dinner: {dish_name}")
+                    elif _is_soup(supp_dish):
+                        if not dinner_soup:
+                            dinner_soup = supp_dish
+                            assigned = True  # Assigned to dinner_soup, don't double-count
+                            yield Response(f"✅ Added soup to meet nutrition targets: {dish_name}")
+                        else:
+                            logging.info(f"Added additional soup to dinner: {dish_name}")
+                    
+                    # Update excluded (remaining_targets already updated in iterative loop above)
+                    # Only append if not already in excluded (to avoid duplicates)
+                    if supp_dish not in excluded:
+                        excluded.append(supp_dish)
+                    if str(supp_dish.get("food_id", "")) not in recent_recipe_ids_set:
+                        recent_recipe_ids_set.add(str(supp_dish.get("food_id", "")))
+                    
+                    # Track if this dish was assigned to an existing slot (to avoid double-counting in recalculation)
+                    if assigned:
+                        assigned_supp_dishes.append(supp_dish)
+                    else:
+                        # CRITICAL: Store unassigned supplementary dishes to add to plan later
+                        # These are additional dishes that don't fit into existing slots
+                        dinner_supplementary_dishes.append(supp_dish)
+                        logging.debug(
+                            f"DINNER_SUPP_UNASSIGNED: {dish_name} will be added to plan accompaniments"
+                        )
+                
+                # Recalculate dinner total macros after adding supplementary dishes (for validation only)
+                # NOTE: Only add supplementary dishes that were NOT assigned to existing slots
+                # (assigned ones are already included in dinner_main/dinner_veg/dinner_soup)
+                # Also note: remaining_targets already updated in loop above, so don't update again here
+                if supplementary_dishes:
+                    dinner_total_macros = _get_meal_macros(dinner_rice)
+                    if dinner_main:
+                        main_macros = _get_meal_macros(dinner_main)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += main_macros.get(k, 0.0)
+                    if dinner_soup:
+                        soup_macros = _get_meal_macros(dinner_soup)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += soup_macros.get(k, 0.0)
+                    if dinner_veg:
+                        veg_macros = _get_meal_macros(dinner_veg)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += veg_macros.get(k, 0.0)
+                    if dinner_fruit:
+                        fruit_macros = _get_meal_macros(dinner_fruit)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += fruit_macros.get(k, 0.0)
+                    # Add only supplementary dishes that were NOT assigned to existing slots
+                    unassigned_supp_dishes = [d for d in supplementary_dishes if d not in assigned_supp_dishes]
+                    for supp_dish in unassigned_supp_dishes:
+                        supp_macros = _get_meal_macros(supp_dish)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += supp_macros.get(k, 0.0)
+                else:
+                    # No supplementary dishes - calculate dinner_total_macros from base dishes
+                    dinner_total_macros = _get_meal_macros(dinner_rice)
+                    if dinner_main:
+                        main_macros = _get_meal_macros(dinner_main)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += main_macros.get(k, 0.0)
+                    if dinner_soup:
+                        soup_macros = _get_meal_macros(dinner_soup)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += soup_macros.get(k, 0.0)
+                    if dinner_veg:
+                        veg_macros = _get_meal_macros(dinner_veg)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += veg_macros.get(k, 0.0)
+                    if dinner_fruit:
+                        fruit_macros = _get_meal_macros(dinner_fruit)
+                        for k in dinner_total_macros:
+                            dinner_total_macros[k] += fruit_macros.get(k, 0.0)
+                
+                # CRITICAL: Update remaining_targets AFTER calculating final dinner_total_macros (including supplementary dishes)
+                if remaining_targets:
+                    dinner_total_kcal = dinner_total_macros.get("kcal", 0.0)
+                    dinner_total_protein = dinner_total_macros.get("protein_g", 0.0)
+                    dinner_total_fat = dinner_total_macros.get("fat_g", 0.0)
+                    dinner_total_carb = dinner_total_macros.get("carb_g", 0.0)
+                    
+                    # Log breakdown of dinner components
+                    logging.debug(
+                        f"DINNER_COMPONENTS_BREAKDOWN: "
+                        f"rice={dinner_rice.get('dish_name', 'None') if dinner_rice else 'None'} | "
+                        f"main={dinner_main.get('dish_name', 'None') if dinner_main else 'None'} | "
+                        f"soup={dinner_soup.get('dish_name', 'None') if dinner_soup else 'None'} | "
+                        f"veg={dinner_veg.get('dish_name', 'None') if dinner_veg else 'None'} | "
+                        f"fruit={dinner_fruit.get('dish_name', 'None') if dinner_fruit else 'None'} | "
+                        f"supplementary_count={len(supplementary_dishes)}"
+                    )
+                    
+                    logging.debug(
+                        f"DINNER_TOTAL_MACROS: "
+                        f"kcal={dinner_total_kcal:.1f} | "
+                        f"protein={dinner_total_protein:.1f}g | "
+                        f"fat={dinner_total_fat:.1f}g | "
+                        f"carb={dinner_total_carb:.1f}g | "
+                        f"dinner_max_kcal={dinner_max_kcal:.1f} | "
+                        f"exceeds_by={((dinner_total_kcal / dinner_max_kcal - 1.0) * 100) if dinner_max_kcal > 0 else 0:.1f}%"
+                    )
+                    
+                    # CRITICAL: If dinner total exceeds dinner_max_kcal, log warning but allow for better nutrition
+                    # Increased tolerance to 50% to ensure we meet nutritional targets
+                    if dinner_total_kcal > dinner_max_kcal * 1.4:  # Allow up to 40% when deficit is high
+                        logging.warning(
+                            f"Dinner total kcal ({dinner_total_kcal:.1f}) exceeds limit ({dinner_max_kcal:.1f}) by "
+                            f"{((dinner_total_kcal / dinner_max_kcal - 1.0) * 100):.1f}%"
+                        )
+                    elif dinner_total_kcal > dinner_max_kcal * 1.2:
+                        logging.debug(
+                            f"Dinner total kcal ({dinner_total_kcal:.1f}) exceeds limit ({dinner_max_kcal:.1f}) by "
+                            f"{((dinner_total_kcal / dinner_max_kcal - 1.0) * 100):.1f}% (within tolerance for nutrition)"
+                        )
+                    
+                    # Removed verbose logging - only log when there's an issue
+                    
+                    # CRITICAL: Calculate ACTUAL remaining needs from original targets to verify
+                    breakfast_macros_check = _get_meal_macros(breakfast) if breakfast else {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                    # Include supplementary dishes from lunch to avoid underestimating consumed macros
+                    lunch_supp_for_check = lunch_supplementary_dishes if 'lunch_supplementary_dishes' in locals() else []
+                    lunch_total_macros_check = calculate_meal_macros(
+                        [d for d in [lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit] if d] + lunch_supp_for_check
+                    )
+                    total_consumed_so_far_kcal = breakfast_macros_check.get("kcal", 0.0) + lunch_total_macros_check.get("kcal", 0.0) + dinner_total_kcal
+                    total_consumed_so_far_protein = breakfast_macros_check.get("protein_g", 0.0) + lunch_total_macros_check.get("protein_g", 0.0) + dinner_total_protein
+                    total_consumed_so_far_fat = breakfast_macros_check.get("fat_g", 0.0) + lunch_total_macros_check.get("fat_g", 0.0) + dinner_total_fat
+                    total_consumed_so_far_carb = breakfast_macros_check.get("carb_g", 0.0) + lunch_total_macros_check.get("carb_g", 0.0) + dinner_total_carb
+                    
+                    daily_protein_check = targets.get("protein_g", 150.0)
+                    daily_kcal_check = targets.get("tdee_kcal", 2000.0)
+                    daily_fat_check = targets.get("fat_g", 60.0)
+                    daily_carb_check = targets.get("carb_g", 219.0)
+                    
+                    actual_remaining_kcal = max(0.0, daily_kcal_check - total_consumed_so_far_kcal)
+                    actual_remaining_protein = max(0.0, daily_protein_check - total_consumed_so_far_protein)
+                    actual_remaining_fat = max(0.0, daily_fat_check - total_consumed_so_far_fat)
+                    actual_remaining_carb = max(0.0, daily_carb_check - total_consumed_so_far_carb)
+                    
+                    # Update remaining_targets using subtraction method
+                    remaining_targets["kcal"] = max(0.0, remaining_targets["kcal"] - dinner_total_kcal)
+                    remaining_targets["protein_g"] = max(0.0, remaining_targets["protein_g"] - dinner_total_protein)
+                    remaining_targets["fat_g"] = max(0.0, remaining_targets["fat_g"] - dinner_total_fat)
+                    remaining_targets["carb_g"] = max(0.0, remaining_targets["carb_g"] - dinner_total_carb)
+                    
+                    # CRITICAL: Verify and correct remaining_targets if it doesn't match actual calculation
+                    if abs(remaining_targets["kcal"] - actual_remaining_kcal) > 1.0 or abs(remaining_targets["protein_g"] - actual_remaining_protein) > 1.0:
+                        logging.warning(
+                            f"DINNER_REMAINING_TARGETS_MISMATCH: "
+                            f"remaining_targets says kcal={remaining_targets['kcal']:.1f}, protein={remaining_targets['protein_g']:.1f}g | "
+                            f"but actual calculation shows kcal={actual_remaining_kcal:.1f}, protein={actual_remaining_protein:.1f}g | "
+                            f"Correcting remaining_targets to match actual needs"
+                        )
+                        remaining_targets["kcal"] = actual_remaining_kcal
+                        remaining_targets["protein_g"] = actual_remaining_protein
+                        remaining_targets["fat_g"] = actual_remaining_fat
+                        remaining_targets["carb_g"] = actual_remaining_carb
+                    
+                    # Log remaining targets AFTER update
+                    logging.debug(
+                        f"REMAINING_TARGETS (after dinner update): "
+                        f"kcal={remaining_targets.get('kcal', 0):.1f} | "
+                        f"protein={remaining_targets.get('protein_g', 0):.1f}g | "
+                        f"fat={remaining_targets.get('fat_g', 0):.1f}g | "
+                        f"carb={remaining_targets.get('carb_g', 0):.1f}g | "
+                        f"total_consumed_kcal={total_consumed_so_far_kcal:.1f} | "
+                        f"total_consumed_protein={total_consumed_so_far_protein:.1f}g | "
+                        f"coverage_kcal={((total_consumed_so_far_kcal / daily_kcal_check) * 100) if daily_kcal_check > 0 else 0:.1f}% | "
+                        f"coverage_protein={((total_consumed_so_far_protein / daily_protein_check) * 100) if daily_protein_check > 0 else 0:.1f}%"
+                    )
         
         # Validate dinner components
         if not dinner_rice:
@@ -2024,27 +2433,57 @@ async def plan_day_e2e_tool(
             excluded = [breakfast, lunch_rice, dinner_rice]
             if lunch_main:
                 excluded.append(lunch_main)
-            # Calculate dynamic requirements based on remaining protein
-            max_main_kcal = 550.0
-            min_main_protein = 18.0
+            # CRITICAL: Calculate dynamic requirements based on remaining protein and kcal
+            # Ensure we select dishes with sufficient nutrition to meet targets
+            daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
+            daily_kcal = targets.get("tdee_kcal", 2000.0) if targets else 2000.0
+            
+            # Base requirements - increased to ensure better nutrition
+            if daily_protein > 180:
+                base_min_protein = 40.0  # Increased from 35.0
+            elif daily_protein > 150:
+                base_min_protein = 35.0  # Increased from 30.0
+            else:
+                base_min_protein = 30.0  # Increased from 25.0
+            
+            max_main_kcal = 700.0  # Increased from 550.0 to allow larger dishes
+            min_main_protein = base_min_protein
+            min_main_kcal = 200.0  # CRITICAL: Require minimum kcal to ensure sufficient nutrition
+            
             if remaining_targets:
                 protein_remaining = remaining_targets.get("protein_g", 0.0)
-                daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
+                kcal_remaining = remaining_targets.get("kcal", 0.0)
                 protein_ratio = protein_remaining / daily_protein if daily_protein > 0 else 1.0
-                if protein_ratio > 0.5:
-                    max_main_kcal = 650.0
-                    min_main_protein = 25.0
-                elif protein_remaining > daily_protein * 0.4:
-                    max_main_kcal = 600.0
-                    min_main_protein = 22.0
-                elif protein_remaining > daily_protein * 0.2:
-                    min_main_protein = 18.0
+                kcal_ratio = kcal_remaining / daily_kcal if daily_kcal > 0 else 1.0
+                
+                # CRITICAL: If we still need a lot of nutrition, select larger dishes
+                if protein_ratio > 0.5 or kcal_ratio > 0.5:
+                    max_main_kcal = 800.0  # Increased from 650.0
+                    min_main_protein = max(base_min_protein, 45.0)  # Increased from 40.0
+                    min_main_kcal = 300.0  # Increased minimum kcal
+                elif protein_remaining > daily_protein * 0.4 or kcal_remaining > daily_kcal * 0.4:
+                    max_main_kcal = 750.0  # Increased from 600.0
+                    min_main_protein = max(base_min_protein, 40.0)  # Increased from 35.0
+                    min_main_kcal = 250.0
+                elif protein_remaining > daily_protein * 0.2 or kcal_remaining > daily_kcal * 0.2:
+                    min_main_protein = max(base_min_protein, 35.0)  # Increased from 30.0
+                    min_main_kcal = 200.0
             elif targets:
-                # If no remaining_targets but have targets, assume we need protein
-                max_main_kcal = 600.0
-                min_main_protein = 20.0
+                # If no remaining_targets but have targets, assume we need nutrition
+                max_main_kcal = 700.0  # Increased from 600.0
+                min_main_protein = base_min_protein
+                min_main_kcal = 200.0
             
-            dinner_main = _select_meal_by_strategy(
+            logging.debug(
+                f"DINNER_MAIN_SELECTION: "
+                f"min_protein={min_main_protein:.1f}g | "
+                f"min_kcal={min_main_kcal:.1f} | "
+                f"max_kcal={max_main_kcal:.1f} | "
+                f"remaining_protein={remaining_targets.get('protein_g', 0):.1f}g | "
+                f"remaining_kcal={remaining_targets.get('kcal', 0):.1f}"
+            )
+            
+            dinner_main = select_meal_by_strategy(
                 recipes, "highest_protein", 
                 exclude=excluded, 
                 used_recipe_ids=recent_recipe_ids_set,
@@ -2052,47 +2491,46 @@ async def plan_day_e2e_tool(
                 dish_category="main",  # CRITICAL: Specify category to ensure correct selection
                 target_macros=targets,
                 require_macros=True,
-                min_kcal=50.0,
+                min_kcal=min_main_kcal,  # CRITICAL: Require minimum kcal for better nutrition
                 max_kcal=max_main_kcal,  # CRITICAL: Dynamic kcal limit
                 min_protein=min_main_protein,  # CRITICAL: Require minimum protein
             )
+            
+            if dinner_main:
+                main_macros = _get_meal_macros(dinner_main)
+                logging.debug(
+                    f"DINNER_MAIN_SELECTED: {dinner_main.get('dish_name', 'Unknown')} | "
+                    f"protein={main_macros.get('protein_g', 0):.1f}g | "
+                    f"kcal={main_macros.get('kcal', 0):.1f} | "
+                    f"fat={main_macros.get('fat_g', 0):.1f}g | "
+                    f"carb={main_macros.get('carb_g', 0):.1f}g"
+                )
+            else:
+                logging.warning(f"DINNER_MAIN_NOT_FOUND: No main dish found with requirements (min_protein={min_main_protein:.1f}g, min_kcal={min_main_kcal:.1f})")
             # CRITICAL: Validate dinner main is actually a main dish
             if dinner_main and not _is_main_dish(dinner_main):
                 logging.warning(f"Selected dinner main '{dinner_main.get('dish_name', 'Unknown')}' is not a main dish, rejecting...")
                 dinner_main = None
+            # CRITICAL: If still no main, try without category restriction but still prioritize protein
+            if not dinner_main:
+                logging.warning("No dinner main found with category restriction, trying without category but prioritizing protein...")
+                dinner_main = select_meal_by_strategy(
+                    recipes, "highest_protein",
+                    exclude=excluded,
+                    used_recipe_ids=recent_recipe_ids_set,
+                    preferred_meal_type="dinner",
+                    target_macros=targets,
+                    require_macros=True,
+                    min_kcal=min_main_kcal if 'min_main_kcal' in locals() else 200.0,  # CRITICAL: Require minimum kcal
+                    max_kcal=max_main_kcal,
+                    min_protein=min_main_protein,
+                )
+                # Validate it's actually a main dish
+                if dinner_main and not _is_main_dish(dinner_main):
+                    dinner_main = None
 
-        # Phase 3.2: Stream draft early (tên món) before macro calculations
-        yield Response("📋 Draft meal plan:")
-        breakfast_name = breakfast.get("dish_name", "Unknown") if breakfast else "Not selected"
-        yield Response(f"  🌅 Breakfast: {breakfast_name}")
-        
-        if lunch_rice:
-            lunch_items = [lunch_rice.get("dish_name", "Unknown")]
-            # If combined dish or noodle dish, no separate main dish
-            if lunch_main:
-                lunch_items.append(lunch_main.get("dish_name", "Unknown"))
-            if lunch_soup:
-                lunch_items.append(lunch_soup.get("dish_name", "Unknown"))
-            if lunch_veg:
-                lunch_items.append(lunch_veg.get("dish_name", "Unknown"))
-            if lunch_fruit:
-                lunch_items.append(lunch_fruit.get("dish_name", "Unknown"))
-            yield Response(f"  🍽️ Lunch: {', '.join(lunch_items)}")
-        
-        if dinner_rice:
-            dinner_items = [dinner_rice.get("dish_name", "Unknown")]
-            # If combined dish or noodle dish, no separate main dish
-            if dinner_main:
-                dinner_items.append(dinner_main.get("dish_name", "Unknown"))
-            if dinner_soup:
-                dinner_items.append(dinner_soup.get("dish_name", "Unknown"))
-            if dinner_veg:
-                dinner_items.append(dinner_veg.get("dish_name", "Unknown"))
-            if dinner_fruit:
-                dinner_items.append(dinner_fruit.get("dish_name", "Unknown"))
-            yield Response(f"  🌙 Dinner: {', '.join(dinner_items)}")
-        
-        yield Response("⚖️ Calculating nutrition details...")
+        # Phase 3.2: Stream draft early (tên món) - MOVED to after supplementary dishes are added
+        # This will be done after plan structure is built to include all supplementary dishes
 
         # Build plan with Vietnamese meal structure
         logging.debug(
@@ -2117,6 +2555,9 @@ async def plan_day_e2e_tool(
                 "fat_g": macros["fat_g"] * servings,
                 "carb_g": macros["carb_g"] * servings,
             }
+        
+        # NOTE: lunch_supplementary_dishes and dinner_supplementary_dishes are initialized
+        # earlier in the function (after breakfast planning) to ensure they exist when needed
         
         plan = {
             "breakfast": {
@@ -2233,6 +2674,201 @@ async def plan_day_e2e_tool(
                     "macros": _calculate_meal_macros(dinner_fruit, 1.0),
                 })
         
+        # CRITICAL: Add unassigned supplementary dishes to plan accompaniments
+        # These are additional dishes that were added to meet nutrition targets but didn't fit into existing slots
+        for supp_dish in lunch_supplementary_dishes:
+            dish_name = supp_dish.get('dish_name', 'Unknown')
+            dish_macros = _get_meal_macros(supp_dish)
+            if dish_macros.get("kcal", 0) > 0:
+                # Determine dish type
+                dish_type = "main"
+                if _is_vegetable_dish(supp_dish):
+                    dish_type = "vegetable"
+                elif _is_soup(supp_dish):
+                    dish_type = "soup"
+                elif _is_fruit(supp_dish):
+                    dish_type = "fruit"
+                
+                plan["lunch"]["accompaniments"].append({
+                    "recipe": supp_dish,
+                    "servings": 1.0,
+                    "type": dish_type,
+                    "macros": _calculate_meal_macros(supp_dish, 1.0),
+                })
+                logging.debug(
+                    f"PLAN_LUNCH_ADD_SUPP: Added {dish_name} ({dish_type}) to plan accompaniments | "
+                    f"kcal={dish_macros.get('kcal', 0):.1f} | protein={dish_macros.get('protein_g', 0):.1f}g"
+                )
+        
+        for supp_dish in dinner_supplementary_dishes:
+            dish_name = supp_dish.get('dish_name', 'Unknown')
+            dish_macros = _get_meal_macros(supp_dish)
+            if dish_macros.get("kcal", 0) > 0:
+                # Determine dish type
+                dish_type = "main"
+                if _is_vegetable_dish(supp_dish):
+                    dish_type = "vegetable"
+                elif _is_soup(supp_dish):
+                    dish_type = "soup"
+                elif _is_fruit(supp_dish):
+                    dish_type = "fruit"
+                
+                plan["dinner"]["accompaniments"].append({
+                    "recipe": supp_dish,
+                    "servings": 1.0,
+                    "type": dish_type,
+                    "macros": _calculate_meal_macros(supp_dish, 1.0),
+                })
+                logging.debug(
+                    f"PLAN_DINNER_ADD_SUPP: Added {dish_name} ({dish_type}) to plan accompaniments | "
+                    f"kcal={dish_macros.get('kcal', 0):.1f} | protein={dish_macros.get('protein_g', 0):.1f}g"
+                )
+        
+        # Log total accompaniments count
+        logging.debug(
+            f"PLAN_ACCOMPANIMENTS_COUNT: lunch={len(plan['lunch']['accompaniments'])} | "
+            f"dinner={len(plan['dinner']['accompaniments'])} | "
+            f"lunch_supp={len(lunch_supplementary_dishes)} | dinner_supp={len(dinner_supplementary_dishes)}"
+        )
+        
+        # CRITICAL: Check if a meal has too many main dishes (3-4), replace with soup/vegetable
+        def check_and_replace_excess_main_dishes(meal_slot: str, meal_plan: dict, recipes_list: list, recent_recipe_ids_set: set):
+            """Check if meal has too many main dishes and replace with soup/vegetable if needed."""
+            meal_accompaniments = meal_plan.get("accompaniments", [])
+            meal_recipe = meal_plan.get("recipe")  # Primary dish (rice or combined dish)
+            
+            # Count main dishes: include main dish in accompaniments AND primary dish if it's a main dish
+            main_dishes = [acc for acc in meal_accompaniments if acc.get("type") == "main"]
+            main_count = len(main_dishes)
+            
+            # Also check if primary dish is a main dish (e.g., "Sườn Nướng Cơm Tấm Sài Gòn")
+            if meal_recipe and _is_main_dish(meal_recipe):
+                main_count += 1
+            
+            if main_count >= 3:
+                logging.warning(f"{meal_slot.upper()}_TOO_MANY_MAIN: Found {main_count} main dishes (primary={meal_recipe.get('dish_name', 'None') if meal_recipe and _is_main_dish(meal_recipe) else 'None'}, accompaniments={len([acc for acc in meal_accompaniments if acc.get('type') == 'main'])})), attempting to replace with soup/vegetable")
+                
+                # Calculate how many main dishes to replace (if 4+, replace 2; if 3, replace 1)
+                num_to_replace = 2 if main_count >= 4 else 1
+                
+                # Get list of main dishes to consider for replacement (only from accompaniments, not primary dish)
+                main_dishes_to_replace = sorted(main_dishes, key=lambda acc: acc.get("macros", {}).get("protein_g", 0))[:num_to_replace]
+                
+                # Get excluded recipe IDs (already used in this meal)
+                excluded_ids = {str(acc.get("recipe", {}).get("food_id", "")) for acc in meal_accompaniments if acc.get("recipe", {}).get("food_id")}
+                if meal_recipe and meal_recipe.get("food_id"):
+                    excluded_ids.add(str(meal_recipe.get("food_id")))
+                excluded_ids.update(str(rid) for rid in recent_recipe_ids_set)
+                
+                # Build excluded list for select_meal_by_strategy
+                excluded_recipes = [acc.get("recipe") for acc in meal_accompaniments if acc.get("recipe")]
+                if meal_recipe:
+                    excluded_recipes.append(meal_recipe)
+                
+                replacements_made = 0
+                for main_to_replace in main_dishes_to_replace:
+                    if replacements_made >= num_to_replace:
+                        break
+                    
+                    replacement_found = False
+                    
+                    # CRITICAL: Directly filter and select soup/vegetable from recipes_list
+                    # First try soup (preferred replacement)
+                    soup_candidates = [
+                        r for r in recipes_list 
+                        if str(r.get("food_id", "")) not in excluded_ids
+                        and str(r.get("food_id", "")) not in [str(rid) for rid in recent_recipe_ids_set]
+                        and _is_soup(r) 
+                        and not _is_main_dish(r)
+                        and _get_meal_macros(r).get("kcal", 0) >= 30.0
+                        and _get_meal_macros(r).get("kcal", 0) <= 200.0
+                    ]
+                    
+                    if soup_candidates:
+                        # Sort by kcal (prefer lighter soups) and select first
+                        soup_candidates.sort(key=lambda r: _get_meal_macros(r).get("kcal", 0))
+                        soup_candidate = soup_candidates[0]
+                        
+                        # Replace main dish with soup
+                        meal_accompaniments.remove(main_to_replace)
+                        meal_accompaniments.append({
+                            "recipe": soup_candidate,
+                            "servings": 1.0,
+                            "type": "soup",
+                            "macros": _calculate_meal_macros(soup_candidate, 1.0),
+                        })
+                        excluded_recipes.append(soup_candidate)
+                        excluded_ids.add(str(soup_candidate.get("food_id", "")))
+                        logging.info(f"{meal_slot.upper()}_REPLACED_MAIN_WITH_SOUP: Replaced '{main_to_replace.get('recipe', {}).get('dish_name', 'Unknown')}' with '{soup_candidate.get('dish_name', 'Unknown')}'")
+                        replacement_found = True
+                        replacements_made += 1
+                    
+                    # If soup not found, try vegetable
+                    if not replacement_found:
+                        veg_candidates = [
+                            r for r in recipes_list 
+                            if str(r.get("food_id", "")) not in excluded_ids
+                            and str(r.get("food_id", "")) not in [str(rid) for rid in recent_recipe_ids_set]
+                            and _is_vegetable_dish(r) 
+                            and not _is_main_dish(r)
+                            and _get_meal_macros(r).get("kcal", 0) >= 30.0
+                            and _get_meal_macros(r).get("kcal", 0) <= 250.0
+                        ]
+                        
+                        if veg_candidates:
+                            # Sort by kcal (prefer lighter vegetables) and select first
+                            veg_candidates.sort(key=lambda r: _get_meal_macros(r).get("kcal", 0))
+                            veg_candidate = veg_candidates[0]
+                            
+                            meal_accompaniments.remove(main_to_replace)
+                            meal_accompaniments.append({
+                                "recipe": veg_candidate,
+                                "servings": 1.0,
+                                "type": "vegetable",
+                                "macros": _calculate_meal_macros(veg_candidate, 1.0),
+                            })
+                            excluded_recipes.append(veg_candidate)
+                            excluded_ids.add(str(veg_candidate.get("food_id", "")))
+                            logging.info(f"{meal_slot.upper()}_REPLACED_MAIN_WITH_VEG: Replaced '{main_to_replace.get('recipe', {}).get('dish_name', 'Unknown')}' with '{veg_candidate.get('dish_name', 'Unknown')}'")
+                            replacement_found = True
+                            replacements_made += 1
+                    
+                    if not replacement_found:
+                        logging.warning(f"{meal_slot.upper()}_REPLACE_FAILED: Could not find suitable soup/vegetable to replace '{main_to_replace.get('recipe', {}).get('dish_name', 'Unknown')}'")
+                
+                if replacements_made > 0:
+                    logging.info(f"{meal_slot.upper()}_REPLACEMENT_SUMMARY: Replaced {replacements_made} main dish(es) with soup/vegetable")
+        
+        # Check and replace excess main dishes for lunch and dinner
+        check_and_replace_excess_main_dishes("lunch", plan["lunch"], recipes, recent_recipe_ids_set)
+        check_and_replace_excess_main_dishes("dinner", plan["dinner"], recipes, recent_recipe_ids_set)
+        
+        # Phase 3.2: Stream draft meal plan AFTER supplementary dishes are added to plan structure
+        # This ensures all dishes (including supplementary) are displayed
+        yield Response("📋 Draft meal plan:")
+        breakfast_name = breakfast.get("dish_name", "Unknown") if breakfast else "Not selected"
+        yield Response(f"  🌅 Breakfast: {breakfast_name}")
+        
+        if lunch_rice:
+            lunch_items = [lunch_rice.get("dish_name", "Unknown")]
+            # Include all accompaniments (main, soup, veg, fruit, and supplementary dishes)
+            for acc in plan.get("lunch", {}).get("accompaniments", []):
+                acc_name = acc.get("recipe", {}).get("dish_name", "Unknown")
+                if acc_name not in lunch_items:  # Avoid duplicates
+                    lunch_items.append(acc_name)
+            yield Response(f"  🍽️ Lunch: {', '.join(lunch_items)}")
+        
+        if dinner_rice:
+            dinner_items = [dinner_rice.get("dish_name", "Unknown")]
+            # Include all accompaniments (main, soup, veg, fruit, and supplementary dishes)
+            for acc in plan.get("dinner", {}).get("accompaniments", []):
+                acc_name = acc.get("recipe", {}).get("dish_name", "Unknown")
+                if acc_name not in dinner_items:  # Avoid duplicates
+                    dinner_items.append(acc_name)
+            yield Response(f"  🌙 Dinner: {', '.join(dinner_items)}")
+        
+        yield Response("⚖️ Calculating nutrition details...")
+        
         # Calculate macros for lunch and dinner (including accompaniments)
         lunch_macros = _calculate_meal_macros(lunch_rice, plan["lunch"]["servings"])
         for acc in plan["lunch"]["accompaniments"]:
@@ -2294,6 +2930,58 @@ async def plan_day_e2e_tool(
                     for k in total_macros:
                         total_macros[k] += acc_macros[k] * acc_servings
 
+        # Calculate coverage percentages
+        target_kcal = targets.get("tdee_kcal", 0.0) if targets else 0.0
+        target_protein = targets.get("protein_g", 0.0) if targets else 0.0
+        target_fat = targets.get("fat_g", 0.0) if targets else 0.0
+        target_carb = targets.get("carb_g", 0.0) if targets else 0.0
+        
+        kcal_coverage = (total_macros["kcal"] / target_kcal * 100) if target_kcal > 0 else 0.0
+        protein_coverage = (total_macros["protein_g"] / target_protein * 100) if target_protein > 0 else 0.0
+        fat_coverage = (total_macros["fat_g"] / target_fat * 100) if target_fat > 0 else 0.0
+        carb_coverage = (total_macros["carb_g"] / target_carb * 100) if target_carb > 0 else 0.0
+        
+        # Calculate deficits
+        kcal_deficit = target_kcal - total_macros["kcal"]
+        protein_deficit = target_protein - total_macros["protein_g"]
+        fat_deficit = target_fat - total_macros["fat_g"]
+        carb_deficit = target_carb - total_macros["carb_g"]
+        
+        # CRITICAL: Verify total_macros matches actual consumed (for debugging)
+        # Calculate actual consumed from breakfast + lunch + dinner totals
+        breakfast_macros_verify = _get_meal_macros(breakfast) if breakfast else {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+        lunch_total_macros_verify = plan["lunch"]["macros_total"]
+        dinner_total_macros_verify = plan["dinner"]["macros_total"]
+        
+        actual_total_kcal = breakfast_macros_verify.get("kcal", 0.0) + lunch_total_macros_verify.get("kcal", 0.0) + dinner_total_macros_verify.get("kcal", 0.0)
+        actual_total_protein = breakfast_macros_verify.get("protein_g", 0.0) + lunch_total_macros_verify.get("protein_g", 0.0) + dinner_total_macros_verify.get("protein_g", 0.0)
+        actual_total_fat = breakfast_macros_verify.get("fat_g", 0.0) + lunch_total_macros_verify.get("fat_g", 0.0) + dinner_total_macros_verify.get("fat_g", 0.0)
+        actual_total_carb = breakfast_macros_verify.get("carb_g", 0.0) + lunch_total_macros_verify.get("carb_g", 0.0) + dinner_total_macros_verify.get("carb_g", 0.0)
+        
+        # Check for mismatch
+        kcal_diff = abs(total_macros["kcal"] - actual_total_kcal)
+        protein_diff = abs(total_macros["protein_g"] - actual_total_protein)
+        
+        if kcal_diff > 5.0 or protein_diff > 5.0:
+            logging.warning(
+                f"PLAN_MACROS_MISMATCH: plan totals vs actual consumed | "
+                f"plan: kcal={total_macros['kcal']:.1f}, protein={total_macros['protein_g']:.1f}g | "
+                f"actual: kcal={actual_total_kcal:.1f}, protein={actual_total_protein:.1f}g | "
+                f"diff: kcal={kcal_diff:.1f}, protein={protein_diff:.1f}g | "
+                f"lunch_accompaniments={len(plan['lunch']['accompaniments'])} | "
+                f"dinner_accompaniments={len(plan['dinner']['accompaniments'])}"
+            )
+            # Use actual totals for more accurate coverage calculation
+            total_macros["kcal"] = actual_total_kcal
+            total_macros["protein_g"] = actual_total_protein
+            total_macros["fat_g"] = actual_total_fat
+            total_macros["carb_g"] = actual_total_carb
+        else:
+            logging.debug(
+                f"PLAN_MACROS_VERIFY: plan totals match actual consumed | "
+                f"kcal={total_macros['kcal']:.1f}, protein={total_macros['protein_g']:.1f}g"
+            )
+        
         logging.debug(
             "plan_day_e2e_tool: plan macros totals kcal=%.1f protein=%.1f fat=%.1f carb=%.1f | targets=%s",
             total_macros["kcal"],
@@ -2302,6 +2990,86 @@ async def plan_day_e2e_tool(
             total_macros["carb_g"],
             targets,
         )
+        logging.info(
+            "plan_day_e2e_tool: NUTRITION_COVERAGE | "
+            "kcal=%.1f%% (%.1f/%.1f, deficit=%.1f) | "
+            "protein=%.1f%% (%.1f/%.1f, deficit=%.1f) | "
+            "fat=%.1f%% (%.1f/%.1f, deficit=%.1f) | "
+            "carb=%.1f%% (%.1f/%.1f, deficit=%.1f)",
+            kcal_coverage, total_macros["kcal"], target_kcal, kcal_deficit,
+            protein_coverage, total_macros["protein_g"], target_protein, protein_deficit,
+            fat_coverage, total_macros["fat_g"], target_fat, fat_deficit,
+            carb_coverage, total_macros["carb_g"], target_carb, carb_deficit,
+        )
+        
+        # Warnings for significant excess
+        if fat_coverage > 150.0:
+            logging.warning(f"NUTRITION_WARNING: Fat excess is very high ({fat_coverage:.1f}%) - consider reducing high-fat dishes")
+        if kcal_coverage > 130.0:
+            logging.warning(f"NUTRITION_WARNING: Kcal excess is high ({kcal_coverage:.1f}%) - consider reducing portion sizes")
+        if carb_coverage > 130.0:
+            logging.warning(f"NUTRITION_WARNING: Carb excess is high ({carb_coverage:.1f}%) - consider reducing high-carb dishes")
+        if protein_coverage < 90.0:
+            logging.warning(f"NUTRITION_WARNING: Protein coverage is low ({protein_coverage:.1f}%) - consider adding more protein-rich dishes")
+        
+        # CRITICAL: Log warning if coverage is too low
+        if kcal_coverage < 80.0 or protein_coverage < 80.0:
+            logging.warning(
+                "plan_day_e2e_tool: LOW_NUTRITION_COVERAGE | "
+                "kcal=%.1f%% (need %.1f more) | "
+                "protein=%.1f%% (need %.1f more) | "
+                "This indicates the meal planning algorithm needs improvement",
+                kcal_coverage, kcal_deficit,
+                protein_coverage, protein_deficit,
+            )
+            
+            # CRITICAL: Call LLM to suggest additional dishes when nutrition is deficient
+            try:
+                yield Response("💡 Getting AI suggestions for additional dishes to meet nutrition targets...")
+                # Prepare context for LLM
+                deficit_info = []
+                if kcal_coverage < 80.0:
+                    deficit_info.append(f"thiếu {kcal_deficit:.0f} kcal ({100 - kcal_coverage:.1f}%)")
+                if protein_coverage < 80.0:
+                    deficit_info.append(f"thiếu {protein_deficit:.0f}g protein ({100 - protein_coverage:.1f}%)")
+                if fat_coverage < 80.0:
+                    deficit_info.append(f"thiếu {fat_deficit:.0f}g chất béo ({100 - fat_coverage:.1f}%)")
+                if carb_coverage < 80.0:
+                    deficit_info.append(f"thiếu {carb_deficit:.0f}g carb ({100 - carb_coverage:.1f}%)")
+                
+                deficit_text = ", ".join(deficit_info)
+                llm_suggestion_query = f"Kế hoạch bữa ăn hiện tại {deficit_text}. Hãy gợi ý 3-5 món ăn Việt Nam bổ sung để đáp ứng đủ mục tiêu dinh dưỡng."
+                
+                # Get LLM suggestions
+                if tree_data and base_lm:
+                    # Collect all selected dish names for meal history
+                    selected_dish_names = []
+                    if breakfast:
+                        selected_dish_names.append(breakfast.get("dish_name", ""))
+                    for acc in plan.get("lunch", {}).get("accompaniments", []):
+                        dish_name = acc.get("recipe", {}).get("dish_name", "")
+                        if dish_name:
+                            selected_dish_names.append(dish_name)
+                    for acc in plan.get("dinner", {}).get("accompaniments", []):
+                        dish_name = acc.get("recipe", {}).get("dish_name", "")
+                        if dish_name:
+                            selected_dish_names.append(dish_name)
+                    
+                    additional_suggestions = await generate_llm_draft(
+                        meal_slot="general",
+                        query=llm_suggestion_query,
+                        meal_history=selected_dish_names,
+                        constraints=constraints,
+                        base_lm=base_lm,
+                        tree_data=tree_data,
+                    )
+                    
+                    if additional_suggestions and additional_suggestions.suggestions:
+                        suggestion_names = [s.dish_name for s in additional_suggestions.suggestions[:5]]
+                        yield Response(f"💡 AI gợi ý thêm món: {', '.join(suggestion_names)}")
+                        logging.info(f"LLM_SUGGESTION_DEFICIT: Suggested {len(suggestion_names)} additional dishes to meet nutrition targets")
+            except Exception as e:
+                logging.warning(f"Failed to get LLM suggestions for nutrition deficit: {e}")
         logging.debug(
             "plan_day_e2e_tool: meal macros breakfast=%s lunch_main=%s lunch_total=%s dinner_main=%s dinner_total=%s accompaniments_lunch=%s accompaniments_dinner=%s",
             plan["breakfast"]["macros"],
@@ -2388,7 +3156,7 @@ async def plan_day_e2e_tool(
                     
                     swaps_made = 0
                     max_swaps = 8  # Increased to allow more swaps for better overall balance
-                    max_iterations = 3  # Maximum iterations to avoid infinite loops
+                    max_iterations = 5  # Increased from 3 to 5 to allow more dishes to be added
                     iteration = 0
                     
                     # Keep track of best overall score

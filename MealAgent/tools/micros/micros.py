@@ -55,6 +55,8 @@ async def micros_tool(
     client_manager: ClientManager,
     rda_overrides: Dict[str, float] | None = None,  # Override default RDAs
     top_k: int = 10,  # Number of food suggestions per deficient nutrient
+    plan_id: str | None = None,
+    user_id: str | None = None,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -90,11 +92,8 @@ async def micros_tool(
                 plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
         
         # Fallback: try environment cache (only as last resort)
-        import logging
-        logger = logging.getLogger(__name__)
-        
         if not plan:
-            logger.warning("micros_tool: No plan from database, trying environment cache")
+            logging.warning("micros_tool: No plan from database, trying environment cache")
             day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
             if day_plan_results and day_plan_results[0]["objects"]:
                 plan = day_plan_results[0]["objects"][0]

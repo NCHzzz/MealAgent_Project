@@ -12,11 +12,15 @@ This script:
 
 Usage:
     python -m MealAgent.scripts.validate_recipe_macros --limit 200 --batch-size 25 --dry-run
+    python -m MealAgent.scripts.validate_recipe_macros --recipe-id "pho_bo" --dry-run
+    python -m MealAgent.scripts.validate_recipe_macros --dish-name "Phở Bò" --dry-run
 
 Options:
     --limit N       : Maximum number of recipes to inspect (default: all)
     --batch-size N  : Recipes per LLM batch (default: 25, use 10-20 if you see truncation errors)
     --dry-run       : Only report what would change, do not update Weaviate
+    --recipe-id ID  : Validate a single recipe by food_id or UUID
+    --dish-name NAME: Validate a single recipe by dish name (Vietnamese)
 """
 
 import argparse
@@ -46,6 +50,8 @@ from elysia.config import settings, load_base_lm
 from elysia.tree.objects import TreeData, CollectionData, Atlas, Environment
 from elysia.util.client import ClientManager
 from elysia.util.elysia_chain_of_thought import ElysiaChainOfThought
+
+from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 
 # Setup logging
 logging.basicConfig(
@@ -181,6 +187,126 @@ def init_base_lm(
     except Exception as exc:
         logger.error("Failed to initialize base_lm: %s", exc)
         return None
+
+
+async def fetch_recipe_by_id_or_name(
+    client_manager: ClientManager,
+    recipe_id: Optional[str] = None,
+    dish_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a single recipe from Weaviate by food_id, UUID, or dish_name.
+    
+    Args:
+        recipe_id: food_id or UUID of the recipe
+        dish_name: name of the dish (Vietnamese)
+    
+    Returns:
+        Recipe dict if found, None otherwise
+    """
+    if not recipe_id and not dish_name:
+        return None
+    
+    logger.info("Fetching recipe by %s...", "ID" if recipe_id else "name")
+    
+    with client_manager.connect_to_client() as client:
+        collection = client.collections.get("Recipe")
+        
+        # Try to find by UUID first (if recipe_id looks like a UUID)
+        if recipe_id:
+            try:
+                # Try as UUID
+                result = collection.query.fetch_object_by_id(uuid=recipe_id)
+                if result:
+                    recipe = result.properties
+                    recipe["_uuid"] = result.uuid
+                    logger.info("Found recipe by UUID: %s", recipe.get("dish_name"))
+                    return recipe
+            except Exception:
+                # Not a valid UUID, try as food_id
+                pass
+            
+            # Try to find by food_id (try both string and int if it's a number)
+            filters_to_try = [
+                {"path": ["food_id"], "operator": "Equal", "valueString": recipe_id}
+            ]
+            if recipe_id.isdigit():
+                filters_to_try.append({
+                    "path": ["food_id"],
+                    "operator": "Equal",
+                    "valueInt": int(recipe_id)
+                })
+            
+            for payload in filters_to_try:
+                try:
+                    recipe_filter = build_filters_from_where(payload)
+                    if recipe_filter:
+                        results = collection.query.fetch_objects(
+                            filters=recipe_filter,
+                            limit=1
+                        )
+                        if results.objects:
+                            recipe = results.objects[0].properties
+                            recipe["_uuid"] = results.objects[0].uuid
+                            dish_name_safe = _sanitize_text(recipe.get("dish_name"))
+                            logger.info("Found recipe by food_id: %s", dish_name_safe)
+                            return recipe
+                except Exception as e:
+                    logger.debug("Error querying by food_id with %s: %s", 
+                                payload.get("valueString") or payload.get("valueInt"), e)
+                    continue
+        
+        # Try to find by dish_name
+        if dish_name:
+            try:
+                recipe_filter = build_filters_from_where({
+                    "path": ["dish_name"],
+                    "operator": "Equal",
+                    "valueString": dish_name
+                })
+                if recipe_filter:
+                    results = collection.query.fetch_objects(
+                        filters=recipe_filter,
+                        limit=1
+                    )
+                    if results.objects:
+                        recipe = results.objects[0].properties
+                        recipe["_uuid"] = results.objects[0].uuid
+                        dish_name_safe = _sanitize_text(recipe.get("dish_name"))
+                        food_id_safe = _sanitize_text(recipe.get("food_id"))
+                        logger.info("Found recipe by dish_name: %s (ID: %s)", 
+                                   dish_name_safe, food_id_safe)
+                        return recipe
+            except Exception as e:
+                logger.warning("Error querying by dish_name: %s", e)
+        
+        # If recipe_id was provided but not found, try as dish_name
+        if recipe_id and not dish_name:
+            try:
+                recipe_filter = build_filters_from_where({
+                    "path": ["dish_name"],
+                    "operator": "Equal",
+                    "valueString": recipe_id
+                })
+                if recipe_filter:
+                    results = collection.query.fetch_objects(
+                        filters=recipe_filter,
+                        limit=1
+                    )
+                    if results.objects:
+                        recipe = results.objects[0].properties
+                        recipe["_uuid"] = results.objects[0].uuid
+                        dish_name_safe = _sanitize_text(recipe.get("dish_name"))
+                        food_id_safe = _sanitize_text(recipe.get("food_id"))
+                        logger.info("Found recipe by dish_name (using recipe_id as name): %s (ID: %s)", 
+                                   dish_name_safe, food_id_safe)
+                        return recipe
+            except Exception as e:
+                logger.warning("Error querying by dish_name (fallback): %s", e)
+    
+    search_term = _sanitize_text(recipe_id or dish_name)
+    logger.warning("Recipe not found: %s", search_term)
+    return None
 
 
 async def fetch_recipes(
@@ -891,6 +1017,18 @@ async def main():
         default=None,
         help="Override LM API key.",
     )
+    parser.add_argument(
+        "--recipe-id",
+        type=str,
+        default=None,
+        help="Validate a single recipe by food_id or UUID. If not found by ID, will try to search by dish name.",
+    )
+    parser.add_argument(
+        "--dish-name",
+        type=str,
+        default=None,
+        help="Validate a single recipe by dish name (Vietnamese).",
+    )
 
     args = parser.parse_args()
 
@@ -898,20 +1036,39 @@ async def main():
     logger.info("Recipe Macros Validation Script")
     logger.info("=" * 60)
     logger.info(
-        "Options: limit=%s, batch_size=%s, dry_run=%s",
+        "Options: limit=%s, batch_size=%s, dry_run=%s, recipe_id=%s, dish_name=%s",
         args.limit,
         args.batch_size,
         args.dry_run,
+        _sanitize_text(args.recipe_id) if args.recipe_id else None,
+        _sanitize_text(args.dish_name) if args.dish_name else None,
     )
 
     client_manager = init_client_manager()
     base_lm = init_base_lm(model_override=args.lm_model, api_key_override=args.lm_api_key)
 
-    recipes = await fetch_recipes(client_manager, limit=args.limit)
-    if not recipes:
-        logger.info("No recipes available for validation. Exiting.")
-        await client_manager.close_clients()
-        return
+    # If recipe_id or dish_name is provided, validate only that recipe
+    if args.recipe_id or args.dish_name:
+        recipe = await fetch_recipe_by_id_or_name(
+            client_manager,
+            recipe_id=args.recipe_id,
+            dish_name=args.dish_name,
+        )
+        if not recipe:
+            logger.error("Recipe not found. Exiting.")
+            await client_manager.close_clients()
+            return
+        recipes = [recipe]
+        dish_name_safe = _sanitize_text(recipe.get("dish_name"))
+        food_id_safe = _sanitize_text(recipe.get("food_id"))
+        logger.info("Validating single recipe: %s (ID: %s)", 
+                   dish_name_safe, food_id_safe)
+    else:
+        recipes = await fetch_recipes(client_manager, limit=args.limit)
+        if not recipes:
+            logger.info("No recipes available for validation. Exiting.")
+            await client_manager.close_clients()
+            return
 
     start_time = datetime.now()
     stats = await process_recipes(

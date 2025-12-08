@@ -316,26 +316,48 @@ async def log_meal_e2e_tool(
             
             # Build meal description
             meal_items = [recipe.get("dish_name", "Lunch")] if recipe else []
-            meal_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
             
-            # Add main recipe macros
-            if recipe:
-                recipe_macros = lunch.get("macros", {})
-                for k in meal_macros:
-                    meal_macros[k] += recipe_macros.get(k, 0.0) * servings
-            
-            # Add accompaniments
-            for acc in accompaniments:
-                acc_recipe = acc.get("recipe", {})
-                acc_servings = acc.get("servings", 1.0)
-                if acc_recipe:
-                    meal_items.append(acc_recipe.get("dish_name", "Side dish"))
-                    acc_macros = acc.get("macros", {})
+            # CRITICAL: Use macros_total if available (includes all accompaniments), otherwise calculate from recipe + accompaniments
+            meal_macros = lunch.get("macros_total", {})
+            if not meal_macros or all(v == 0.0 for v in meal_macros.values()):
+                # Fallback: Calculate from recipe + accompaniments
+                meal_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                
+                # Add main recipe macros
+                if recipe:
+                    recipe_macros = lunch.get("macros", {})
+                    if not recipe_macros:
+                        # Try to get from recipe object directly
+                        from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+                        recipe_macros = _get_meal_macros(recipe)
                     for k in meal_macros:
-                        meal_macros[k] += acc_macros.get(k, 0.0) * acc_servings
+                        meal_macros[k] += recipe_macros.get(k, 0.0) * servings
+                
+                # Add accompaniments
+                for acc in accompaniments:
+                    acc_recipe = acc.get("recipe", {})
+                    acc_servings = acc.get("servings", 1.0)
+                    if acc_recipe:
+                        meal_items.append(acc_recipe.get("dish_name", "Side dish"))
+                        acc_macros = acc.get("macros", {})
+                        if not acc_macros:
+                            from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+                            acc_macros = _get_meal_macros(acc_recipe)
+                        for k in meal_macros:
+                            meal_macros[k] += acc_macros.get(k, 0.0) * acc_servings
+            else:
+                # Use macros_total, but still build meal_items list for description
+                for acc in accompaniments:
+                    acc_recipe = acc.get("recipe", {})
+                    if acc_recipe:
+                        meal_items.append(acc_recipe.get("dish_name", "Side dish"))
             
             if meal_items:
                 meal_desc = f"Lunch: {', '.join(meal_items)}"
+                logging.debug(
+                    f"LOG_MEAL_LUNCH: Using macros_total={meal_macros} | "
+                    f"accompaniments_count={len(accompaniments)}"
+                )
                 async for result in _log_meal_with_macros(
                     tree_data, client_manager, user_id, meal_desc, meal_macros
                 ):
@@ -356,26 +378,48 @@ async def log_meal_e2e_tool(
             
             # Build meal description
             meal_items = [recipe.get("dish_name", "Dinner")] if recipe else []
-            meal_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
             
-            # Add main recipe macros
-            if recipe:
-                recipe_macros = dinner.get("macros", {})
-                for k in meal_macros:
-                    meal_macros[k] += recipe_macros.get(k, 0.0) * servings
-            
-            # Add accompaniments
-            for acc in accompaniments:
-                acc_recipe = acc.get("recipe", {})
-                acc_servings = acc.get("servings", 1.0)
-                if acc_recipe:
-                    meal_items.append(acc_recipe.get("dish_name", "Side dish"))
-                    acc_macros = acc.get("macros", {})
+            # CRITICAL: Use macros_total if available (includes all accompaniments), otherwise calculate from recipe + accompaniments
+            meal_macros = dinner.get("macros_total", {})
+            if not meal_macros or all(v == 0.0 for v in meal_macros.values()):
+                # Fallback: Calculate from recipe + accompaniments
+                meal_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                
+                # Add main recipe macros
+                if recipe:
+                    recipe_macros = dinner.get("macros", {})
+                    if not recipe_macros:
+                        # Try to get from recipe object directly
+                        from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+                        recipe_macros = _get_meal_macros(recipe)
                     for k in meal_macros:
-                        meal_macros[k] += acc_macros.get(k, 0.0) * acc_servings
+                        meal_macros[k] += recipe_macros.get(k, 0.0) * servings
+                
+                # Add accompaniments
+                for acc in accompaniments:
+                    acc_recipe = acc.get("recipe", {})
+                    acc_servings = acc.get("servings", 1.0)
+                    if acc_recipe:
+                        meal_items.append(acc_recipe.get("dish_name", "Side dish"))
+                        acc_macros = acc.get("macros", {})
+                        if not acc_macros:
+                            from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+                            acc_macros = _get_meal_macros(acc_recipe)
+                        for k in meal_macros:
+                            meal_macros[k] += acc_macros.get(k, 0.0) * acc_servings
+            else:
+                # Use macros_total, but still build meal_items list for description
+                for acc in accompaniments:
+                    acc_recipe = acc.get("recipe", {})
+                    if acc_recipe:
+                        meal_items.append(acc_recipe.get("dish_name", "Side dish"))
             
             if meal_items:
                 meal_desc = f"Dinner: {', '.join(meal_items)}"
+                logging.debug(
+                    f"LOG_MEAL_DINNER: Using macros_total={meal_macros} | "
+                    f"accompaniments_count={len(accompaniments)}"
+                )
                 async for result in _log_meal_with_macros(
                     tree_data, client_manager, user_id, meal_desc, meal_macros
                 ):
@@ -387,10 +431,18 @@ async def log_meal_e2e_tool(
                             total_logged_macros[k] += consumed.get(k, 0.0)
                         meals_logged.append("dinner")
         
-        # Summary
+        # Summary with detailed macros
+        logging.debug(
+            f"LOG_MEAL_SUMMARY: meals_logged={len(meals_logged)} | "
+            f"total_kcal={total_logged_macros['kcal']:.1f} | "
+            f"total_protein={total_logged_macros['protein_g']:.1f}g | "
+            f"total_fat={total_logged_macros['fat_g']:.1f}g | "
+            f"total_carb={total_logged_macros['carb_g']:.1f}g"
+        )
         yield Response(
             f"✅ Logged {len(meals_logged)} meal(s) from plan: {', '.join(meals_logged)}. "
-            f"Total: {total_logged_macros['kcal']:.0f} kcal | {total_logged_macros['protein_g']:.0f}g protein"
+            f"Total: {total_logged_macros['kcal']:.0f} kcal | {total_logged_macros['protein_g']:.0f}g protein | "
+            f"{total_logged_macros['fat_g']:.0f}g fat | {total_logged_macros['carb_g']:.0f}g carbs"
         )
         return
     

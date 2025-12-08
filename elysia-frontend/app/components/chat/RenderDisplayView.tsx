@@ -13,6 +13,8 @@ import ProductView from "./displays/Product/ProductView";
 import ThreadView from "./displays/MessageThread/ThreadView";
 import DocumentView from "./displays/Document/DocumentView";
 import TicketView from "./displays/Ticket/TicketView";
+import RecipeDetail from "./displays/meal_agent/RecipeDetail";
+import { RecipeCardPayload } from "@/app/types/displays";
 
 import { MdOutlineDataArray } from "react-icons/md";
 import { motion, AnimatePresence } from "framer-motion";
@@ -97,6 +99,8 @@ const RenderDisplayView: React.FC<RenderDisplayViewProps> = ({
         return <ThreadView thread={payload as ThreadPayload} />;
       case "document":
         return <DocumentView document={payload as DocumentPayload} />;
+      case "recipe_detail":
+        return <RecipeDetail recipe={payload as RecipeCardPayload} />;
     }
   };
 

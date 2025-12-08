@@ -14,6 +14,25 @@ from elysia.api.core.log import logger
 router = APIRouter()
 
 
+def _logged_at_to_iso(value) -> str:
+    """Normalize logged_at to RFC3339-like string for consistent serialization."""
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    if isinstance(value, str):
+        # Already a string; best effort keep only seconds precision
+        return value
+    return ""
+
+
+def _date_part(value) -> str:
+    """Extract YYYY-MM-DD regardless of datetime or string input."""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, str):
+        return value[:10]
+    return ""
+
+
 @router.get("/{user_id}/saved_trees")
 async def get_saved_trees(
     user_id: str,
@@ -221,7 +240,10 @@ async def get_meal_history(
             # Aggregate daily totals
             daily_totals: dict[str, dict[str, float]] = {}
             for log in logs:
-                date = log.get("logged_at", "")[:10]  # Extract date part
+                logged_at_raw = log.get("logged_at")
+                logged_at_iso = _logged_at_to_iso(logged_at_raw)
+                log["logged_at"] = logged_at_iso  # ensure consistent type for frontend
+                date = _date_part(logged_at_raw)
                 if date not in daily_totals:
                     daily_totals[date] = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
                 
