@@ -62,7 +62,7 @@ def _record_missing_macro_state(tree_data: TreeData, recipe_ids: List[str]) -> N
             [
                 {
                     "recipe_ids": recipe_ids,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ],
         )
@@ -80,7 +80,7 @@ def _clear_missing_macro_state(tree_data: TreeData) -> None:
                 {
                     "recipe_ids": [],
                     "status": "resolved",
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ],
         )
@@ -313,6 +313,31 @@ def _select_carb_with_validation(
     
     # If combined rice dish, use default white rice
     if _is_rice_dish(carb_recipe) and is_combined:
+        return _create_default_white_rice_recipe(), False, False
+    
+    # For lunch/dinner: allow rice first; if not rice but is noodle/soup, accept; otherwise fallback to rice
+    if meal_slot in ("lunch", "dinner"):
+        if _is_rice_dish(carb_recipe):
+            return carb_recipe, is_combined, is_noodle
+        if _is_noodle_soup(carb_recipe):
+            # Reject “ingredient-only” noodles (e.g., plain fresh noodles) by checking calories/protein
+            macros = carb_recipe.get("macros_per_serving", {}) or {}
+            kcal = macros.get("kcal", 0) or 0
+            protein = macros.get("protein_g", 0) or 0
+            if kcal < 120 or protein < 5:
+                logging.info(
+                    f"{meal_slot.capitalize()} noodle carb '{carb_recipe.get('dish_name', 'Unknown')}' "
+                    f"too light (kcal={kcal}, protein={protein}), falling back to default white rice."
+                )
+                return _create_default_white_rice_recipe(), False, False
+            return carb_recipe, is_combined, True  # allow bún/phở/mì as carb
+        if is_combined and not _is_rice_dish(carb_recipe):
+            # Combined but not rice (e.g., salad phở) => serve with white rice base
+            return _create_default_white_rice_recipe(), False, False
+        logging.info(
+            f"{meal_slot.capitalize()} carb '{carb_recipe.get('dish_name', 'Unknown')}' is not rice/noodle; "
+            "falling back to default white rice to keep Vietnamese meal pattern."
+        )
         return _create_default_white_rice_recipe(), False, False
     
     return carb_recipe, is_combined, is_noodle
@@ -1342,6 +1367,15 @@ async def plan_day_e2e_tool(
                         logging.warning("Fallback: forced lower-calorie breakfast to meet caps.")
                         break
         
+        # Reject hotpot for breakfast
+        if breakfast and _is_hotpot(breakfast):
+            logging.warning(f"Breakfast '{breakfast.get('dish_name', 'Unknown')}' is hotpot; reverting to default light breakfast.")
+            breakfast = None
+            breakfast_macros = {"kcal": 0, "protein_g": 0, "fat_g": 0, "carb_g": 0}
+            breakfast_kcal = 0
+            breakfast_protein = 0
+            breakfast_fat = 0
+        
         # Update remaining targets after breakfast
         if remaining_targets and breakfast:
             breakfast_macros = _get_meal_macros(breakfast)
@@ -1616,28 +1650,31 @@ async def plan_day_e2e_tool(
                         "carb_g": breakfast_macros.get("carb_g", 0.0) + current_lunch_macros.get("carb_g", 0.0),
                     }
                     
-                    # Add supplementary dishes
-                    # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
-                    # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
-                    if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                        effective_meal_max_kcal = lunch_max_kcal * 1.4  # Allow 40% when deficit is very high
-                    elif is_lunch_noodle or is_lunch_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                        effective_meal_max_kcal = lunch_max_kcal * 1.3  # Allow 30% for combined/noodle or medium deficit
+                    # Add supplementary dishes (skip if standalone noodle)
+                    if is_lunch_noodle:
+                        logging.debug("LUNCH_SUPP_SKIP: noodle dish selected; skipping supplementary dishes.")
+                        supplementary_dishes = []
                     else:
-                        effective_meal_max_kcal = lunch_max_kcal * 1.2  # Normal case: 20%
-                    supplementary_dishes = add_supplementary_dishes(
-                        "lunch",
-                        current_lunch_dishes,
-                        remaining_targets,
-                        targets,
-                        recipes,
-                        excluded,
-                        recent_recipe_ids_set,
-                        effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
-                        macro_tolerance_percent,
-                        total_consumed_so_far=total_consumed_so_far,  # CRITICAL: Pass total consumed for accurate excess detection
-                    )
-                    
+                        # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
+                        # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
+                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
+                            effective_meal_max_kcal = lunch_max_kcal * 1.4  # Allow 40% when deficit is very high
+                        elif is_lunch_noodle or is_lunch_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
+                            effective_meal_max_kcal = lunch_max_kcal * 1.3  # Allow 30% for combined/noodle or medium deficit
+                        else:
+                            effective_meal_max_kcal = lunch_max_kcal * 1.2  # Normal case: 20%
+                        supplementary_dishes = add_supplementary_dishes(
+                            "lunch",
+                            current_lunch_dishes,
+                            remaining_targets,
+                            targets,
+                            recipes,
+                            excluded,
+                            recent_recipe_ids_set,
+                            effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
+                            macro_tolerance_percent,
+                            total_consumed_so_far=total_consumed_so_far,  # CRITICAL: Pass total consumed for accurate excess detection
+                        )
                     if not supplementary_dishes:
                         logging.debug(f"LUNCH_SUPP_ITERATION_{iteration + 1}: No more supplementary dishes found, stopping")
                         break  # No more dishes to add
@@ -1656,7 +1693,6 @@ async def plan_day_e2e_tool(
                         # Update remaining_targets
                         dish_macros = _get_meal_macros(supp_dish)
                         dish_name = supp_dish.get("dish_name", "Unknown")
-                        # Simplified logging - only log dish name and macros
                         logging.debug(
                             f"LUNCH_SUPP_ADD: {dish_name} | "
                             f"kcal={dish_macros.get('kcal', 0):.1f} | "
@@ -2226,27 +2262,31 @@ async def plan_day_e2e_tool(
                         "carb_g": total_consumed_carb,
                     }
                     
-                    # Add supplementary dishes
-                    # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
-                    # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
-                    if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                        effective_meal_max_kcal = dinner_max_kcal * 1.4  # Allow 40% when deficit is very high
-                    elif is_dinner_noodle or is_dinner_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                        effective_meal_max_kcal = dinner_max_kcal * 1.3  # Allow 30% for combined/noodle or medium deficit
+                    # Add supplementary dishes (skip if standalone noodle)
+                    if is_dinner_noodle:
+                        logging.debug("DINNER_SUPP_SKIP: noodle dish selected; skipping supplementary dishes.")
+                        supplementary_dishes = []
                     else:
-                        effective_meal_max_kcal = dinner_max_kcal * 1.2  # Normal case: 20%
-                    supplementary_dishes = add_supplementary_dishes(
-                        "dinner",
-                        current_dinner_dishes,
-                        remaining_targets,
-                        targets,
-                        recipes,
-                        excluded,
-                        recent_recipe_ids_set,
-                        effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
-                        macro_tolerance_percent,
-                        total_consumed_so_far=total_consumed_so_far_dinner,  # CRITICAL: Pass total consumed for accurate excess detection
-                    )
+                        # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
+                        # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
+                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
+                            effective_meal_max_kcal = dinner_max_kcal * 1.4  # Allow 40% when deficit is very high
+                        elif is_dinner_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
+                            effective_meal_max_kcal = dinner_max_kcal * 1.3  # Allow 30% for combined or medium deficit
+                        else:
+                            effective_meal_max_kcal = dinner_max_kcal * 1.2  # Normal case: 20%
+                        supplementary_dishes = add_supplementary_dishes(
+                            "dinner",
+                            current_dinner_dishes,
+                            remaining_targets,
+                            targets,
+                            recipes,
+                            excluded,
+                            recent_recipe_ids_set,
+                            effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
+                            macro_tolerance_percent,
+                            total_consumed_so_far=total_consumed_so_far_dinner,  # CRITICAL: Pass total consumed for accurate excess detection
+                        )
                     
                     if not supplementary_dishes:
                         logging.debug(f"DINNER_SUPP_ITERATION_{iteration + 1}: No more supplementary dishes found, stopping")
@@ -3190,9 +3230,9 @@ async def plan_day_e2e_tool(
                         if dish_name:
                             selected_dish_names.append(dish_name)
                     
+                    constraints = constraints_dict  # reuse diet/allergen constraints for deficit suggestions
+                    # generate_llm_draft signature does not take meal_slot or query here
                     additional_suggestions = await generate_llm_draft(
-                        meal_slot="general",
-                        query=llm_suggestion_query,
                         meal_history=selected_dish_names,
                         constraints=constraints,
                         base_lm=base_lm,

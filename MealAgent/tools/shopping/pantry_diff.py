@@ -2,7 +2,7 @@
 Subtract pantry items from shopping list to get final shopping list.
 """
 from typing import AsyncGenerator, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from elysia.tree.objects import TreeData
@@ -380,7 +380,7 @@ async def pantry_diff_tool(
             "list_id": list_id,
             "user_id": plan_user_id or user_id,
             "plan_id": plan_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         if plan_id:

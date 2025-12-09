@@ -135,29 +135,36 @@ const useTypewriter = (text: string, speed: number = 30, isStreaming: boolean = 
   return { displayedText, isTyping };
 };
 
-const StreamingTextDisplay: React.FC<StreamingTextDisplayProps> = ({ 
+const StreamingTextDisplay: React.FC<StreamingTextDisplayProps> = ({
   payload,
-  isStreaming = false 
+  isStreaming = false,
 }) => {
+  // Non-streaming (history or finished): show all lines, no collapse, no cursor
+  if (!isStreaming) {
+    return (
+      <div className="w-full flex flex-col gap-2 text-sm text-primary whitespace-pre-line leading-relaxed">
+        {payload.map((item, idx) => (
+          <p key={`${item.text}-${idx}`}>{item.text}</p>
+        ))}
+      </div>
+    );
+  }
+
   const [collapsed, setCollapsed] = useState(true);
   const latestText = payload.length > 0 ? payload[payload.length - 1].text : "";
   const previousTextRef = useRef("");
-  
+
   // Detect if text is actually streaming (growing)
-  const isActuallyStreaming = isStreaming && latestText.length > previousTextRef.current.length;
-  
+  const isActuallyStreaming =
+    isStreaming && latestText.length > previousTextRef.current.length;
+
   useEffect(() => {
     previousTextRef.current = latestText;
   }, [latestText]);
 
-  // For streaming, show full text immediately but with smooth updates
-  // For completed text, use typewriter only if it's a new message
-  const shouldUseTypewriter = !isActuallyStreaming && latestText.length > 0;
-  const { displayedText, isTyping } = useTypewriter(
-    latestText,
-    shouldUseTypewriter ? 20 : 0, // Only typewriter for new completed messages
-    isActuallyStreaming
-  );
+  // For streaming: show latest text with typewriter-like smoothness
+  const displayedText = latestText;
+  const isTyping = false;
 
   const triggerCollapse = () => {
     setCollapsed((prev) => !prev);

@@ -52,7 +52,7 @@ def _record_missing_macro_state(tree_data: TreeData, recipe_ids: List[str]) -> N
             [
                 {
                     "recipe_ids": recipe_ids,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ],
         )
@@ -70,7 +70,7 @@ def _clear_missing_macro_state(tree_data: TreeData) -> None:
                 {
                     "recipe_ids": [],
                     "status": "resolved",
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ],
         )
@@ -2996,7 +2996,7 @@ async def plan_week_e2e_tool(
             "micronutrients": micronutrients,
             "validation": validation,
             "variety_score": variety_score,
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         if plan_id:
             plan_output["plan_id"] = plan_id

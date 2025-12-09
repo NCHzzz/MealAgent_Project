@@ -19,6 +19,7 @@ import TicketsDisplay from "./displays/Ticket/TicketDisplay";
 import ProductDisplay from "./displays/Product/ProductDisplay";
 import ThreadDisplay from "./displays/MessageThread/ThreadDisplay";
 import SingleMessageDisplay from "./displays/MessageThread/SingleMessageDisplay";
+import { TextPayload, ResponsePayload } from "@/app/types/chat";
 import BoringGenericDisplay from "./displays/Generic/BoringGeneric";
 import AggregationDisplay from "./displays/ChartTable/AggregationDisplay";
 import DocumentDisplay from "./displays/Document/DocumentDisplay";
@@ -62,7 +63,9 @@ const RenderDisplay: React.FC<RenderDisplayProps> = ({
     handleResultPayloadChange(type, payload, currentCollectionName);
   };
 
-  switch (payload.type) {
+  const payloadType = payload.type as string;
+
+  switch (payloadType) {
     case "ticket":
       return (
         <TicketsDisplay
@@ -101,6 +104,38 @@ const RenderDisplay: React.FC<RenderDisplayProps> = ({
           payload={payload.objects as SingleMessagePayload[]}
         />
       );
+    case "text": {
+      // Plain text payloads (e.g., cached text_response when revisiting chat)
+      const texts = (payload.objects as TextPayload[]) || [];
+      return (
+        <div
+          key={`${keyBase}-text`}
+          className="space-y-2 text-sm text-primary whitespace-pre-line leading-relaxed"
+        >
+          {texts.map((o, i) => (
+            <p key={`${keyBase}-text-${i}`}>{o.text}</p>
+          ))}
+        </div>
+      );
+    }
+    case "response": {
+      // Render plain text/summary responses (e.g., text_response in explain)
+      const resp = payload as unknown as ResponsePayload;
+      const objects = (resp.objects as TextPayload[]) || [];
+      return (
+        <div
+          key={`${keyBase}-response`}
+          className="space-y-2 text-sm text-primary whitespace-pre-line leading-relaxed"
+        >
+          {resp.metadata?.title && (
+            <p className="font-semibold text-base">{resp.metadata.title}</p>
+          )}
+          {objects.map((o, i) => (
+            <p key={`${keyBase}-resp-${i}`}>{o.text}</p>
+          ))}
+        </div>
+      );
+    }
     // MealAgent custom displays
     case "meal_plan":
       return (
@@ -169,6 +204,35 @@ const RenderDisplay: React.FC<RenderDisplayProps> = ({
         const firstObj = objects[0];
         const metadata = payload.metadata || {};
 
+        // gap_fill suggestions: render RecipeCard (keeps other payloads intact)
+        if (
+          firstObj.deficit_macros &&
+          Array.isArray(firstObj.suggestions)
+        ) {
+          const suggestionRecipes = firstObj.suggestions.map((s: any) => ({
+            food_id: s.food_id ?? s.foodId ?? s.dish_name ?? s.dishName ?? "",
+            dish_name: s.dish_name ?? s.dishName ?? "Món ăn",
+            dish_type: s.dish_type,
+            serving_size: s.serving_size,
+            macros_per_serving:
+              s.macros_per_serving ?? s.macros ?? s.macros_total ?? undefined,
+            image_link: s.image_link ?? s.image_url ?? s.thumbnail ?? "",
+            cooking_time: s.cooking_time,
+            diet_type: s.diet_type,
+            allergens: s.allergens,
+            ingredients_with_qty: s.ingredients_with_qty,
+          }));
+          return (
+            <RecipeCard
+              key={`${keyBase}-gap-fill-suggestions`}
+              recipes={suggestionRecipes as RecipeCardPayload[]}
+              handleResultPayloadChange={
+                handleResultPayloadChangeWithCollectionName as any
+              }
+            />
+          );
+        }
+
         // Detect meal plan from metadata or object structure
         if (
           metadata.plan_type === "day" ||
@@ -181,6 +245,44 @@ const RenderDisplay: React.FC<RenderDisplayProps> = ({
               key={`${keyBase}-meal-plan-auto`}
               plans={objects as MealPlanPayload[]}
               handleResultPayloadChange={handleResultPayloadChangeWithCollectionName}
+            />
+          );
+        }
+
+        // Detect gap_fill snack suggestions (deficit_macros + suggestions list)
+        if (
+          firstObj.deficit_macros &&
+          Array.isArray(firstObj.suggestions)
+        ) {
+          const suggestionRecipes = firstObj.suggestions.map(
+            (s: { [key: string]: any }) => ({
+              food_id: s.food_id ?? s.foodId ?? s.dish_name ?? s.dishName ?? "",
+              dish_name: s.dish_name ?? s.dishName ?? "Món ăn",
+              dish_type: s.dish_type,
+              serving_size: s.serving_size,
+              macros_per_serving:
+                s.macros_per_serving ??
+                s.macros ??
+                s.macros_total ??
+                undefined,
+              image_link:
+                s.image_link ??
+                s.image_url ??
+                s.thumbnail ??
+                "",
+              cooking_time: s.cooking_time,
+              diet_type: s.diet_type,
+              allergens: s.allergens,
+              ingredients_with_qty: s.ingredients_with_qty,
+            })
+          );
+          return (
+            <RecipeCard
+              key={`${keyBase}-gap-fill-suggestions`}
+              recipes={suggestionRecipes as RecipeCardPayload[]}
+              handleResultPayloadChange={
+                handleResultPayloadChangeWithCollectionName as any
+              }
             />
           );
         }

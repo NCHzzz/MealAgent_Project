@@ -38,6 +38,33 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
     return `${Math.round(value)} kcal`;
   };
 
+  type Macros = { kcal?: number; protein_g?: number; fat_g?: number; carb_g?: number };
+
+  const computeMealMacros = (meal: AnyMeal): {
+    kcal: number;
+    protein_g: number;
+    fat_g: number;
+    carb_g: number;
+    isTotal: boolean;
+    main?: Macros;
+    total?: Macros;
+  } => {
+    // Prefer explicitly provided totals, then per-meal, then recipe serving macros
+    const total: Macros | undefined = (meal as any)?.macros_total || (meal as any)?.macros;
+    const main: Macros | undefined =
+      (meal as any)?.macros_main || meal?.recipe?.macros_per_serving || (meal as any)?.macros;
+    const pick: Macros = total || main || {};
+    return {
+      kcal: pick?.kcal ?? 0,
+      protein_g: pick?.protein_g ?? 0,
+      fat_g: pick?.fat_g ?? 0,
+      carb_g: pick?.carb_g ?? 0,
+      isTotal: Boolean(total),
+      main,
+      total,
+    };
+  };
+
   const getRecipeImage = (meal?: AnyMeal) => {
     // Special case: Use default white rice image for default white rice recipe
     const dishName = meal?.recipe?.dish_name?.toLowerCase() || "";
@@ -95,10 +122,25 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
       type?: string;
       recipe?: { dish_name?: string; image_link?: string };
       servings?: number;
-      macros?: { kcal?: number };
+      macros?: { kcal?: number; protein_g?: number; fat_g?: number; carb_g?: number };
     }[]
   ) => {
     if (!items || items.length === 0) return null;
+
+    const computeMacros = (item: typeof items[number]) => {
+      const servings = item.servings ?? 1;
+      const baseMacros =
+        item.macros ||
+        (item.recipe as any)?.macros_per_serving ||
+        (item as any)?.macros_per_serving ||
+        {};
+      const kcal = (baseMacros.kcal || 0) * servings;
+      const protein_g = (baseMacros.protein_g || 0) * servings;
+      const fat_g = (baseMacros.fat_g || 0) * servings;
+      const carb_g = (baseMacros.carb_g || 0) * servings;
+      return { kcal, protein_g, fat_g, carb_g };
+    };
+
     return (
       <div className="mt-3 border-t border-secondary/10 pt-3 space-y-1">
         <p className="text-xs font-semibold uppercase text-secondary tracking-wide">
@@ -133,7 +175,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                     </span>
                   )}
                   {item.servings && <span className="text-secondary/50">•</span>}
-                  <span>{formatKcal(item.macros?.kcal || 0)}</span>
+                  <span>{formatKcal(computeMacros(item).kcal)}</span>
                 </div>
               </div>
             </div>
@@ -158,11 +200,6 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
         <CardHeader>
           <div className="flex justify-between items-center">
             <CardTitle className="text-lg">Daily Meal Plan</CardTitle>
-            <Badge
-              className={`ml-2 ${plan.validation?.valid ? "" : "bg-destructive/10 text-destructive"}`}
-            >
-              {plan.validation?.valid ? "Valid" : "Issues"}
-            </Badge>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -174,7 +211,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 onClick={(e) => openRecipeDetail(e, meal.recipe)}
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.1 }}
+                transition={{ duration: 0.15 }}
                 className="p-4 bg-background rounded-lg border border-secondary/10 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
               >
                 <div className="flex justify-between items-start mb-3">
@@ -202,32 +239,36 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 {/* Macros per meal */}
                 <div className="mt-3 pt-2 border-t border-secondary/5">
                   {(() => {
-                    const main = meal.macros_main || meal.recipe?.macros_per_serving || meal.macros;
-                    const total = meal.macros_total || meal.macros;
-                    const useTotal = total && total !== main && 
-                      (Math.abs((total?.kcal || 0) - (main?.kcal || 0)) > 1);
+                    const macros = computeMealMacros(meal);
+                    const showTotal =
+                      macros.total &&
+                      macros.main &&
+                      Math.abs((macros.total?.kcal || 0) - (macros.main?.kcal || 0)) > 1;
                     return (
                       <div className="space-y-1">
                         <div className="flex items-center gap-3 text-xs">
                           <span className="text-secondary/80 font-medium">Nutrition:</span>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="px-2 py-0.5 bg-primary/10 text-primary rounded font-medium">
-                              {formatKcal(main?.kcal || 0)}
+                              {formatKcal(macros.main?.kcal ?? macros.kcal)}
                             </span>
                             <span className="text-secondary">
-                              {formatMacro(main?.protein_g || 0)} P
+                              {formatMacro(macros.main?.protein_g ?? macros.protein_g)} P
                             </span>
                             <span className="text-secondary">
-                              {formatMacro(main?.fat_g || 0)} F
+                              {formatMacro(macros.main?.fat_g ?? macros.fat_g)} F
                             </span>
                             <span className="text-secondary">
-                              {formatMacro(main?.carb_g || 0)} C
+                              {formatMacro(macros.main?.carb_g ?? macros.carb_g)} C
                             </span>
                           </div>
                         </div>
-                        {useTotal && (
+                        {showTotal && (
                           <div className="text-[11px] text-secondary/70 pl-16">
-                            Total with sides: <span className="font-medium text-primary">{formatKcal(total?.kcal || 0)}</span>
+                            Total with sides:{" "}
+                            <span className="font-medium text-primary">
+                              {formatKcal(macros.total?.kcal || macros.kcal)}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -315,18 +356,6 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
         <CardHeader>
           <div className="flex justify-between items-center">
             <CardTitle className="text-lg">Weekly Meal Plan</CardTitle>
-            <div className="flex gap-2">
-              {plan.variety_score !== undefined && (
-                <Badge className="text-xs border border-secondary/20">
-                  Variety: {plan.variety_score.toFixed(1)}/100
-                </Badge>
-              )}
-              <Badge
-                className={`text-xs ${plan.validation?.valid ? "" : "bg-destructive/10 text-destructive"}`}
-              >
-                {plan.validation?.valid ? "Valid" : "Issues"}
-              </Badge>
-            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -376,22 +405,25 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                               </p>
                             )}
                             {/* Nutrition info */}
-                            {meal.macros && (
-                              <div className="flex items-center gap-2 text-xs mt-1 flex-wrap">
-                                <span className="px-2 py-0.5 bg-primary/10 text-primary rounded font-medium">
-                                  {formatKcal(meal.macros.kcal || 0)}
-                                </span>
-                                <span className="text-secondary">
-                                  {formatMacro(meal.macros.protein_g || 0)} P
-                                </span>
-                                <span className="text-secondary">
-                                  {formatMacro(meal.macros.fat_g || 0)} F
-                                </span>
-                                <span className="text-secondary">
-                                  {formatMacro(meal.macros.carb_g || 0)} C
-                                </span>
-                              </div>
-                            )}
+                            {(() => {
+                              const macros = computeMealMacros(meal);
+                              return (
+                                <div className="flex items-center gap-2 text-xs mt-1 flex-wrap">
+                                  <span className="px-2 py-0.5 bg-primary/10 text-primary rounded font-medium">
+                                    {formatKcal(macros.kcal)}
+                                  </span>
+                                  <span className="text-secondary">
+                                    {formatMacro(macros.protein_g)} P
+                                  </span>
+                                  <span className="text-secondary">
+                                    {formatMacro(macros.fat_g)} F
+                                  </span>
+                                  <span className="text-secondary">
+                                    {formatMacro(macros.carb_g)} C
+                                  </span>
+                                </div>
+                              );
+                            })()}
                           </div>
                           {renderMealImage(getRecipeImage(meal), meal.recipe?.dish_name)}
                         </div>
@@ -446,30 +478,6 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 </div>
               </div>
             )}
-            {/* Validation Details */}
-            {plan.validation && (
-              <div className="mt-3 pt-3 border-t border-secondary/10 space-y-1">
-                {!plan.validation.valid && (
-                  <>
-                    {plan.validation.macro_validation && !plan.validation.macro_validation.valid && (
-                      <div className="text-xs text-destructive">
-                        ⚠ Macro violations: {plan.validation.macro_validation.violations?.length || 0} issue(s)
-                      </div>
-                    )}
-                    {plan.validation.constraint_validation && !plan.validation.constraint_validation.valid && (
-                      <div className="text-xs text-destructive">
-                        ⚠ Constraint violations: {plan.validation.constraint_validation.violations?.length || 0} issue(s)
-                      </div>
-                    )}
-                    {plan.validation.variety_validation && !plan.validation.variety_validation.valid && (
-                      <div className="text-xs text-destructive">
-                        ⚠ Variety score {plan.variety_score?.toFixed(1) || 0}/100 below minimum
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>
@@ -483,11 +491,13 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           key={idx}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: idx * 0.1 }}
+          transition={{ duration: 0.15 }}
         >
-          {plan.plan_type === "day"
-            ? renderDailyPlan(plan)
-            : renderWeeklyPlan(plan)}
+          <div className="mx-auto w-full max-w-6xl">
+            {plan.plan_type === "day"
+              ? renderDailyPlan(plan)
+              : renderWeeklyPlan(plan)}
+          </div>
         </motion.div>
       ))}
     </DisplayPagination>

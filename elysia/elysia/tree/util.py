@@ -1,4 +1,5 @@
 import uuid
+import logging
 
 # dspy requires a 'base' LM but this should not be used
 import dspy
@@ -461,6 +462,15 @@ class DecisionNode:
                     lm=base_lm,
                 )
 
+            # Guard against missing/None function_name (LLM sometimes returns empty)
+            if not output.function_name:
+                # Default to the first available tool to avoid hard failure
+                output.function_name = available_tools[0]
+                logging.warning(
+                    "Decision node returned empty action; defaulting to '%s'",
+                    output.function_name,
+                )
+
             if output.function_name.startswith("'") and output.function_name.endswith(
                 "'"
             ):
@@ -660,6 +670,16 @@ async def get_follow_up_suggestions(
             "which they may find interesting or create relevant insights to the already retrieved data. "
             "Or, questions which span across other collections, but are still relevant to the user's prompt."
         )
+
+    # Enforce serving-size wording for snack/deficit explanations:
+    # If environment contains gap_fill_tool suggestions/deficits, avoid fractional servings (0.1, 0.2, 0.8).
+    # Always describe calories and macros per 1 serving; if suggesting smaller portions, say 'ăn một phần (có thể bớt nếu thấy nhiều)'
+    # instead of giving numeric fractions.
+    context += (
+        " For gap_fill snack suggestions: do NOT compute or present fractional servings like 0.1/0.2. "
+        "Always describe calories/macros per 1 serving. If you want to suggest eating less, say 'ăn một phần, có thể bớt nếu thấy nhiều' "
+        "without numeric fractions."
+    )
 
     # get prediction
     prediction = await follow_up_suggestor.aforward(

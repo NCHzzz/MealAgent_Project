@@ -47,6 +47,70 @@ from elysia.tools.text.text import CitedSummarizer, FakeTextResponse
 from MealAgent.tree.config import MEAL_AGENT_TOOLS
 
 
+def _contains_any(needle: str, keywords: list[str]) -> bool:
+    """Utility helper to check if any keyword is present in the string."""
+    return any(keyword in needle for keyword in keywords)
+
+
+def _detect_intent_hint(user_prompt: str | None) -> Optional[str]:
+    """
+    Lightweight heuristic router derived from requirements/design docs.
+    Returns a hint string (e.g., 'optimization:deficit_gap_fill') that we expose
+    to the tree environment so the decision agent can align with expectations.
+    """
+    if not user_prompt:
+        return None
+
+    lowered = user_prompt.lower()
+
+    deficit_keywords = [
+        "thiếu",  # Vietnamese "missing" / "deficit"
+        "bổ sung",
+        "còn thiếu",
+        "còn thiếu khoảng",
+        "thêm ",
+        "+",
+        "kcal",
+        "calo",
+        "cal",
+        "gap fill",
+        "đồ ăn nhẹ",
+        "snack",
+        "ăn thêm",
+        "post workout",
+    ]
+    if _contains_any(lowered, deficit_keywords):
+        return "optimization:deficit_gap_fill"
+
+    plan_keywords = [
+        "thực đơn",
+        "kế hoạch",
+        "meal plan",
+        "plan cho",
+        "plan tuần",
+        "plan ngày",
+        "gợi ý bữa",
+        "thực đơn tuần",
+        "thực đơn ngày",
+    ]
+    if _contains_any(lowered, plan_keywords):
+        return "planning:new_plan"
+
+    pantry_keywords = ["pantry", "tủ", "đồ khô", "shopping", "mua sắm", "chợ", "hết nguyên liệu"]
+    if _contains_any(lowered, pantry_keywords):
+        return "pantry:inventory"
+
+    cooking_keywords = ["nấu", "cách làm", "cook", "recipe steps", "hướng dẫn", "làm sao", "cooking"]
+    if _contains_any(lowered, cooking_keywords):
+        return "cooking:steps"
+
+    logging_keywords = ["đã ăn", "vừa ăn", "log", "ghi lại bữa", "nhập bữa", "ăn gì"]
+    if _contains_any(lowered, logging_keywords):
+        return "logging:meal_entry"
+
+    return None
+
+
 async def process_daily_planning_workflow(
     tree_data: TreeData,
     client_manager: ClientManager,
@@ -357,6 +421,24 @@ def build_meal_agent_tree(
         logging.debug("MealAgent: Tool optimization not yet implemented, loading all tools")
         tools_to_load = None
 
+    # Surface heuristic intent hints (derived from requirements/design)
+    intent_hint = _detect_intent_hint(user_prompt)
+    if intent_hint:
+        try:
+            tree.tree_data.environment.add_objects(
+                "intent_router",
+                "detected_intent",
+                [
+                    {
+                        "intent": intent_hint,
+                        "user_prompt": user_prompt,
+                    }
+                ],
+                metadata={"source": "heuristic"},
+            )
+        except Exception as exc:
+            logging.debug(f"MealAgent: unable to persist intent hint '{intent_hint}': {exc}")
+
     # Note: Do NOT hardcode intent keywords here. The decision agent should
     # infer completion based on environment signals written by tools (see
     # tool docstrings for reads/writes and completion hints).
@@ -366,7 +448,19 @@ def build_meal_agent_tree(
     if root_id not in tree.decision_nodes:
         tree.add_branch(
             branch_id=root_id,
-            instruction="Choose an action based on the user's request",
+            instruction=(
+                "Read the user's prompt AND any intent_router.detected_intent objects in the environment before acting. "
+                "Follow the requirements/design docs mapping: "
+                "- If prompt mentions deficit keywords (\"thiếu\", \"bổ sung\", \"+200 kcal\", \"snack\", \"ăn thêm\") "
+                "or environment intent hint == optimization:deficit_gap_fill → go to optimization branch (gap_fill/substitute/micros). "
+                "- If user explicitly requests a new plan ('thực đơn', 'kế hoạch', 'meal plan' cho ngày/tuần) → planning branch. "
+                "- Pantry/shopping inventory → pantry branch. "
+                "- Cooking steps/how to make → cooking branch. "
+                "- Meal logging ('vừa ăn', 'log', 'ghi lại bữa') → logging branch. "
+                "- Explanations/summary → explain branch. "
+                "- Recipe browsing without full plan → search branch. "
+                "If none match, ask the user a clarifying question before selecting a branch."
+            ),
             root=True,
         )
         logging.debug(f"MealAgent: successfully created root branch '{root_id}'")
@@ -389,17 +483,28 @@ def build_meal_agent_tree(
             "status": "Calculating nutrition...",
         },
         "planning": {
-            "instruction": "Assemble daily/weekly meal plans that meet the user's nutritional targets and preferences.",
+            "instruction": (
+                "Assemble NEW daily/weekly meal plans per requirements doc. "
+                "Only choose this when the user explicitly requests a 'thực đơn/kế hoạch' cho ngày/tuần "
+                "or asks for a comprehensive plan refresh. "
+                "If the user only needs to add calories/snacks or tweak a current plan, DO NOT use this branch—go to optimization."
+            ),
             "description": (
-                "Choose this branch when the user asks for meal suggestions or a 'thực đơn' for today/this week. "
-                "Reads profile/targets, constraints, and search results and produces a structured plan "
-                "(`plan_day_e2e_tool.plan` or `plan_week_e2e_tool.plan`)."
+                "Runs plan_day_e2e_tool / plan_week_e2e_tool to build a fresh plan using profile, targets, constraints, and ranked recipes. "
+                "Requires full planning workflow and typically yields `plan_day_e2e_tool.plan` objects."
             ),
             "status": "Planning meals...",
         },
         "optimization": {
-            "instruction": "Improve plans via gap fill, substitution, and micronutrient checks.",
-            "description": "Depends on an existing plan in the environment.",
+            "instruction": (
+                "Optimize EXISTING plans: gap fill snacks to cover deficits, substitute dishes, check micronutrients. "
+                "Triggered by prompts like 'thiếu/bổ sung X kcal', 'ăn thêm snack', 'fill the gap', or any request to tweak today's plan. "
+                "If intent_router hint == optimization:deficit_gap_fill, stay in this branch."
+            ),
+            "description": (
+                "Requires an existing plan/log context (environment plan_day_e2e_tool.plan or plan_week_e2e_tool.plan). "
+                "Prefer adding gap_fill_tool suggestions over rebuilding the full day."
+            ),
             "status": "Optimizing plan...",
         },
         "pantry": {

@@ -4,6 +4,8 @@ End-to-end gap fill tool: calculate deficits → suggest snacks → apply to pla
 from typing import AsyncGenerator, Dict, Any, List
 import copy
 import logging
+import re
+import random
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -13,6 +15,23 @@ from elysia import tool
 from MealAgent.tools.utils.planning_helpers import _get_meal_macros, sync_plan_to_weaviate
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 from MealAgent.tools.utils.profile_targets import ensure_macro_targets
+
+# Helper to extract image link from recipe object
+def _get_image_link(recipe: Dict[str, Any]) -> str:
+    return (
+        recipe.get("image_link")
+        or recipe.get("image_url")
+        or recipe.get("thumbnail")
+        or ""
+    )
+
+
+DEFAULT_TARGETS = {
+    "tdee_kcal": 2000.0,
+    "protein_g": 110.0,
+    "fat_g": 67.0,
+    "carb_g": 250.0,
+}
 
 
 def _calculate_plan_macros(plan: Dict[str, Any]) -> Dict[str, float]:
@@ -76,6 +95,132 @@ def _calculate_macro_fit(
     return (sum(fit_scores) / len(fit_scores) * 100.0) if fit_scores else 0.0
 
 
+def _extract_kcal_hint(text: str | None) -> float | None:
+    """Extract calorie hint (in kcal) from arbitrary text."""
+    if not text:
+        return None
+    lowered = text.lower()
+    match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(?:kcal|calo?|cal)", lowered)
+    if match:
+        try:
+            return float(match.group(1).replace(",", "."))
+        except ValueError:
+            return None
+    # fallback pattern for "thiếu 300" without unit
+    match = re.search(r"(thiếu|bổ sung|thêm)\s+(\d+(?:[\.,]\d+)?)", lowered)
+    if match:
+        try:
+            return float(match.group(2).replace(",", "."))
+        except ValueError:
+            return None
+    return None
+
+
+def _build_deficit_from_hint(kcal_hint: float, targets: Dict[str, Any] | None) -> Dict[str, float]:
+    """Build a deficit macro dict from a calorie hint and optional targets."""
+    if not targets:
+        targets = DEFAULT_TARGETS
+    tdee = float(targets.get("tdee_kcal") or DEFAULT_TARGETS["tdee_kcal"] or 2000.0)
+    tdee = max(tdee, 1.0)
+
+    def _ratio_from_targets(gram_value: float, kcal_per_gram: float) -> float:
+        if gram_value is None:
+            return 0.0
+        return max(0.0, min(0.6, (float(gram_value) * kcal_per_gram) / tdee))
+
+    protein_ratio = _ratio_from_targets(targets.get("protein_g"), 4.0) or 0.25
+    fat_ratio = _ratio_from_targets(targets.get("fat_g"), 9.0) or 0.30
+    carb_ratio = _ratio_from_targets(targets.get("carb_g"), 4.0) or 0.45
+
+    total_ratio = protein_ratio + fat_ratio + carb_ratio
+    if total_ratio == 0:
+        protein_ratio, fat_ratio, carb_ratio = 0.25, 0.30, 0.45
+        total_ratio = 1.0
+
+    protein_ratio /= total_ratio
+    fat_ratio /= total_ratio
+    carb_ratio /= total_ratio
+
+    return {
+        "kcal": kcal_hint,
+        "protein_g": (kcal_hint * protein_ratio) / 4.0,
+        "fat_g": (kcal_hint * fat_ratio) / 9.0,
+        "carb_g": (kcal_hint * carb_ratio) / 4.0,
+    }
+
+
+def _find_snack_suggestions(
+    client_manager: ClientManager,
+    deficit_macros: Dict[str, float],
+    top_k: int,
+) -> List[Dict[str, Any]]:
+    """
+    Query Recipe collection and score candidates against deficit macros.
+    - Prefer dish_type=snack but fall back to full corpus
+    - Shuffle to avoid the same repeated items
+    - Score by macro fit, then by kcal closeness to the deficit target
+    - Deduplicate by dish_name
+    """
+    client = client_manager.get_client()
+    recipe_collection = client.collections.get("Recipe")
+
+    kcal_target = max(0.0, float(deficit_macros.get("kcal", 0.0) or 0.0))
+    if kcal_target <= 0:
+        kcal_target = 300.0  # sensible default for a snack
+
+    def _fetch_candidates(limit: int = 400, snack_only: bool = True):
+        try:
+            if snack_only:
+                snack_filter = build_filters_from_where(
+                    {"path": ["dish_type"], "operator": "Equal", "valueString": "snack"}
+                )
+                return recipe_collection.query.fetch_objects(filters=snack_filter, limit=limit)
+            return recipe_collection.query.fetch_objects(limit=limit)
+        except Exception:
+            return recipe_collection.query.fetch_objects(limit=limit)
+
+    results = _fetch_candidates(limit=400, snack_only=True)
+    if not results.objects:
+        results = _fetch_candidates(limit=400, snack_only=False)
+
+    # Shuffle to avoid deterministic repetition, then cap to a workable set
+    objs = list(results.objects)
+    random.shuffle(objs)
+    objs = objs[:200]
+
+    scored_recipes = []
+    seen_names = set()
+    for obj in objs:
+        recipe = obj.properties
+        dish_name = recipe.get("dish_name", "").strip().lower()
+        if dish_name in seen_names:
+            continue
+        macros = recipe.get("macros_per_serving", {})
+        if isinstance(macros, dict) and macros.get("kcal"):
+            fit_score = _calculate_macro_fit(macros, deficit_macros)
+            if fit_score > 0:
+                kcal = float(macros.get("kcal", 0.0) or 0.0)
+                kcal_gap = abs(kcal_target - kcal)
+                scored_recipes.append(
+                    {
+                        **recipe,
+                        "fit_score": fit_score,
+                        "kcal_gap": kcal_gap,
+                        "image_link": _get_image_link(recipe),
+                    }
+                )
+                seen_names.add(dish_name)
+
+    # Sort: fit_score desc, then kcal_gap asc
+    scored_recipes.sort(
+        key=lambda x: (
+            -x.get("fit_score", 0.0),
+            x.get("kcal_gap", float("inf")),
+        )
+    )
+    return scored_recipes[:top_k]
+
+
 @tool
 async def gap_fill_tool(
     tree_data: TreeData,
@@ -107,69 +252,137 @@ async def gap_fill_tool(
     yield Response("🔍 Analyzing your meal plan for nutritional gaps...")
     
     try:
-        # Step 1: Load plan from Weaviate database (source of truth)
-        # IMPORTANT: Always load from database, not from environment cache
+        hidden_env = tree_data.environment.hidden_environment
+        if not user_id:
+            user_id = hidden_env.get("user_id") or hidden_env.get("profile_user_id")
+        if not plan_id:
+            plan_id = hidden_env.get("latest_plan_id")
+
+        user_prompt = getattr(tree_data, "user_prompt", "") or kwargs.get("query", "")
+        kcal_hint = _extract_kcal_hint(user_prompt)
+
+        # If user explicitly mentions kcal to add, prefer direct snack search mode.
+        force_snack_mode = kcal_hint is not None
+
+        # Step 1: Load plan from Weaviate database (source of truth) only when not forcing snack mode
         plan = None
         plan_source = None
-        
-        if plan_id:
-            # Load specific plan by plan_id
-            from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
-            plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
-            if plan:
-                plan_source = plan.get("plan_type", "day") + "_plan"
-            else:
-                yield Error(f"Plan {plan_id} not found in database.")
-                return
-        elif user_id:
-            # Load latest plan for user
-            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
-            # Try day plan first
-            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
-            if plan:
-                plan_source = "day_plan"
-            else:
-                # Try week plan
-                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+
+        if not force_snack_mode:
+            if plan_id:
+                from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+                plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
                 if plan:
-                    plan_source = "week_plan"
-        else:
-            # Fallback: try environment cache (only as last resort)
-            logging.warning("gap_fill_tool: No plan_id or user_id provided, trying environment cache")
-            try:
-                day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-                if day_plan_results and len(day_plan_results) > 0 and day_plan_results[0].get("objects"):
-                    plan = copy.deepcopy(day_plan_results[0]["objects"][0])
-                    plan_source = "plan_day_e2e_tool"
-                    yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+                    plan_source = plan.get("plan_type", "day") + "_plan"
                 else:
-                    week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-                    if week_plan_results and len(week_plan_results) > 0 and week_plan_results[0].get("objects"):
-                        plan = copy.deepcopy(week_plan_results[0]["objects"][0])
-                        plan_source = "plan_week_e2e_tool"
+                    logging.warning(f"gap_fill_tool: Plan {plan_id} not found in database, attempting fallbacks.")
+                    yield Response(f"⚠️ Plan {plan_id} not found in database, checking latest saved plans...")
+            if not plan and user_id:
+                from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+                if plan:
+                    plan_source = "day_plan"
+                else:
+                    plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+                    if plan:
+                        plan_source = "week_plan"
+            if not plan:
+                logging.info("gap_fill_tool: No plan found via database, trying environment cache")
+                try:
+                    day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+                    if day_plan_results and len(day_plan_results) > 0 and day_plan_results[0].get("objects"):
+                        plan = copy.deepcopy(day_plan_results[0]["objects"][0])
+                        plan_source = "plan_day_e2e_tool"
                         yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
-            except (IndexError, KeyError, TypeError) as e:
-                logging.warning(f"gap_fill_tool: Error accessing environment cache: {str(e)}")
-                plan = None
-        
+                    else:
+                        week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+                        if week_plan_results and len(week_plan_results) > 0 and week_plan_results[0].get("objects"):
+                            plan = copy.deepcopy(week_plan_results[0]["objects"][0])
+                            plan_source = "plan_week_e2e_tool"
+                            yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+                except (IndexError, KeyError, TypeError) as e:
+                    logging.warning(f"gap_fill_tool: Error accessing environment cache: {str(e)}")
+                    plan = None
+
+        plan_user_id = plan.get("user_id") if plan else user_id
+        effective_plan_id = plan.get("plan_id") if plan else plan_id
+
+        targets = None
+        targets_refreshed = False
+
+        if plan and not plan_user_id:
+            yield Error("Plan loaded but missing user_id; please ensure plans are saved correctly.")
+            return
+
+        if plan_user_id:
+            targets, targets_refreshed = await ensure_macro_targets(
+                tree_data=tree_data,
+                client_manager=client_manager,
+                user_id=plan_user_id,
+                **kwargs,
+            )
+
+        # If user asked for a specific kcal top-up, bypass plan deficits and search snacks around that hint
+        if force_snack_mode:
+            if not targets:
+                targets = DEFAULT_TARGETS
+            yield Response(
+                f"🎯 Searching snacks around ~{kcal_hint:.0f} kcal (user request)."
+            )
+            deficit_macros = _build_deficit_from_hint(kcal_hint, targets)
+            try:
+                suggestions = _find_snack_suggestions(client_manager, deficit_macros, top_k)
+            except Exception as exc:
+                logging.error(f"gap_fill_tool: snack suggestion fallback failed: {exc}", exc_info=True)
+                yield Error(f"Snack suggestion failed: {exc}")
+                return
+
+            if not suggestions:
+                yield Error("No snack suggestions found for the requested calories. Please try a different description.")
+                return
+
+            logging.info(
+                "gap_fill_tool: snack_mode hint=%.1f kcal, suggestions=%d",
+                kcal_hint,
+                len(suggestions),
+            )
+
+            suggestions_output = {
+                "deficit_macros": deficit_macros,
+                "suggestions": suggestions,
+                "count": len(suggestions),
+                "mode": "direct_snack_lookup",
+                "kcal_hint": kcal_hint,
+            }
+            yield Result(
+                name="suggestions",
+                objects=[suggestions_output],
+                metadata={
+                    "suggestion_count": len(suggestions),
+                    "deficit_count": len([k for k, v in deficit_macros.items() if v > 0]),
+                    "plan_available": False,
+                    "kcal_hint": kcal_hint,
+                },
+                payload_type="generic",
+                display=True,
+            )
+            yield Response("✅ Returned snack suggestions based on your requested calories.")
+            return
+
+        if plan:
+            if not targets:
+                yield Error("Targets not found and could not be calculated from profile. Please create or complete your profile first.")
+                return
+            if effective_plan_id:
+                tree_data.environment.hidden_environment["latest_plan_id"] = effective_plan_id
+
+        # No plan and no hint → cannot proceed
         if not plan:
-            yield Error("No plan found. Please provide plan_id or user_id, or run plan_day_e2e_tool/plan_week_e2e_tool first.")
+            yield Error("No plan found and no calorie hint detected. Please provide plan_id/user_id or specify calories to add.")
             return
-        
-        plan_user_id = plan.get("user_id") or user_id
-        plan_id = plan.get("plan_id") or plan_id
-        
-        # Step 2: Read targets (auto-calculate if missing)
-        targets, targets_refreshed = await ensure_macro_targets(
-            tree_data=tree_data,
-            client_manager=client_manager,
-            user_id=plan_user_id,
-            **kwargs,
-        )
-        if not targets:
-            yield Error("Targets not found and could not be calculated from profile. Please create or complete your profile first.")
-            return
-        
+
+        plan_id = effective_plan_id
+
         # Step 3: Calculate plan macros and deficits
         yield Response("📊 Calculating macro deficits...")
         plan_macros = _calculate_plan_macros(plan)
@@ -238,45 +451,12 @@ async def gap_fill_tool(
         yield Response("🍎 Searching for snacks to fill nutritional gaps...")
         
         try:
-            client = client_manager.get_client()
-            try:
-                recipe_collection = client.collections.get("Recipe")
-            except Exception as e:
-                yield Error(f"Recipe collection not found: {str(e)}. Please ensure collections are created.")
-                return
-            
-            # Search for snack recipes
-            try:
-                snack_filter = build_filters_from_where(
-                    {"path": ["dish_type"], "operator": "Equal", "valueString": "snack"}
-                )
-                results = recipe_collection.query.fetch_objects(filters=snack_filter, limit=100)
-                if not results.objects:
-                    results = recipe_collection.query.fetch_objects(limit=100)
-            except Exception:
-                results = recipe_collection.query.fetch_objects(limit=100)
-            
-            # Score recipes by how well they fit deficits
-            scored_recipes = []
-            for obj in results.objects:
-                recipe = obj.properties
-                macros = recipe.get("macros_per_serving", {})
-                if isinstance(macros, dict) and macros.get("kcal"):
-                    fit_score = _calculate_macro_fit(macros, deficit_macros)
-                    if fit_score > 0:
-                        scored_recipes.append({
-                            **recipe,
-                            "fit_score": fit_score,
-                        })
-            
-            # Sort by fit score and take top_k
-            scored_recipes.sort(key=lambda x: x.get("fit_score", 0.0), reverse=True)
-            suggestions = scored_recipes[:top_k]
-            
+            suggestions = _find_snack_suggestions(client_manager, deficit_macros, top_k)
+
             if not suggestions:
                 yield Response("⚠️ No suitable snacks found to fill deficits")
                 return
-            
+
             yield Response(f"✅ Found {len(suggestions)} snack suggestion(s)")
             
             # Step 5: Optionally apply best snack

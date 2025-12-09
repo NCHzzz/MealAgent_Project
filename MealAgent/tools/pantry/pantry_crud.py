@@ -267,7 +267,7 @@ async def pantry_crud_tool(
                 pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
                 if pantry_results.objects:
                     pantry = pantry_results.objects[0]
-                    pantry.properties["updated_at"] = datetime.now().isoformat()
+                    pantry.properties["updated_at"] = datetime.now(timezone.utc).isoformat()
                     pantry_collection.data.update(uuid=pantry.uuid, properties=pantry.properties)
 
             state = {
@@ -324,7 +324,7 @@ async def pantry_crud_tool(
             pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
             if pantry_results.objects:
                 pantry = pantry_results.objects[0]
-                pantry.properties["updated_at"] = datetime.now().isoformat()
+                pantry.properties["updated_at"] = datetime.now(timezone.utc).isoformat()
                 pantry_collection.data.update(uuid=pantry.uuid, properties=pantry.properties)
 
             state = {
