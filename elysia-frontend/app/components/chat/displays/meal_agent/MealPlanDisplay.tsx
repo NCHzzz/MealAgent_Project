@@ -39,6 +39,16 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
   };
 
   const getRecipeImage = (meal?: AnyMeal) => {
+    // Special case: Use default white rice image for default white rice recipe
+    const dishName = meal?.recipe?.dish_name?.toLowerCase() || "";
+    const foodId = meal?.recipe?.food_id || "";
+    
+    if (foodId === "default_white_rice" || 
+        (dishName.includes("cơm trắng") || dishName.includes("com trang") || dishName.includes("white rice")) && 
+         foodId === "default_white_rice") {
+      return "/image/com_trang.jpg";
+    }
+    
     // Accept multiple possible image keys to be resilient to upstream changes
     return (
       meal?.recipe?.image_link ||
@@ -98,7 +108,11 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           <div
             key={`${item.recipe?.dish_name}-${idx}`}
             className="flex justify-between items-start text-xs bg-background/70 rounded p-2 border border-secondary/10 hover:border-primary/20 transition-colors cursor-pointer"
-            onClick={(e) => openRecipeDetail(e, item.recipe || item)}
+            onClick={(e) => {
+              if (item.recipe) {
+                openRecipeDetail(e, item.recipe);
+              }
+            }}
           >
             <div className="flex items-center gap-2">
               {renderMealImage(
@@ -336,8 +350,14 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                     ([mealKey, meal]: [string, WeeklyMeal]) => (
                       <div
                         key={mealKey}
-                        onClick={(e) => openRecipeDetail(e, meal.recipe)}
-                        className="flex flex-col gap-2 text-sm p-2 bg-background/50 rounded border border-secondary/10 hover:border-primary/30 transition-colors cursor-pointer"
+                        onClick={(e) => {
+                          if (meal.recipe) {
+                            openRecipeDetail(e, meal.recipe);
+                          }
+                        }}
+                        className={`flex flex-col gap-2 text-sm p-2 bg-background/50 rounded border border-secondary/10 transition-colors ${
+                          meal.recipe ? "hover:border-primary/30 cursor-pointer" : "cursor-default"
+                        }`}
                       >
                         <div className="flex justify-between items-start gap-3">
                           <div className="flex-1">
@@ -346,18 +366,32 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                                 {meal.meal_type}:
                               </span>
                               <span className="text-primary font-semibold">
-                                {meal.recipe.dish_name}
+                                {meal.recipe?.dish_name || "Unknown dish"}
                               </span>
                             </div>
-                            {meal.recipe.cooking_time && (
+                            {meal.recipe?.cooking_time && (
                               <p className="text-xs text-secondary mt-1 flex items-center gap-1">
                                 <span>⏱️</span>
                                 <span>{meal.recipe.cooking_time} min</span>
                               </p>
                             )}
-                            <div className="text-xs text-secondary mt-1">
-                              {formatKcal(meal.macros?.kcal || 0)}
-                            </div>
+                            {/* Nutrition info */}
+                            {meal.macros && (
+                              <div className="flex items-center gap-2 text-xs mt-1 flex-wrap">
+                                <span className="px-2 py-0.5 bg-primary/10 text-primary rounded font-medium">
+                                  {formatKcal(meal.macros.kcal || 0)}
+                                </span>
+                                <span className="text-secondary">
+                                  {formatMacro(meal.macros.protein_g || 0)} P
+                                </span>
+                                <span className="text-secondary">
+                                  {formatMacro(meal.macros.fat_g || 0)} F
+                                </span>
+                                <span className="text-secondary">
+                                  {formatMacro(meal.macros.carb_g || 0)} C
+                                </span>
+                              </div>
+                            )}
                           </div>
                           {renderMealImage(getRecipeImage(meal), meal.recipe?.dish_name)}
                         </div>

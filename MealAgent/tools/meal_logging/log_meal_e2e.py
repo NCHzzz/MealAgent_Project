@@ -137,7 +137,18 @@ async def _log_meal_with_macros(
             objects=[updated],
             metadata={"user_id": user_id, "logged_at": log_entry["logged_at"]},
             payload_type="generic",
-            display=True,
+            display=False,  # Hide raw table; a human-friendly summary is provided separately
+        )
+        yield Response(
+            f"📥 Đã ghi nhận: {meal_description} | "
+            f"{meal_macros['kcal']:.0f} kcal · "
+            f"{meal_macros['protein_g']:.1f}g P · "
+            f"{meal_macros['fat_g']:.1f}g F · "
+            f"{meal_macros['carb_g']:.1f}g C. "
+            f"Còn lại hôm nay: {remaining_targets['kcal']:.0f} kcal · "
+            f"{remaining_targets['protein_g']:.1f}g P · "
+            f"{remaining_targets['fat_g']:.1f}g F · "
+            f"{remaining_targets['carb_g']:.1f}g C."
         )
 
     except Exception as e:

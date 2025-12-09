@@ -177,6 +177,18 @@ def load_plan_from_weaviate(
                     # Add to meal macros
                     for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
                         meal_data["macros"][macro] += recipe_macros.get(macro, 0.0) * servings
+
+                    # If the plan item already stored aggregated macros (actual_macros), prefer it
+                    actual_macros = item.get("actual_macros")
+                    if isinstance(actual_macros, dict) and actual_macros:
+                        # Override macros with server-side saved totals (already includes accompaniments)
+                        meal_data["macros"] = {
+                            "kcal": float(actual_macros.get("kcal", meal_data["macros"]["kcal"])),
+                            "protein_g": float(actual_macros.get("protein_g", meal_data["macros"]["protein_g"])),
+                            "fat_g": float(actual_macros.get("fat_g", meal_data["macros"]["fat_g"])),
+                            "carb_g": float(actual_macros.get("carb_g", meal_data["macros"]["carb_g"])),
+                        }
+                        meal_data["macros_total"] = meal_data["macros"]
                 
                 plan["meals"][meal_type] = meal_data
                 

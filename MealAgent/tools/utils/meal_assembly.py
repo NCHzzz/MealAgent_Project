@@ -144,7 +144,7 @@ def add_supplementary_dishes(
     
     # CRITICAL: Add dishes if we're below targets - but STRICTLY control excess
     # Priority: protein first, then kcal, but STOP if we exceed targets
-    max_additional_dishes = 6  # Balanced: allow enough dishes to meet nutrition but prevent excessive over-eating
+    max_additional_dishes = 3  # tighter cap to avoid runaway additions
     dishes_added = 0
     
     # Get all excluded dish IDs
@@ -209,12 +209,10 @@ def add_supplementary_dishes(
                 return False
             return True
         
-        # For moderate excess (15-50%), use balanced logic
+        # For moderate excess (15-50%), stricter: only continue when deficit is still meaningful
         if has_severe_fat_excess or has_severe_carb_excess or has_severe_kcal_excess:
-            # Continue if we still have significant deficit (>20% protein or >25% kcal)
-            if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.25:
-                return False  # Continue adding despite moderate excess because deficit is high
-            # Only stop if deficit is low (<20% protein and <25% kcal)
+            if protein_deficit_ratio > 0.25 or kcal_deficit_ratio > 0.25:
+                return False
             return True
         return False
     
@@ -552,7 +550,7 @@ def add_supplementary_dishes(
     # Priority 4: Continue adding main dishes if still significantly deficient in protein or kcal
     # CRITICAL: STRICTLY control to prevent over-eating
     priority4_iteration = 0
-    # CRITICAL: Continue adding ONLY if we still have significant deficit AND no severe excess
+
     def should_continue_priority4():
         if dishes_added >= max_additional_dishes:
             return False
@@ -615,13 +613,13 @@ def add_supplementary_dishes(
         if remaining_meal_kcal < 0:
             # If already exceeded meal_max_kcal, allow larger dishes when deficit is high
             if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                effective_max_kcal = min(400.0, remaining_before_exceed)  # Increased to allow larger dishes when deficit is high
+                effective_max_kcal = min(320.0, remaining_before_exceed)  # tighter when already over
                 min_kcal_for_dish = 30.0
             elif protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                effective_max_kcal = min(300.0, remaining_before_exceed)  # Increased for medium deficit
+                effective_max_kcal = min(260.0, remaining_before_exceed)
                 min_kcal_for_dish = 30.0
             else:
-                effective_max_kcal = min(200.0, remaining_before_exceed)  # Keep smaller for low deficit
+                effective_max_kcal = min(200.0, remaining_before_exceed)
                 min_kcal_for_dish = 30.0
         else:
             # Normal case: remaining_meal_kcal is positive

@@ -22,26 +22,28 @@ def _is_vietnamese_breakfast(recipe: Dict[str, Any]) -> bool:
     dish_type = str(recipe.get("dish_type", "")).lower()
     
     # CRITICAL: Vietnamese breakfast keywords - dishes that start with these are breakfast
+    # User requirement: bún, hủ tiếu, bánh mì, mì, phở, miến, bánh canh, bánh ngọt, bánh mặn, 
+    # xôi, bánh cuốn, các loại bánh, cơm tấm, cháo, ngô/khoai luộc, súp
     breakfast_keywords = [
-        # Noodles
+        # Noodles (bún, hủ tiếu, mì, phở, miến, bánh canh)
         "phở", "pho", "bun", "bún", "bun bo", "bún bò", "bun rieu", "bún riêu", 
         "bun cha", "bún chả", "bun thang", "bún thang", "bun oc", "bún ốc",
-        "hu tieu", "hủ tiếu", "hu tiu", "hủ tiu",
-        "mì", "mi", "miến", "mien",
+        "hu tieu", "hủ tiếu", "hu tiu", "hủ tiu", "hủ tiếu", "hu tieu",
+        "mì", "mi", "miến", "mien", "mì soba", "mi soba",
         "banh canh", "bánh canh",
-        # Breads and cakes
-        "banh mi", "bánh mì", "banh ngot", "bánh ngọt", "banh bao", "bánh bao",
-        "banh cuon", "bánh cuốn", "banh xeo", "bánh xèo",
+        # Breads and cakes (bánh mì, bánh ngọt, bánh mặn, bánh cuốn, các loại bánh)
+        "banh mi", "bánh mì", "banh ngot", "bánh ngọt", "banh man", "bánh mặn",
+        "banh bao", "bánh bao", "banh cuon", "bánh cuốn", "banh xeo", "bánh xèo",
         "banh", "bánh",  # General cake/bread (but check context)
-        # Sticky rice
+        # Sticky rice (xôi)
         "xoi", "xôi", "xoi man", "xôi mặn", "xoi ngo", "xôi ngô", "xoi gac", "xôi gấc",
-        # Rice dishes
+        # Rice dishes (cơm tấm)
         "cơm tấm", "com tam", "com suon", "cơm sườn",
-        # Porridge
+        # Porridge (cháo)
         "chao", "cháo", "chao ga", "cháo gà", "chao bo", "cháo bò",
-        # Boiled items
-        "ngô luộc", "ngo luoc", "khoai luoc", "khoai luộc", "ngô", "ngo",
-        # Soup
+        # Boiled items (ngô/khoai luộc)
+        "ngô luộc", "ngo luoc", "khoai luoc", "khoai luộc", "ngô", "ngo", "khoai", "khoai lang",
+        # Soup (súp)
         "súp", "sup", "soup",
         # Western breakfast items (also common in Vietnam)
         "sandwich", "croissant", "brioche", "toast", "pancake", "trứng chiên", "trung chien"

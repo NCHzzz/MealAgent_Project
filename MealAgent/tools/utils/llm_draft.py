@@ -537,14 +537,14 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
             logger.warning("LLM returned invalid format, expected list")
             return None
         
-        # Limit to 3 suggestions
-        items_to_process = suggestions_data[:3]
-        if len(suggestions_data) > 3:
-            logger.debug(f"LLM returned {len(suggestions_data)} suggestions, limiting to 3")
+        # Limit to 7 suggestions (increased from 3 for better variety)
+        items_to_process = suggestions_data[:7]
+        if len(suggestions_data) > 7:
+            logger.debug(f"LLM returned {len(suggestions_data)} suggestions, limiting to 7")
         
         suggestions = []
         for item in items_to_process:
-            if len(suggestions) >= 3:
+            if len(suggestions) >= 7:
                 break
             
             # Handle nested structures
@@ -555,7 +555,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
                     extracted = _extract_json_objects(item)
                     if extracted:
                         for obj in extracted:
-                            if len(suggestions) >= 3:
+                            if len(suggestions) >= 7:
                                 break
                             result = _normalize_suggestion(obj, meal_slot)
                             if result:
@@ -564,7 +564,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
             
             if isinstance(item, list):
                 for sub_item in item:
-                    if len(suggestions) >= 3:
+                    if len(suggestions) >= 7:
                         break
                     if isinstance(sub_item, dict):
                         result = _normalize_suggestion(sub_item, meal_slot)
@@ -578,7 +578,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
                     suggestions.append(result)
         
         # Filter and limit
-        valid_suggestions = [s for s in suggestions if s is not None][:3]
+        valid_suggestions = [s for s in suggestions if s is not None][:7]
         
         if valid_suggestions:
             try:

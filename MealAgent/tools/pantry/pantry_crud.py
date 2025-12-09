@@ -2,7 +2,7 @@
 CRUD operations for Pantry and PantryItem collections.
 """
 from typing import AsyncGenerator, Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -10,6 +10,7 @@ from elysia.util.client import ClientManager
 from elysia import tool
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.planning_helpers import ensure_rfc3339_datetime
 
 
 def _validate_pantry_item(item: Dict[str, Any]) -> tuple[bool, str]:
@@ -118,7 +119,7 @@ async def pantry_crud_tool(
                 # Create pantry
                 pantry_data = {
                     "user_id": user_id,
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": ensure_rfc3339_datetime(datetime.now(timezone.utc)),
                 }
                 pantry_collection.data.insert(pantry_data)
 
@@ -166,7 +167,7 @@ async def pantry_crud_tool(
             if not pantry_results.objects:
                 pantry_data = {
                     "user_id": user_id,
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": ensure_rfc3339_datetime(datetime.now(timezone.utc)),
                 }
                 pantry_collection.data.insert(pantry_data)
 
@@ -192,7 +193,7 @@ async def pantry_crud_tool(
             # Update pantry timestamp
             if pantry_results.objects:
                 pantry = pantry_results.objects[0]
-                pantry.properties["updated_at"] = datetime.now().isoformat()
+                pantry.properties["updated_at"] = ensure_rfc3339_datetime(datetime.now(timezone.utc))
                 pantry_collection.data.update(uuid=pantry.uuid, properties=pantry.properties)
 
             state = {

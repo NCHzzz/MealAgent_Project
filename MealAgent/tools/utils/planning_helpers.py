@@ -445,8 +445,8 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "meal_type": meal_data.get("meal_type", meal_key),
                     "recipe_id": str(recipe_id),
                     "servings": servings,
-                    # Store as JSON string to match schema (TEXT)
-                    "actual_macros": json.dumps(total_macros),
+                    # Store as map to align with MealPlanItem schema
+                    "actual_macros": total_macros,
                 }
             )
 

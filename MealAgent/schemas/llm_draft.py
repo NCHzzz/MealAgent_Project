@@ -55,18 +55,18 @@ class MealSlotDraft(BaseModel):
     suggestions: List[MealDraftSuggestion] = Field(
         ...,
         min_length=1,
-        max_length=3,
-        description="2-3 gợi ý món cho bữa này"
+        max_length=7,
+        description="1-7 gợi ý món cho bữa này (tăng từ 3 lên 7 để đa dạng hơn cho weekly planning)"
     )
     
     @field_validator("suggestions")
     @classmethod
     def validate_suggestions_count(cls, v: List[MealDraftSuggestion]) -> List[MealDraftSuggestion]:
-        """Ensure we have 1-3 suggestions."""
+        """Ensure we have 1-7 suggestions."""
         if len(v) < 1:
             raise ValueError("Must have at least 1 suggestion")
-        if len(v) > 3:
-            raise ValueError("Cannot have more than 3 suggestions")
+        if len(v) > 7:
+            raise ValueError("Cannot have more than 7 suggestions")
         return v
 
 

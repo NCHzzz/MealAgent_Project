@@ -159,7 +159,16 @@ def _create_default_white_rice_recipe() -> Dict[str, Any]:
         "cooking_time_min": 30,
         "serving_size": "1 chén",
         "is_default": True,  # Flag to indicate this is a default recipe
+        "image_link": "/image/com_trang.jpg",  # Use provided white rice image for UI display
     }
+
+
+def _is_hotpot(recipe: Dict[str, Any]) -> bool:
+    """Detect lẩu/hotpot dishes to avoid for inappropriate meals (e.g., breakfast)."""
+    name = str(recipe.get("dish_name", "")).lower()
+    rtype = str(recipe.get("dish_type", "")).lower()
+    keywords = ["lẩu", "lau", "hotpot", "hot pot"]
+    return any(kw in name or kw in rtype for kw in keywords)
 
 
 # Recipe classification functions moved to MealAgent.tools.utils.recipe_classifiers
@@ -229,6 +238,22 @@ def _select_carb_with_validation(
     
     Returns: (carb_recipe, is_combined, is_noodle)
     """
+    # Prefer a plain white rice candidate up-front if available in search results
+    for recipe in recipes:
+        if (
+            recipe not in excluded
+            and str(recipe.get("food_id", "")) not in recent_recipe_ids_set
+            and _is_rice_dish(recipe)
+            and not _is_main_dish(recipe)
+            and not _is_combined_dish(recipe)
+        ):
+            name_lower = str(recipe.get("dish_name", "")).lower()
+            if "cơm trắng" in name_lower or "com trang" in name_lower or "white rice" in name_lower:
+                macros = recipe.get("macros_per_serving", {}) or {}
+                kcal = macros.get("kcal", 0)
+                if 80 <= kcal <= meal_max_kcal:
+                    return recipe, False, False
+
     # Try LLM suggestions first
     carb_recipe = _try_select_from_llm_suggestions(
         llm_draft, meal_slot, "carb",
@@ -731,8 +756,8 @@ async def plan_day_e2e_tool(
                 client_manager=client_manager,
                 query_text=search_query,
                 collection_name=collection_name,
-                limit=100,  # Get more recipes for better variety (increased from 50)
-                top_k=50,  # Top 50 for planning (increased from 30 for better variety)
+                limit=1000,  # Maximum allowed by search_and_rank_tool (increased from 100 to 1000 for maximum variety)
+                top_k=1000,  # Top 1000 for planning (increased from 50 to 1000, max allowed by Weaviate)
                 **kwargs,
             ):
                 if isinstance(result, Error):
@@ -1064,6 +1089,12 @@ async def plan_day_e2e_tool(
                     "breakfast"
                 )
                 if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                    if _is_hotpot(mapped_recipe):
+                        logging.warning(
+                            "BREAKFAST_REJECT_HOTPOT: Skipping hotpot for breakfast suggestion: %s",
+                            mapped_recipe.get("dish_name"),
+                        )
+                        continue
                     breakfast = mapped_recipe
                     yield Response(f"✅ Selected breakfast from AI suggestion: {breakfast.get('dish_name', 'Unknown')}")
                     break
@@ -1114,6 +1145,9 @@ async def plan_day_e2e_tool(
                 max_kcal=breakfast_max_kcal,  # CRITICAL: Enforce kcal limit
                 min_protein=min_breakfast_protein,  # CRITICAL: Require minimum protein
             )
+            if breakfast and _is_hotpot(breakfast):
+                logging.warning("BREAKFAST_REJECT_HOTPOT: Rule-based breakfast is hotpot, retrying fallback...")
+                breakfast = None
         if not breakfast:
             # Fallback: try any breakfast-type dish (still with kcal limit and protein requirement)
             breakfast_targets = targets.copy() if targets else None
@@ -1149,6 +1183,9 @@ async def plan_day_e2e_tool(
                 max_kcal=breakfast_max_kcal,  # CRITICAL: Enforce kcal limit
                 min_protein=min_breakfast_protein,  # CRITICAL: Still require minimum protein
             )
+            if breakfast and _is_hotpot(breakfast):
+                logging.warning("BREAKFAST_REJECT_HOTPOT: Fallback breakfast is hotpot, clearing...")
+                breakfast = None
         if not breakfast:
             yield Response("⚠️ No breakfast dish found. Selecting best available Vietnamese breakfast option...")
             # CRITICAL: Only select Vietnamese breakfast dishes, not main dishes
@@ -1158,6 +1195,8 @@ async def plan_day_e2e_tool(
                 if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
                     # CRITICAL: Must be Vietnamese breakfast dish
                     if not _is_vietnamese_breakfast(recipe):
+                        continue
+                    if _is_hotpot(recipe):
                         continue
                     macros = recipe.get("macros_per_serving", {})
                     if isinstance(macros, dict):
@@ -1219,6 +1258,7 @@ async def plan_day_e2e_tool(
         breakfast_macros = _get_meal_macros(breakfast)
         breakfast_kcal = breakfast_macros.get("kcal", 0)
         breakfast_protein = breakfast_macros.get("protein_g", 0)
+        breakfast_fat = breakfast_macros.get("fat_g", 0)
         daily_protein = targets.get("protein_g", 150.0) if targets else 150.0
         
         # Calculate minimum acceptable protein for breakfast
@@ -1254,8 +1294,13 @@ async def plan_day_e2e_tool(
                 breakfast_protein = breakfast_macros.get("protein_g", 0)
                 logging.info(f"Replaced breakfast with higher protein option: {breakfast.get('dish_name', 'Unknown')} ({breakfast_protein:.1f}g protein)")
         
-        if breakfast_kcal > breakfast_max_kcal * 1.1:  # Allow 10% tolerance
-            logging.warning(f"Breakfast kcal ({breakfast_kcal:.1f}) exceeds limit ({breakfast_max_kcal:.1f}), trying to find better option...")
+        if breakfast_kcal > breakfast_max_kcal * 1.1 or breakfast_fat > 25.0:  # tighter cap
+            logging.warning(
+                "Breakfast over cap (kcal=%.1f>%.1f or fat=%.1f>25). Trying to find better option...",
+                breakfast_kcal,
+                breakfast_max_kcal,
+                breakfast_fat,
+            )
             # Try to find a better breakfast option that balances kcal and protein
             best_breakfast = None
             best_score = 0.0
@@ -1267,18 +1312,35 @@ async def plan_day_e2e_tool(
                     if isinstance(macros, dict):
                         kcal = macros.get("kcal", 0)
                         protein = macros.get("protein_g", 0)
-                        if (100 <= kcal <= breakfast_max_kcal and 
+                        fat = macros.get("fat_g", 0)
+                        if (100 <= kcal <= breakfast_max_kcal and
+                            fat <= 25.0 and
                             _is_vietnamese_breakfast(recipe) and
                             protein >= min_acceptable_protein):
                             # Score: prioritize protein, but also consider kcal
-                            score = protein * 2.0 - (kcal / 10.0)
+                            score = protein * 2.0 - (kcal / 10.0) - (fat * 0.5)
                             if score > best_score:
                                 best_breakfast = recipe
                                 best_score = score
             if best_breakfast:
                 breakfast = best_breakfast
                 breakfast_macros = _get_meal_macros(breakfast)
+                breakfast_kcal = breakfast_macros.get("kcal", 0)
+                breakfast_fat = breakfast_macros.get("fat_g", 0)
                 logging.info(f"Replaced breakfast with better balanced option: {breakfast.get('dish_name', 'Unknown')}")
+        # Hard fallback to light breakfast if still over cap
+        if breakfast_kcal > breakfast_max_kcal * 1.1 or breakfast_fat > 25.0:
+            for recipe in recipes:
+                if _is_vietnamese_breakfast(recipe):
+                    macros = _get_meal_macros(recipe)
+                    if macros.get("kcal", 0) <= breakfast_max_kcal and macros.get("fat_g", 0) <= 25.0:
+                        breakfast = recipe
+                        breakfast_macros = macros
+                        breakfast_kcal = macros.get("kcal", 0)
+                        breakfast_fat = macros.get("fat_g", 0)
+                        breakfast_protein = macros.get("protein_g", 0)
+                        logging.warning("Fallback: forced lower-calorie breakfast to meet caps.")
+                        break
         
         # Update remaining targets after breakfast
         if remaining_targets and breakfast:
@@ -2843,6 +2905,37 @@ async def plan_day_e2e_tool(
         check_and_replace_excess_main_dishes("lunch", plan["lunch"], recipes, recent_recipe_ids_set)
         check_and_replace_excess_main_dishes("dinner", plan["dinner"], recipes, recent_recipe_ids_set)
         
+        def _scale_meal_if_needed(meal_key: str, cap_kcal: float, cap_fat: float) -> None:
+            meal = plan.get(meal_key)
+            if not meal:
+                return
+            meal_kcal = meal["recipe"] and _get_meal_macros(meal["recipe"]).get("kcal", 0.0) or 0.0
+            meal_fat = meal["recipe"] and _get_meal_macros(meal["recipe"]).get("fat_g", 0.0) or 0.0
+            for acc in meal.get("accompaniments", []):
+                acc_macros = _get_meal_macros(acc.get("recipe", {}))
+                meal_kcal += acc_macros.get("kcal", 0.0) * acc.get("servings", 1.0)
+                meal_fat += acc_macros.get("fat_g", 0.0) * acc.get("servings", 1.0)
+
+            scale_factors = [1.0]
+            if cap_kcal and meal_kcal > cap_kcal:
+                scale_factors.append(cap_kcal / meal_kcal)
+            if cap_fat and meal_fat > cap_fat:
+                scale_factors.append(cap_fat / meal_fat)
+            scale = max(0.5, min(scale_factors))
+            if scale < 0.999:
+                logging.warning(
+                    "%s_SCALING: meal_kcal=%.1f meal_fat=%.1f cap_kcal=%.1f cap_fat=%.1f scale=%.3f",
+                    meal_key.upper(), meal_kcal, meal_fat, cap_kcal, cap_fat, scale
+                )
+                meal["servings"] = round(meal.get("servings", 1.0) * scale, 3)
+                for acc in meal.get("accompaniments", []):
+                    acc["servings"] = round(acc.get("servings", 1.0) * scale, 3)
+
+        # Apply per-meal caps (kcal + fat) before final macro calc
+        _scale_meal_if_needed("breakfast", breakfast_max_kcal, 25.0)
+        _scale_meal_if_needed("lunch", lunch_max_kcal, 60.0)
+        _scale_meal_if_needed("dinner", dinner_max_kcal, 60.0)
+
         # Phase 3.2: Stream draft meal plan AFTER supplementary dishes are added to plan structure
         # This ensures all dishes (including supplementary) are displayed
         yield Response("📋 Draft meal plan:")
@@ -2868,27 +2961,50 @@ async def plan_day_e2e_tool(
             yield Response(f"  🌙 Dinner: {', '.join(dinner_items)}")
         
         yield Response("⚖️ Calculating nutrition details...")
-        
-        # Calculate macros for lunch and dinner (including accompaniments)
-        lunch_macros = _calculate_meal_macros(lunch_rice, plan["lunch"]["servings"])
-        for acc in plan["lunch"]["accompaniments"]:
-            acc_macros = _calculate_meal_macros(acc["recipe"], acc["servings"])
-            for k in lunch_macros:
-                lunch_macros[k] += acc_macros[k]
-        plan["lunch"]["macros"] = lunch_macros
-        
-        # Keep both main-only macros and total (with accompaniments) for FE display vs validation
-        plan["lunch"]["macros_main"] = _calculate_meal_macros(lunch_rice, plan["lunch"]["servings"])
-        plan["lunch"]["macros_total"] = lunch_macros
 
-        dinner_macros = _calculate_meal_macros(dinner_rice, plan["dinner"]["servings"])
-        for acc in plan["dinner"]["accompaniments"]:
-            acc_macros = _calculate_meal_macros(acc["recipe"], acc["servings"])
-            for k in dinner_macros:
-                dinner_macros[k] += acc_macros[k]
-        plan["dinner"]["macros"] = dinner_macros
-        plan["dinner"]["macros_main"] = _calculate_meal_macros(dinner_rice, plan["dinner"]["servings"])
-        plan["dinner"]["macros_total"] = dinner_macros
+        def _recompute_meal_macros(plan_dict: Dict[str, Any]) -> None:
+            """Recalculate per-meal macros based on current servings (includes accompaniments)."""
+            for meal_key in ("breakfast", "lunch", "dinner"):
+                meal_data = plan_dict.get(meal_key, {})
+                recipe_obj = meal_data.get("recipe")
+                servings = meal_data.get("servings", 1.0)
+                if not recipe_obj:
+                    continue
+
+                meal_macros = _calculate_meal_macros(recipe_obj, servings)
+                for acc in meal_data.get("accompaniments", []):
+                    acc_recipe = acc.get("recipe")
+                    acc_servings = acc.get("servings", 1.0)
+                    if acc_recipe:
+                        acc_macros = _calculate_meal_macros(acc_recipe, acc_servings)
+                        for k in meal_macros:
+                            meal_macros[k] += acc_macros[k]
+
+                meal_data["macros"] = meal_macros
+                meal_data["macros_main"] = _calculate_meal_macros(recipe_obj, servings)
+                meal_data["macros_total"] = meal_macros
+
+        def _calculate_plan_totals(plan_dict: Dict[str, Any]) -> Dict[str, float]:
+            """Aggregate macros for the entire plan."""
+            totals = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+            for meal_data in plan_dict.values():
+                recipe_obj = meal_data.get("recipe")
+                servings = meal_data.get("servings", 1.0)
+                if recipe_obj:
+                    macros = _get_meal_macros(recipe_obj)
+                    for k in totals:
+                        totals[k] += macros.get(k, 0.0) * servings
+                for acc in meal_data.get("accompaniments", []):
+                    acc_recipe = acc.get("recipe")
+                    acc_servings = acc.get("servings", 1.0)
+                    if acc_recipe:
+                        acc_macros = _get_meal_macros(acc_recipe)
+                        for k in totals:
+                            totals[k] += acc_macros.get(k, 0.0) * acc_servings
+            return totals
+
+        # Initial macro calculation
+        _recompute_meal_macros(plan)
 
         # Ensure all recipes in plan have macros (refresh from Weaviate if needed)
         for meal_data in plan.values():
@@ -2911,41 +3027,13 @@ async def plan_day_e2e_tool(
                     )
 
         # Calculate total macros (including accompaniments for Vietnamese meals)
-        total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-        for meal_key, meal_data in plan.items():
-            # Main recipe
-            recipe = meal_data["recipe"]
-            servings = meal_data.get("servings", 1.0)
-            macros = _get_meal_macros(recipe)
-            for k in total_macros:
-                total_macros[k] += macros[k] * servings
-            
-            # Accompaniments (for lunch/dinner Vietnamese meals)
-            accompaniments = meal_data.get("accompaniments", [])
-            for acc in accompaniments:
-                acc_recipe = acc.get("recipe")
-                acc_servings = acc.get("servings", 1.0)
-                if acc_recipe:
-                    acc_macros = _get_meal_macros(acc_recipe)
-                    for k in total_macros:
-                        total_macros[k] += acc_macros[k] * acc_servings
+        total_macros = _calculate_plan_totals(plan)
 
         # Calculate coverage percentages
         target_kcal = targets.get("tdee_kcal", 0.0) if targets else 0.0
         target_protein = targets.get("protein_g", 0.0) if targets else 0.0
         target_fat = targets.get("fat_g", 0.0) if targets else 0.0
         target_carb = targets.get("carb_g", 0.0) if targets else 0.0
-        
-        kcal_coverage = (total_macros["kcal"] / target_kcal * 100) if target_kcal > 0 else 0.0
-        protein_coverage = (total_macros["protein_g"] / target_protein * 100) if target_protein > 0 else 0.0
-        fat_coverage = (total_macros["fat_g"] / target_fat * 100) if target_fat > 0 else 0.0
-        carb_coverage = (total_macros["carb_g"] / target_carb * 100) if target_carb > 0 else 0.0
-        
-        # Calculate deficits
-        kcal_deficit = target_kcal - total_macros["kcal"]
-        protein_deficit = target_protein - total_macros["protein_g"]
-        fat_deficit = target_fat - total_macros["fat_g"]
-        carb_deficit = target_carb - total_macros["carb_g"]
         
         # CRITICAL: Verify total_macros matches actual consumed (for debugging)
         # Calculate actual consumed from breakfast + lunch + dinner totals
@@ -2982,6 +3070,40 @@ async def plan_day_e2e_tool(
                 f"kcal={total_macros['kcal']:.1f}, protein={total_macros['protein_g']:.1f}g"
             )
         
+        # Clamp plan down if it overshoots kcal/fat/carb targets beyond tolerance
+        max_allowed_kcal = target_kcal * (1.0 + macro_tolerance_percent) if target_kcal else 0.0
+        max_allowed_fat = target_fat * (1.0 + macro_tolerance_percent) if target_fat else 0.0
+        max_allowed_carb = target_carb * (1.0 + macro_tolerance_percent) if target_carb else 0.0
+
+        def _multi_macro_scale(current: Dict[str, float]) -> float:
+            scales = [1.0]
+            if max_allowed_kcal and current.get("kcal", 0) > max_allowed_kcal:
+                scales.append(max_allowed_kcal / current["kcal"])
+            if max_allowed_fat and current.get("fat_g", 0) > max_allowed_fat:
+                scales.append(max_allowed_fat / current["fat_g"])
+            if max_allowed_carb and current.get("carb_g", 0) > max_allowed_carb:
+                scales.append(max_allowed_carb / current["carb_g"])
+            return max(0.5, min(scales))
+
+        scale = _multi_macro_scale(total_macros)
+        if scale < 0.999:
+            logging.warning(
+                "PLAN_SCALING: scaling servings by %.3f due to overshoot "
+                "(kcal %.1f/%.1f, fat %.1f/%.1f, carb %.1f/%.1f, tol=%.0f%%)",
+                scale,
+                total_macros.get("kcal", 0.0), max_allowed_kcal,
+                total_macros.get("fat_g", 0.0), max_allowed_fat,
+                total_macros.get("carb_g", 0.0), max_allowed_carb,
+                macro_tolerance_percent * 100,
+            )
+            for meal_data in plan.values():
+                meal_data["servings"] = round(meal_data.get("servings", 1.0) * scale, 3)
+                for acc in meal_data.get("accompaniments", []):
+                    acc["servings"] = round(acc.get("servings", 1.0) * scale, 3)
+
+            _recompute_meal_macros(plan)
+            total_macros = _calculate_plan_totals(plan)
+
         logging.debug(
             "plan_day_e2e_tool: plan macros totals kcal=%.1f protein=%.1f fat=%.1f carb=%.1f | targets=%s",
             total_macros["kcal"],
@@ -2990,6 +3112,19 @@ async def plan_day_e2e_tool(
             total_macros["carb_g"],
             targets,
         )
+
+        # Calculate coverage percentages
+        kcal_coverage = (total_macros["kcal"] / target_kcal * 100) if target_kcal > 0 else 0.0
+        protein_coverage = (total_macros["protein_g"] / target_protein * 100) if target_protein > 0 else 0.0
+        fat_coverage = (total_macros["fat_g"] / target_fat * 100) if target_fat > 0 else 0.0
+        carb_coverage = (total_macros["carb_g"] / target_carb * 100) if target_carb > 0 else 0.0
+
+        # Calculate deficits
+        kcal_deficit = target_kcal - total_macros["kcal"]
+        protein_deficit = target_protein - total_macros["protein_g"]
+        fat_deficit = target_fat - total_macros["fat_g"]
+        carb_deficit = target_carb - total_macros["carb_g"]
+
         logging.info(
             "plan_day_e2e_tool: NUTRITION_COVERAGE | "
             "kcal=%.1f%% (%.1f/%.1f, deficit=%.1f) | "

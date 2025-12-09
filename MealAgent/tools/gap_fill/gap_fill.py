@@ -135,18 +135,22 @@ async def gap_fill_tool(
                     plan_source = "week_plan"
         else:
             # Fallback: try environment cache (only as last resort)
-            logger.warning("gap_fill_tool: No plan_id or user_id provided, trying environment cache")
-            day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-            if day_plan_results and day_plan_results[0]["objects"]:
-                plan = copy.deepcopy(day_plan_results[0]["objects"][0])
-                plan_source = "plan_day_e2e_tool"
-                yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
-            else:
-                week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-                if week_plan_results and week_plan_results[0]["objects"]:
-                    plan = copy.deepcopy(week_plan_results[0]["objects"][0])
-                    plan_source = "plan_week_e2e_tool"
+            logging.warning("gap_fill_tool: No plan_id or user_id provided, trying environment cache")
+            try:
+                day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+                if day_plan_results and len(day_plan_results) > 0 and day_plan_results[0].get("objects"):
+                    plan = copy.deepcopy(day_plan_results[0]["objects"][0])
+                    plan_source = "plan_day_e2e_tool"
                     yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+                else:
+                    week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+                    if week_plan_results and len(week_plan_results) > 0 and week_plan_results[0].get("objects"):
+                        plan = copy.deepcopy(week_plan_results[0]["objects"][0])
+                        plan_source = "plan_week_e2e_tool"
+                        yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+            except (IndexError, KeyError, TypeError) as e:
+                logging.warning(f"gap_fill_tool: Error accessing environment cache: {str(e)}")
+                plan = None
         
         if not plan:
             yield Error("No plan found. Please provide plan_id or user_id, or run plan_day_e2e_tool/plan_week_e2e_tool first.")

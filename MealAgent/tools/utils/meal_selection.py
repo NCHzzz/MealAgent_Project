@@ -184,6 +184,7 @@ def filter_by_dish_category(
 ) -> List[Dict[str, Any]]:
     """
     Filter candidates by dish category.
+    IMPROVED: Stricter filtering to prevent category mismatches.
     
     Args:
         candidates: List of recipe candidates
@@ -201,7 +202,7 @@ def filter_by_dish_category(
         # If no breakfast candidates found, return empty list (don't fallback to all candidates)
         return category_candidates
     elif dish_category == "rice":
-        # For rice category, we want plain rice OR standalone noodles, but NOT combined dishes or main dishes
+        # IMPROVED: Stricter filtering - must be rice/noodle AND NOT main dish AND NOT combined
         category_candidates = [
             r for r in candidates 
             if (_is_rice_dish(r) or _is_noodle_soup(r)) 
@@ -209,38 +210,44 @@ def filter_by_dish_category(
             and not _is_main_dish(r)
             and not _is_vietnamese_breakfast(r)
         ]
-        # If still no candidates, try just rice dishes
-        if not category_candidates:
-            category_candidates = [
-                r for r in candidates 
-                if _is_rice_dish(r) 
-                and not _is_main_dish(r)
-                and not _is_vietnamese_breakfast(r)
-            ]
-        # Final fallback: noodle/soup dishes
-        if not category_candidates:
-            category_candidates = [
-                r for r in candidates 
-                if _is_noodle_soup(r) 
-                and not _is_combined_dish(r) 
-                and not _is_main_dish(r)
-                and not _is_vietnamese_breakfast(r)
-            ]
+        # CRITICAL: If no valid candidates, return empty list (don't fallback to all candidates)
+        # This prevents selecting main dishes for rice category
+        return category_candidates
     elif dish_category == "main":
-        category_candidates = [r for r in candidates if _is_main_dish(r) and not _is_combined_dish(r)]
+        # IMPROVED: Must be main dish AND NOT combined AND NOT rice/noodle/breakfast
+        category_candidates = [
+            r for r in candidates 
+            if _is_main_dish(r) 
+            and not _is_combined_dish(r)
+            and not _is_rice_dish(r)
+            and not _is_noodle_soup(r)
+            and not _is_vietnamese_breakfast(r)
+        ]
+        return category_candidates if category_candidates else []
     elif dish_category == "vegetable":
-        category_candidates = [r for r in candidates if _is_vegetable_dish(r) and not _is_combined_dish(r)]
+        # IMPROVED: Must be vegetable AND NOT main AND NOT combined AND NOT breakfast
+        category_candidates = [
+            r for r in candidates 
+            if _is_vegetable_dish(r) 
+            and not _is_combined_dish(r)
+            and not _is_main_dish(r)
+            and not _is_vietnamese_breakfast(r)
+        ]
+        return category_candidates if category_candidates else []
     elif dish_category == "fruit":
+        # IMPROVED: Must be fruit AND NOT main AND NOT combined AND NOT breakfast
         category_candidates = [
             r for r in candidates 
             if _is_fruit(r) 
             and not _is_combined_dish(r) 
             and not _is_main_dish(r)
+            and not _is_vietnamese_breakfast(r)
         ]
+        return category_candidates if category_candidates else []
     else:
         category_candidates = candidates
     
-    return category_candidates if category_candidates else candidates
+    return category_candidates if category_candidates else []
 
 
 def apply_selection_strategy(
@@ -294,6 +301,7 @@ def add_variety_factor(
 ) -> List[Dict[str, Any]]:
     """
     Add variety factor to break ties and ensure better variety.
+    IMPROVED: Much larger random variation and better grouping for maximum variety.
     
     Args:
         candidates: Sorted list of candidates
@@ -306,19 +314,20 @@ def add_variety_factor(
         return candidates
     
     if target_macros:
-        # For macro_fit strategy, add small random variation to scores
+        # IMPROVED: For macro_fit strategy, add much larger random variation to scores (±20% instead of ±10%)
+        # This creates significantly more variety in selection
         for r in candidates:
             base_score = r.get("_macro_fit_score", r.get("fit_score", 0.0))
-            # Add random variation (±5%) to break ties
-            r["_variety_score"] = base_score * (1.0 + random.uniform(-0.05, 0.05))
+            # Add much larger random variation (±20%) to break ties and maximize variety
+            r["_variety_score"] = base_score * (1.0 + random.uniform(-0.20, 0.20))
         candidates.sort(key=lambda r: r.get("_variety_score", 0.0), reverse=True)
     else:
-        # For other strategies, shuffle candidates with similar fit_score
+        # IMPROVED: For other strategies, use much larger score groups (50 instead of 20) and shuffle more aggressively
         score_groups = {}
         for r in candidates:
             score = r.get("fit_score", 0.0)
-            # Round to nearest 10 to group similar scores
-            score_group = int(score / 10) * 10
+            # Round to nearest 50 to group similar scores (much larger groups = much more variety)
+            score_group = int(score / 50) * 50
             if score_group not in score_groups:
                 score_groups[score_group] = []
             score_groups[score_group].append(r)
@@ -340,6 +349,7 @@ def select_with_weighted_random(
 ) -> Dict[str, Any] | None:
     """
     Select a candidate using weighted random selection from top candidates.
+    IMPROVED: Much larger pool and more balanced weights for better variety.
     
     Args:
         candidates: Sorted list of candidates
@@ -354,12 +364,14 @@ def select_with_weighted_random(
     if len(candidates) == 1:
         return candidates[0]
     
-    # Use larger pool for better variety (top 20% or at least pool_size, max 30)
-    actual_pool_size = max(pool_size, min(30, int(len(candidates) * 0.2)))
+    # IMPROVED: Use much larger pool for better variety (top 50% or at least pool_size, max 100)
+    # This ensures we explore many more candidates and significantly reduce repetition
+    actual_pool_size = max(pool_size, min(100, int(len(candidates) * 0.5)))
     top_candidates = candidates[:actual_pool_size]
     
-    # Weighted random: higher weight for better candidates, but still allow lower-ranked ones
-    weights = [1.0 / (i + 1) for i in range(len(top_candidates))]  # Decreasing weights
+    # IMPROVED: More balanced weights - use cube root to make weights even less steep
+    # This gives much more chance to lower-ranked candidates, increasing variety
+    weights = [1.0 / ((i + 1) ** 0.33) for i in range(len(top_candidates))]  # Even less steep weights
     total_weight = sum(weights)
     weights = [w / total_weight for w in weights]  # Normalize
     
@@ -374,6 +386,7 @@ def validate_selected_recipe(
     """
     Validate that selected recipe matches the dish category.
     If not, try to find a better match from candidates.
+    IMPROVED: Search through ALL candidates, not just candidates[1:], to find better alternatives.
     
     Args:
         recipe: Selected recipe
@@ -395,8 +408,9 @@ def validate_selected_recipe(
             f"meal_type={recipe.get('meal_type', 'N/A')}"
         )
         if candidates:
-            for candidate in candidates[1:]:
-                if _is_main_dish(candidate):
+            # IMPROVED: Search through ALL candidates, not just candidates[1:]
+            for candidate in candidates:
+                if candidate != recipe and _is_main_dish(candidate):
                     logger.info(f"CATEGORY_FIX: Replaced with valid main dish '{candidate.get('dish_name', 'Unknown')}'")
                     return candidate
         return None
@@ -408,8 +422,9 @@ def validate_selected_recipe(
             f"meal_type={recipe.get('meal_type', 'N/A')}"
         )
         if candidates:
-            for candidate in candidates[1:]:
-                if _is_vegetable_dish(candidate) and not _is_main_dish(candidate):
+            # IMPROVED: Search through ALL candidates, not just candidates[1:]
+            for candidate in candidates:
+                if candidate != recipe and _is_vegetable_dish(candidate) and not _is_main_dish(candidate):
                     logger.info(f"CATEGORY_FIX: Replaced with valid vegetable '{candidate.get('dish_name', 'Unknown')}'")
                     return candidate
         return None
@@ -421,8 +436,9 @@ def validate_selected_recipe(
             f"meal_type={recipe.get('meal_type', 'N/A')}"
         )
         if candidates:
-            for candidate in candidates[1:]:
-                if _is_fruit(candidate):
+            # IMPROVED: Search through ALL candidates, not just candidates[1:]
+            for candidate in candidates:
+                if candidate != recipe and _is_fruit(candidate):
                     logger.info(f"CATEGORY_FIX: Replaced with valid fruit '{candidate.get('dish_name', 'Unknown')}'")
                     return candidate
         return None
@@ -435,8 +451,9 @@ def validate_selected_recipe(
             f"is_main={_is_main_dish(recipe)}, is_combined={_is_combined_dish(recipe)}"
         )
         if candidates:
-            for candidate in candidates[1:]:
-                if (_is_rice_dish(candidate) or _is_noodle_soup(candidate)) and not _is_main_dish(candidate):
+            # IMPROVED: Search through ALL candidates, not just candidates[1:]
+            for candidate in candidates:
+                if candidate != recipe and (_is_rice_dish(candidate) or _is_noodle_soup(candidate)) and not _is_main_dish(candidate):
                     logger.info(f"CATEGORY_FIX: Replaced with valid rice/noodle '{candidate.get('dish_name', 'Unknown')}'")
                     return candidate
         return None
@@ -516,30 +533,39 @@ def select_meal_by_strategy(
     # CRITICAL: Validate selection - ensure category match before returning
     selected = validate_selected_recipe(selected, dish_category, candidates)
     
-    # Additional validation: if dish_category is specified, ensure selected matches
+    # IMPROVED: Additional strict validation - if dish_category is specified, ensure selected matches
+    # If validation fails, try to find a valid alternative from filtered candidates
     if selected and dish_category:
-        if dish_category == "breakfast" and not _is_vietnamese_breakfast(selected):
-            logger.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'breakfast', rejecting...")
-            # Try to find a valid breakfast dish from candidates
-            for candidate in candidates:
-                if _is_vietnamese_breakfast(candidate):
-                    selected = candidate
-                    logger.info(f"Replaced with valid breakfast: '{selected.get('dish_name', 'Unknown')}'")
-                    break
+        is_valid = False
+        if dish_category == "breakfast":
+            is_valid = _is_vietnamese_breakfast(selected) and not _is_combined_dish(selected)
+        elif dish_category == "main":
+            is_valid = _is_main_dish(selected) and not _is_combined_dish(selected) and not _is_rice_dish(selected) and not _is_noodle_soup(selected)
+        elif dish_category == "rice":
+            is_valid = (_is_rice_dish(selected) or _is_noodle_soup(selected)) and not _is_main_dish(selected) and not _is_combined_dish(selected)
+        elif dish_category == "vegetable":
+            is_valid = _is_vegetable_dish(selected) and not _is_main_dish(selected) and not _is_combined_dish(selected)
+        elif dish_category == "fruit":
+            is_valid = _is_fruit(selected) and not _is_main_dish(selected) and not _is_combined_dish(selected)
+        else:
+            is_valid = True  # Unknown category, accept
+        
+        if not is_valid:
+            logger.warning(
+                f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category '{dish_category}', "
+                f"searching for valid alternative..."
+            )
+            # Try to find a valid alternative from filtered candidates
+            # Filter candidates by category first to ensure we only consider valid options
+            filtered_candidates = filter_by_dish_category(candidates, dish_category)
+            if filtered_candidates:
+                # Use the best candidate from filtered list
+                selected = filtered_candidates[0]
+                logger.info(f"Replaced with valid {dish_category}: '{selected.get('dish_name', 'Unknown')}'")
             else:
-                selected = None  # No valid breakfast found
-        elif dish_category == "main" and not _is_main_dish(selected):
-            logger.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'main', rejecting...")
-            selected = None
-        elif dish_category == "rice" and not _is_rice_dish(selected) and not _is_noodle_soup(selected):
-            logger.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'rice', rejecting...")
-            selected = None
-        elif dish_category == "vegetable" and not _is_vegetable_dish(selected):
-            logger.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'vegetable', rejecting...")
-            selected = None
-        elif dish_category == "fruit" and not _is_fruit(selected):
-            logger.warning(f"Selected recipe '{selected.get('dish_name', 'Unknown')}' does not match category 'fruit', rejecting...")
-            selected = None
+                # No valid candidates found, reject selection
+                logger.warning(f"No valid {dish_category} candidates found, rejecting selection")
+                selected = None
     
     return selected
 
