@@ -73,6 +73,10 @@ def _is_vietnamese_breakfast(recipe: Dict[str, Any]) -> bool:
             # This helps catch cases like "mực nướng", "thịt kho", etc.
             return False  # This is likely a main dish, not breakfast
     
+    # Exclude hotpot/lẩu from breakfast
+    if "lẩu" in dish_name or "lau" in dish_name or "hotpot" in dish_name or "hot pot" in dish_name:
+        return False
+
     # Check breakfast keywords
     for keyword in breakfast_keywords:
         # CRITICAL: For "banh" or "bánh", be more specific - only match if it's a breakfast bread/cake
@@ -194,6 +198,14 @@ def _is_main_dish(recipe: Dict[str, Any]) -> bool:
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # Exclude desserts/sweets so they are not treated as main dishes
+    dessert_keywords = [
+        "bánh bò", "banh bo", "bánh ngọt", "banh ngot", "bánh bông lan", "banh bong lan",
+        "bánh flan", "flan", "chè", "che", "pudding", "dessert", "ngọt", "sweet"
+    ]
+    if any(kw in dish_name or kw in dish_type for kw in dessert_keywords):
+        return False
+
     # Exclude breakfast
     breakfast_keywords = ["bánh mì", "banh mi", "bánh cuốn", "banh cuon", "xôi", "xoi", "cháo", "chao", "phở", "pho"]
     if any(kw in dish_name or kw in dish_type for kw in breakfast_keywords):
