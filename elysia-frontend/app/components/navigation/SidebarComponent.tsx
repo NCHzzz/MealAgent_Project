@@ -22,6 +22,7 @@ import { IoNewspaperOutline } from "react-icons/io5";
 import { FaGithub } from "react-icons/fa";
 import { FaLinkedin } from "react-icons/fa";
 import { FaYoutube } from "react-icons/fa";
+import { FaSignOutAlt } from "react-icons/fa";
 import { GiMeal } from "react-icons/gi";
 
 import { RiRobot2Line, RiCalendarTodoLine } from "react-icons/ri";
@@ -91,7 +92,7 @@ const SidebarComponent: React.FC = () => {
         onClick: () => changePage("profile", {}, true, unsavedChanges),
       },
       {
-        title: "Meal History",
+        title: "Calendar",
         mode: ["mealHistory"],
         icon: <RiCalendarTodoLine />,
         onClick: () => changePage("mealHistory", {}, true, unsavedChanges),
@@ -130,7 +131,7 @@ const SidebarComponent: React.FC = () => {
   };
 
   return (
-    <Sidebar className="fade-in">
+    <Sidebar className="fade-in border-r border-secondary/20 mr-2 md:mr-4 lg:mr-6">
       <SidebarHeader>
         <div className={`flex items-center gap-2 w-full justify-between p-2`}>
           <div className="flex items-center gap-2">
@@ -139,9 +140,15 @@ const SidebarComponent: React.FC = () => {
           </div>
           <div className="flex items-center justify-center gap-1">
             {socketOnline ? (
-              <FaCircle scale={0.2} className="text-lg pulsing_color w-5 h-5" />
+              <div className="flex items-center gap-1.5">
+                <FaCircle className="text-xs text-emerald-400 animate-pulse" />
+                <span className="text-xs text-gray-500 font-small">Online</span>
+              </div>
             ) : (
-              <FaCircle scale={0.2} className="text-lg pulsing w-5 h-5" />
+              <div className="flex items-center gap-1.5">
+                <FaCircle className="text-xs text-red-400 animate-pulse" />
+                <span className="text-xs text-gray-500 font-small">Offline</span>
+              </div>
             )}
             <div className="flex flex-col items-end">
               <p className="text-xs text-muted-foreground">
@@ -204,24 +211,33 @@ const SidebarComponent: React.FC = () => {
       <SidebarFooter>
         <SidebarMenu>
           {authUser && (
+            // <SidebarMenuItem>
+            //   <div className="w-full border border-accent/20 rounded-lg p-3 bg-background_alt">
+            //     <p className="text-xs text-secondary uppercase">Signed in as</p>
+            //     <p className="text-sm font-semibold truncate">
+            //       {authUser.display_name || authUser.email}
+            //     </p>
+            //     <Button
+            //       variant="outline"
+            //       size="sm"
+            //       className="mt-2 w-full hover:bg-accent hover:text-background"
+            //       onClick={logout}
+            //     >
+            //       Logout
+            //     </Button>
+            //   </div>
+            // </SidebarMenuItem>
             <SidebarMenuItem>
-              <div className="w-full border border-accent/20 rounded-lg p-3 bg-background_alt">
-                <p className="text-xs text-secondary uppercase">Signed in as</p>
-                <p className="text-sm font-semibold truncate">
-                  {authUser.display_name || authUser.email}
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2 w-full hover:bg-accent hover:text-background"
-                  onClick={logout}
-                >
-                  Logout
-                </Button>
-              </div>
-            </SidebarMenuItem>
+            <SidebarMenuButton
+              className="w-full justify-start items-center"
+              onClick={logout}
+            >
+              <FaSignOutAlt />
+              <span>Log Out</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           )}
-          <SidebarMenuItem>
+          {/* <SidebarMenuItem>
             <SidebarMenuButton
               className="w-full justify-start items-center"
               onClick={() => openNewTab("https://weaviate.github.io/elysia/")}
@@ -244,7 +260,7 @@ const SidebarComponent: React.FC = () => {
               <GiMeal className="w-4 h-4 text-accent" />
               <p>MealAgent - Smart Nutrition</p>
             </div>
-          </SidebarMenuItem>
+          </SidebarMenuItem> */}
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>

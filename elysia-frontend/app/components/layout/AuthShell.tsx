@@ -29,7 +29,7 @@ const AuthShell = ({ children }: { children: React.ReactNode }) => {
   return (
     <>
       <SidebarComponent />
-      <main className="flex flex-1 min-w-0 flex-col md:flex-row w-full gap-2 md:gap-6 items-start justify-start p-2 md:p-6 overflow-hidden">
+      <main className="flex flex-1 min-w-0 flex-col md:flex-row w-full gap-1 sm:gap-2 md:gap-6 items-start justify-start p-1 sm:p-2 md:p-6 overflow-auto">
         <SidebarTrigger className="lg:hidden flex text-secondary hover:text-primary hover:bg-foreground_alt z-50" />
         <StartDialog />
         {children}

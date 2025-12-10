@@ -53,6 +53,16 @@ div, section, main, aside, article {
   scrollbar-color: hsl(var(--secondary) / 0.35) hsl(var(--background));
 }
 
+/* Hide scrollbars completely while maintaining scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;  /* Chrome, Safari and Opera */
+}
+
 /* Additional targeting for problematic elements */
 .overflow-auto, .overflow-x-auto, .overflow-y-auto, 
 .overflow-scroll, .overflow-x-scroll, .overflow-y-scroll {

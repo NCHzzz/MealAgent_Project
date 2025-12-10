@@ -167,17 +167,17 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
               {/* Quick navigation by week (sticky on desktop) */}
               {weeks.length > 1 && (
                 <div className="sticky top-0 z-10 bg-background_alt/80 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md py-2 border border-secondary/10 rounded-md shadow-sm">
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1 sm:gap-2">
                     {weeks.map((w, idx) => (
                       <Button
                         key={w.label}
                         size="sm"
                         variant={idx === selectedWeek ? "default" : "outline"}
                         onClick={() => setSelectedWeek(idx)}
-                        className="flex items-center gap-2"
+                        className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3"
                       >
                         <span>Tuần {idx + 1}</span>
-                        <span className="text-[11px] text-muted-foreground">
+                        <span className="text-[10px] sm:text-[11px] text-muted-foreground hidden sm:inline">
                           {w.label}
                         </span>
                       </Button>
@@ -188,25 +188,25 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
 
               {/* Selected week summary */}
               {selectedWeekData && (
-                <div className="rounded-lg border border-secondary/15 bg-background p-3">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="rounded-lg border border-secondary/15 bg-background p-2 sm:p-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
                     <div className="flex flex-col">
                       <span className="text-sm font-semibold text-primary">
                         Tuần {selectedWeek + 1}
                       </span>
                       <span className="text-xs text-secondary">{selectedWeekData.label}</span>
                     </div>
-                    <div className="grid grid-cols-4 gap-2 text-[11px] text-primary">
-                      <div className="px-2 py-1 rounded bg-secondary/10">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 sm:gap-2 text-[10px] sm:text-[11px] text-primary">
+                      <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                         Kcal: {formatKcal(selectedWeekData.totals.kcal)}
                       </div>
-                      <div className="px-2 py-1 rounded bg-secondary/10">
+                      <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                         P: {formatMacro(selectedWeekData.totals.protein_g)}
                       </div>
-                      <div className="px-2 py-1 rounded bg-secondary/10">
+                      <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                         F: {formatMacro(selectedWeekData.totals.fat_g)}
                       </div>
-                      <div className="px-2 py-1 rounded bg-secondary/10">
+                      <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                         C: {formatMacro(selectedWeekData.totals.carb_g)}
                       </div>
                     </div>
@@ -224,18 +224,18 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
                         key={date}
                         className="rounded-lg border border-secondary/10 bg-background_alt p-3 space-y-3"
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
                             <Button
                               size="icon"
                               variant="ghost"
-                              className="h-7 w-7 text-secondary"
+                              className="h-6 w-6 sm:h-7 sm:w-7 text-secondary shrink-0"
                               onClick={() => setOpenDays((prev) => ({ ...prev, [date]: !isOpen }))}
                             >
                               {isOpen ? <IoChevronDown /> : <IoChevronForward />}
                             </Button>
-                            <div className="flex flex-col">
-                              <span className="text-sm font-semibold text-primary">
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-sm font-semibold text-primary truncate">
                                 {formatDate(date)}
                               </span>
                               <span className="text-xs text-secondary">
@@ -243,17 +243,17 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
                               </span>
                             </div>
                           </div>
-                                <div className="grid grid-cols-4 gap-2 text-[11px] text-primary">
-                            <div className="px-2 py-1 rounded bg-secondary/10">
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 sm:gap-2 text-[10px] sm:text-[11px] text-primary">
+                            <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                               Kcal: {formatKcal(parseNum(totals.kcal))}
                             </div>
-                            <div className="px-2 py-1 rounded bg-secondary/10">
+                            <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                               P: {formatMacro(parseNum(totals.protein_g))}
                             </div>
-                            <div className="px-2 py-1 rounded bg-secondary/10">
+                            <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                               F: {formatMacro(parseNum(totals.fat_g))}
                             </div>
-                            <div className="px-2 py-1 rounded bg-secondary/10">
+                            <div className="px-1 sm:px-2 py-1 rounded bg-secondary/10 text-center">
                               C: {formatMacro(parseNum(totals.carb_g))}
                             </div>
                           </div>
@@ -264,18 +264,18 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
                             {meals.map((entry: any, mealIdx: number) => (
                               <div
                                 key={entry.log_id || `${date}-${mealIdx}`}
-                                className="p-3 rounded border border-secondary/10 bg-background"
+                                className="p-2 sm:p-3 rounded border border-secondary/10 bg-background"
                               >
-                              <div className="flex justify-between items-start gap-3">
-                                  <div className="flex-1">
-                                    <p className="text-sm font-medium text-primary">
+                              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 sm:gap-3">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-primary truncate">
                                       {entry.parsed_dish || entry.meal_description || "Bữa ăn"}
                                     </p>
                                     <p className="text-xs text-secondary mt-1">
                                       {formatDateTime(entry.logged_at)}
                                     </p>
                                   </div>
-                                <div className="flex flex-col items-end gap-1 text-[11px] text-primary">
+                                <div className="flex flex-col items-start sm:items-end gap-1 text-[10px] sm:text-[11px] text-primary shrink-0">
                                   <Badge className="text-xs border border-secondary/20">
                                     {formatKcal(entry.calculated_macros?.kcal || 0)}
                                   </Badge>

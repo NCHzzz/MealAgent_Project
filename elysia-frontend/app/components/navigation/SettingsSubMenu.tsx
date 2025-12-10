@@ -35,17 +35,17 @@ const SettingsSubMenu: React.FC = () => {
             <IoSettingsOutline />
             <p>Configuration</p>
           </SidebarMenuButton>
-          <SidebarMenuButton
+          {/* <SidebarMenuButton
             variant={currentPage === "elysia" ? "active" : "default"}
             onClick={() => changePage("elysia", {}, true, unsavedChanges)}
           >
             <GiAbstract053 />
             <p>Blob</p>
-          </SidebarMenuButton>
-          <SidebarMenuButton>
+          </SidebarMenuButton> */}
+          {/* <SidebarMenuButton>
             <IoSettingsOutline />
             <p>Theme (Coming Soon)</p>
-          </SidebarMenuButton>
+          </SidebarMenuButton> */}
         </SidebarMenuItem>
       </SidebarGroupContent>
     </SidebarGroup>

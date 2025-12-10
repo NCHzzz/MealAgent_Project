@@ -137,8 +137,8 @@ const Dashboard: React.FC = () => {
   return (
     <div className="flex w-full flex-col gap-2 min-h-0 items-center justify-start h-full fade-in">
       {/* Title */}
-      <div className="flex mb-2 w-full justify-start">
-        <p className="text-lg text-primary">Data Dashboard</p>
+      <div className="flex-1">
+        <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Data Dashboard</h1>
       </div>
       <div className="flex flex-col w-full md:w-[60vw] lg:w-[40vw] gap-6 h-full">
         {/* KPI */}

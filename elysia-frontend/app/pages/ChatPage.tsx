@@ -223,7 +223,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col w-full h-full items-center justify-start gap-3">
+    <div className="flex flex-col w-full h-full items-center justify-start gap-3 overflow-x-hidden max-w-full">
       <div className="flex w-full justify-start items-center lg:sticky z-20 top-0 lg:p-0 p-4 gap-5 bg-background">
         {currentConversation != null && (
           <DropdownMenu>
@@ -333,7 +333,7 @@ export default function ChatPage() {
               selectSettings={selectSettings}
             />
           </div>
-          {Object.keys(currentQuery).length === 0 && (
+          {/* {Object.keys(currentQuery).length === 0 && (
             <div
               className={`absolute flex pointer-events-none -z-30 items-center justify-center lg:w-fit lg:h-fit w-full h-full fade-in`}
             >
@@ -347,7 +347,7 @@ export default function ChatPage() {
                 />
               </div>
             </div>
-          )}
+          )} */}
           {Object.keys(currentQuery).length === 0 && (
             <div className="absolute flex flex-col justify-center items-center w-full h-full gap-3 fade-in">
               <div className="flex items-center gap-4">

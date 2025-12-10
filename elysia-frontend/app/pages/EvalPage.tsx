@@ -121,10 +121,8 @@ export default function Home() {
       tabIndex={0}
     >
       <div className="flex flex-col gap-8 items-start justify-start w-full">
-        <div className="flex items-center justify-start gap-2">
-          <p className="text-primary text-xl font-heading font-bold">
-            Evaluation Dashboard
-          </p>
+        <div className="flex-1">
+          <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Evaluation Dashboard</h1>
         </div>
         {loading.current && (
           <div className="w-full flex flex-col items-start justify-start gap-2 fade-in">

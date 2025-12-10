@@ -87,7 +87,7 @@ const AuthPage: React.FC = () => {
           <CardContent>
             <form className="space-y-4" onSubmit={handleLoginSubmit}>
               <div>
-                <Label htmlFor="login-email">Email</Label>
+                <Label htmlFor="login-email" className="text-sm">Email</Label>
                 <Input
                   id="login-email"
                   type="email"
@@ -97,10 +97,11 @@ const AuthPage: React.FC = () => {
                     setLoginForm({ ...loginForm, email: e.target.value })
                   }
                   placeholder="you@example.com"
+                  className="h-12 rounded-lg px-3 shadow-sm"
                 />
               </div>
               <div>
-                <Label htmlFor="login-password">Password</Label>
+                <Label htmlFor="login-password" className="text-sm">Password</Label>
                 <Input
                   id="login-password"
                   type="password"
@@ -110,9 +111,10 @@ const AuthPage: React.FC = () => {
                     setLoginForm({ ...loginForm, password: e.target.value })
                   }
                   placeholder="••••••••"
+                  className="h-12 rounded-lg px-3 shadow-sm"
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={submitting}>
+              <Button type="submit" className="w-full h-12 rounded-lg shadow-md" disabled={submitting}>
                 {submitting ? "Signing in..." : "Sign in"}
               </Button>
             </form>
@@ -130,7 +132,7 @@ const AuthPage: React.FC = () => {
           <CardContent>
             <form className="space-y-4" onSubmit={handleRegisterSubmit}>
               <div>
-                <Label htmlFor="register-name">Display name</Label>
+                <Label htmlFor="register-name" className="text-sm">Display name</Label>
                 <Input
                   id="register-name"
                   required
@@ -142,10 +144,11 @@ const AuthPage: React.FC = () => {
                     })
                   }
                   placeholder="Nguyễn Văn A"
+                  className="h-12 rounded-lg px-3 shadow-sm"
                 />
               </div>
               <div>
-                <Label htmlFor="register-email">Email</Label>
+                <Label htmlFor="register-email" className="text-sm">Email</Label>
                 <Input
                   id="register-email"
                   type="email"
@@ -155,10 +158,11 @@ const AuthPage: React.FC = () => {
                     setRegisterForm({ ...registerForm, email: e.target.value })
                   }
                   placeholder="you@example.com"
+                  className="h-12 rounded-lg px-3 shadow-sm"
                 />
               </div>
               <div>
-                <Label htmlFor="register-password">Password</Label>
+                <Label htmlFor="register-password" className="text-sm">Password</Label>
                 <Input
                   id="register-password"
                   type="password"
@@ -171,9 +175,10 @@ const AuthPage: React.FC = () => {
                     })
                   }
                   placeholder="Minimum 8 characters"
+                  className="h-12 rounded-lg px-3 shadow-sm"
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={submitting}>
+              <Button type="submit" className="w-full h-12 rounded-lg shadow-md" disabled={submitting}>
                 {submitting ? "Creating account..." : "Create account"}
               </Button>
             </form>
@@ -188,28 +193,35 @@ const AuthPage: React.FC = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="flex flex-1 flex-col gap-6 w-full max-w-3xl mx-auto py-10"
+      className="flex flex-1 w-full max-w-5xl mx-auto py-12 px-4"
     >
-      <div className="text-center space-y-2">
-        <h1 className="text-3xl font-semibold text-primary">
-          {isAuthenticated
-            ? "Redirecting to your dashboard..."
-            : "Welcome back to MealAgent"}
-        </h1>
-        <p className="text-secondary">
-          {isAuthenticated
-            ? "Please hold while we load your workspace."
-            : "Create an account or login to personalize your Vietnamese meal plans."}
-        </p>
-      </div>
+      <div className="w-full max-w-xl mx-auto">
+        {/* Auth forms (centered) */}
+        <div className="w-full">
+          <div className="text-center mb-6 lg:mb-8">
+            <h1 className="text-2xl lg:text-3xl font-semibold text-primary">
+              {isAuthenticated
+                ? "Redirecting to your dashboard..."
+                : "Welcome to MealAgent"}
+            </h1>
+            <p className="text-secondary mt-1">
+              {isAuthenticated
+                ? "Please hold while we load your workspace."
+                : "Create an account or login to personalize your Vietnamese meal plans."}
+            </p>
+          </div>
 
-      {loading ? (
-        <div className="w-full flex justify-center py-12">
-          <p className="text-secondary">Loading account...</p>
+          {loading ? (
+            <div className="w-full flex justify-center py-12">
+              <p className="text-secondary">Loading account...</p>
+            </div>
+          ) : (
+            <div className="bg-background_alt border border-secondary/10 rounded-2xl shadow-xl p-6">
+              {renderAuthForms()}
+            </div>
+          )}
         </div>
-      ) : (
-        renderAuthForms()
-      )}
+      </div>
     </motion.div>
   );
 };

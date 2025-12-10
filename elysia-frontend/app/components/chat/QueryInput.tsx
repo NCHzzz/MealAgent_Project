@@ -45,9 +45,7 @@ const QueryInput: React.FC<QueryInputProps> = ({
   }, [query]);
 
   return (
-    <div
-      className={`fixed bottom-8 gap-1 flex items-center justify-center flex-col transition-all duration-300 "md:w-[60vw] lg:w-[40vw] w-full p-2 md:p-0 lg:p-0" `}
-    >
+    <div className={`fixed bottom-8 gap-3 flex items-center justify-center flex-col transition-all duration-300 md:w-[60vw] lg:w-[40vw] w-full px-4 md:px-0 lg:px-0`}>
       <div className="w-full flex justify-between items-center gap-2 mb-2">
         {currentStatus != "" ? (
           <StreamingIndicator
