@@ -14,6 +14,8 @@ from MealAgent.tools.utils.planning_helpers import sync_plan_to_weaviate
 
 from MealAgent.tools.nutrition.calculate_recipe_macros import calculate_recipe_macros_tool
 
+logger = logging.getLogger(__name__)
+
 
 def _macro_match_score(
     original_macros: Dict[str, float],
@@ -49,6 +51,24 @@ def _macro_match_score(
     return sum(scores) / len(scores) if scores else 0.0
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert to float, tolerating None/invalid values."""
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int_or_none(val: Any) -> int | None:
+    """Best-effort int conversion; returns None on failure."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
 @tool
 async def substitute_tool(
     tree_data: TreeData,
@@ -62,6 +82,8 @@ async def substitute_tool(
     recalculate_macros: bool = True,
     user_id: str | None = None,
     plan_id: str | None = None,
+    base_lm=None,  # optional LM for macro recalculation; fallback to kwargs
+    recipe_level: bool = False,  # if True, swap whole recipes instead of only ingredients
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
@@ -88,17 +110,134 @@ async def substitute_tool(
     yield Response("🔄 Finding ingredient substitutes with similar nutrition...")
     
     try:
+        # Prefer explicit base_lm, but allow legacy kwargs path
+        base_lm = base_lm or kwargs.get("base_lm")
+
         # Step 1: Identify ingredient to substitute
         original_fdc_id = fdc_id
         original_ingredient_name = ingredient_name
-        
-        # If ingredient not specified, try to extract from plan (future enhancement)
-        # For now, require ingredient_name or fdc_id
-        
+        # If ingredient not specified, try to extract from plan context
         if not original_ingredient_name and not original_fdc_id:
             yield Error("ingredient_name or fdc_id is required")
             return
+
+        def _iter_plan_recipes(plan_obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+            """Yield all recipe dicts from a plan (meals + accompaniments)."""
+            recipes: List[Dict[str, Any]] = []
+            if not plan_obj:
+                return recipes
+            if plan_obj.get("plan_type") == "day":
+                for meal_data in plan_obj.get("meals", {}).values():
+                    if meal_data.get("recipe"):
+                        recipes.append(meal_data["recipe"])
+                    for acc in meal_data.get("accompaniments", []):
+                        if isinstance(acc, dict) and acc.get("recipe"):
+                            recipes.append(acc["recipe"])
+            elif plan_obj.get("plan_type") == "week":
+                for day_data in plan_obj.get("days", {}).values():
+                    for meal_data in day_data.get("meals", {}).values():
+                        if meal_data.get("recipe"):
+                            recipes.append(meal_data["recipe"])
+                        for acc in meal_data.get("accompaniments", []):
+                            if isinstance(acc, dict) and acc.get("recipe"):
+                                recipes.append(acc["recipe"])
+            return recipes
+
+        def _resolve_fdc_from_plan(name: str, plan_obj: Dict[str, Any]) -> tuple[int | None, Dict[str, Any] | None]:
+            """Resolve an ingredient name to an FDC id using the plan's ingredient maps."""
+            if not name or not plan_obj:
+                return None, None
+            needle = name.lower()
+            for recipe in _iter_plan_recipes(plan_obj):
+                ingredient_map = recipe.get("ingredient_fdc_map", []) or []
+                for ing in ingredient_map:
+                    if not isinstance(ing, dict):
+                        continue
+                    candidates = [
+                        str(ing.get("ingredient_vn", "")),
+                        str(ing.get("ingredient_en", "")),
+                        str(ing.get("ingredient", "")),
+                        str(ing.get("name", "")),
+                        str(ing.get("description", "")),
+                    ]
+                    if any(needle in field.lower() for field in candidates if field):
+                        fdc_val = ing.get("fdc_id")
+                        try:
+                            return int(fdc_val), ing
+                        except (TypeError, ValueError):
+                            return None, ing
+            return None, None
+
+        # Load plan early so we can resolve ingredient names to fdc_id before querying FDC
+        exclude_allergens: List[str] = []
+        plan: Dict[str, Any] | None = None
+        plan_source: str | None = None
+
+        if plan_id:
+            from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+            plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
+            if plan:
+                plan_source = plan.get("plan_type", "day") + "_plan"
+        elif user_id:
+            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+            if not plan:
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+
+        if not plan:
+            logger.debug("substitute_tool: No plan from database, trying environment cache")
+            day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+            if day_plan_results and day_plan_results[0]["objects"]:
+                plan = copy.deepcopy(day_plan_results[0]["objects"][0])
+                plan_source = "plan_day_e2e_tool"
+            else:
+                week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+                if week_plan_results and week_plan_results[0]["objects"]:
+                    plan = copy.deepcopy(week_plan_results[0]["objects"][0])
+                    plan_source = "plan_week_e2e_tool"
+
+        plan_user_id = plan.get("user_id") if plan else user_id
+        if plan and (plan.get("plan_id") or plan_id):
+            plan["plan_id"] = plan.get("plan_id") or plan_id
+        logger.debug(
+            "substitute_tool: plan loaded | plan_id=%s | source=%s | user_id=%s",
+            plan.get("plan_id") if plan else None,
+            plan_source,
+            plan_user_id,
+        )
+
+        matched_ing = None
+        matched_names: List[str] = []
+        # Attempt to resolve fdc_id from plan ingredient maps when only a name was given
+        if not original_fdc_id and original_ingredient_name and plan:
+            inferred_fdc_id, matched_ing = _resolve_fdc_from_plan(original_ingredient_name, plan)
+            if inferred_fdc_id:
+                original_fdc_id = inferred_fdc_id
+                original_fdc_id_int = _to_int_or_none(original_fdc_id)
+                original_ingredient_name = (
+                    matched_ing.get("ingredient_en")
+                    or matched_ing.get("ingredient_vn")
+                    or matched_ing.get("name")
+                    or original_ingredient_name
+                )
+                logger.debug(
+                    "substitute_tool: resolved ingredient '%s' to fdc_id=%s from plan source=%s",
+                    ingredient_name,
+                    original_fdc_id,
+                    plan_source,
+                )
+            elif matched_ing:
+                # Keep candidate names for fallback search in FDC
+                matched_names = [
+                    matched_ing.get("ingredient_en", ""),
+                    matched_ing.get("ingredient_vn", ""),
+                    matched_ing.get("name", ""),
+                    matched_ing.get("description", ""),
+                ]
         
+        # Normalize fdc_id to int if possible
+        original_fdc_id_int = _to_int_or_none(original_fdc_id)
+
         # Step 2: Get original ingredient macros
         client = client_manager.get_client()
         try:
@@ -108,33 +247,75 @@ async def substitute_tool(
             return
         
         original_fdc = None
-        if original_fdc_id:
+        if original_fdc_id_int is not None:
             original_filter = build_filters_from_where(
-                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(original_fdc_id)}
+                {"path": ["fdc_id"], "operator": "Equal", "valueInt": original_fdc_id_int}
             )
             results = fdc_collection.query.fetch_objects(filters=original_filter, limit=1)
+            logger.debug(
+                "substitute_tool: query original by fdc_id=%s | results=%s",
+                original_fdc_id_int,
+                len(results.objects) if results and results.objects else 0,
+            )
             if results.objects:
                 original_fdc = results.objects[0].properties
-        elif original_ingredient_name:
+        if not original_fdc and original_ingredient_name:
             # Search by description
             results = fdc_collection.query.bm25(
                 query=original_ingredient_name,
                 limit=1,
             )
+            logger.debug(
+                "substitute_tool: bm25 original | query=%s | results=%s",
+                original_ingredient_name,
+                len(results.objects) if results and results.objects else 0,
+            )
             if results.objects:
                 original_fdc = results.objects[0].properties
                 original_fdc_id = original_fdc.get("fdc_id")
+                original_fdc_id_int = _to_int_or_none(original_fdc_id)
+        if not original_fdc and matched_ing and matched_names:
+            # Fallback: try alternative names from plan ingredient map
+            for alt_name in matched_names:
+                if not alt_name:
+                    continue
+                results = fdc_collection.query.bm25(
+                    query=alt_name,
+                    limit=1,
+                )
+                logger.debug(
+                    "substitute_tool: bm25 fallback | query=%s | results=%s",
+                    alt_name,
+                    len(results.objects) if results and results.objects else 0,
+                )
+                if results.objects:
+                    original_fdc = results.objects[0].properties
+                    original_fdc_id = original_fdc.get("fdc_id")
+                    original_fdc_id_int = _to_int_or_none(original_fdc_id)
+                    logger.debug(
+                        "substitute_tool: resolved ingredient via fallback name '%s' -> fdc_id=%s",
+                        alt_name,
+                        original_fdc_id,
+                    )
+                    break
         
         if not original_fdc:
+            logger.error(
+                "substitute_tool: Ingredient not found after fallback | name=%s | fdc_id=%s | plan_id=%s | source=%s",
+                original_ingredient_name,
+                original_fdc_id,
+                plan.get("plan_id") if plan else None,
+                plan_source,
+            )
             yield Error(f"Ingredient not found: {original_ingredient_name or original_fdc_id}")
             return
         
         # Get original macros (per 100g)
         original_macros = {
-            "kcal": float(original_fdc.get("energy_kcal_100g", 0.0)),
-            "protein_g": float(original_fdc.get("protein_g_100g", 0.0)),
-            "fat_g": float(original_fdc.get("fat_g_100g", 0.0)),
-            "carb_g": float(original_fdc.get("carbohydrate_g_100g", 0.0)),
+            "kcal": _safe_float(original_fdc.get("energy_kcal_100g")),
+            "protein_g": _safe_float(original_fdc.get("protein_g_100g")),
+            "fat_g": _safe_float(original_fdc.get("fat_g_100g")),
+            "carb_g": _safe_float(original_fdc.get("carbohydrate_g_100g")),
         }
         
         # Step 3: Suggest substitutes (unless substitute_fdc_id provided)
@@ -153,10 +334,10 @@ async def substitute_tool(
                 "fdc_id": substitute_fdc_id,
                 "description": substitute_fdc.get("description", ""),
                 "macros_per_100g": {
-                    "kcal": float(substitute_fdc.get("energy_kcal_100g", 0.0)),
-                    "protein_g": float(substitute_fdc.get("protein_g_100g", 0.0)),
-                    "fat_g": float(substitute_fdc.get("fat_g_100g", 0.0)),
-                    "carb_g": float(substitute_fdc.get("carbohydrate_g_100g", 0.0)),
+                    "kcal": _safe_float(substitute_fdc.get("energy_kcal_100g")),
+                    "protein_g": _safe_float(substitute_fdc.get("protein_g_100g")),
+                    "fat_g": _safe_float(substitute_fdc.get("fat_g_100g")),
+                    "carb_g": _safe_float(substitute_fdc.get("carbohydrate_g_100g")),
                 },
                 "match_score": 100.0,  # Assume perfect match for direct apply
             }]
@@ -167,26 +348,34 @@ async def substitute_tool(
                 query=search_query,
                 limit=100,
             )
+            logger.debug(
+                "substitute_tool: bm25 substitutes | query=%s | results=%s",
+                search_query,
+                len(search_results.objects) if search_results and search_results.objects else 0,
+            )
             
             # Score and rank substitutes
             scored_substitutes = []
             for obj in search_results.objects:
                 substitute = obj.properties
                 sub_fdc_id = substitute.get("fdc_id")
-                if sub_fdc_id == original_fdc_id:
+                sub_fdc_id_int = _to_int_or_none(sub_fdc_id)
+                if sub_fdc_id_int is None:
+                    continue  # skip entries without valid FDC id
+                if sub_fdc_id_int is not None and sub_fdc_id_int == original_fdc_id_int:
                     continue  # Skip original
                 
                 sub_macros = {
-                    "kcal": float(substitute.get("energy_kcal_100g", 0.0)),
-                    "protein_g": float(substitute.get("protein_g_100g", 0.0)),
-                    "fat_g": float(substitute.get("fat_g_100g", 0.0)),
-                    "carb_g": float(substitute.get("carbohydrate_g_100g", 0.0)),
+                    "kcal": _safe_float(substitute.get("energy_kcal_100g")),
+                    "protein_g": _safe_float(substitute.get("protein_g_100g")),
+                    "fat_g": _safe_float(substitute.get("fat_g_100g")),
+                    "carb_g": _safe_float(substitute.get("carbohydrate_g_100g")),
                 }
                 
                 match_score = _macro_match_score(original_macros, sub_macros, tolerance)
                 if match_score > 0:
                     scored_substitutes.append({
-                        "fdc_id": sub_fdc_id,
+                        "fdc_id": sub_fdc_id_int or sub_fdc_id,
                         "description": substitute.get("description", ""),
                         "macros_per_100g": sub_macros,
                         "match_score": match_score,
@@ -201,41 +390,6 @@ async def substitute_tool(
             return
         
         # Step 4: Check allergens (if plan available)
-        exclude_allergens = []
-        plan = None
-        plan_source = None
-        
-        # Load plan from Weaviate if plan_id provided
-        if plan_id:
-            from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
-            plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
-            if plan:
-                plan_source = plan.get("plan_type", "day") + "_plan"
-        elif user_id:
-            # Load latest plan for user
-            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
-            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
-            if not plan:
-                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
-        
-        # Fallback: try environment cache (only as last resort)
-        if not plan:
-            logger.debug("substitute_tool: No plan from database, trying environment cache")
-            day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-            if day_plan_results and day_plan_results[0]["objects"]:
-                plan = copy.deepcopy(day_plan_results[0]["objects"][0])
-                plan_source = "plan_day_e2e_tool"
-            else:
-                week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-                if week_plan_results and week_plan_results[0]["objects"]:
-                    plan = copy.deepcopy(week_plan_results[0]["objects"][0])
-                    plan_source = "plan_week_e2e_tool"
-        
-        plan_user_id = plan.get("user_id") if plan else user_id
-        if plan and (plan.get("plan_id") or plan_id):
-            plan["plan_id"] = plan.get("plan_id") or plan_id
-        
-        # Read constraints for allergen checks
         if plan:
             filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
             if filters_results and filters_results[0]["objects"]:
@@ -314,59 +468,123 @@ async def substitute_tool(
                         recipe = meal_data.get("recipe", {})
                         if recipe.get("food_id"):
                             recipes_to_update.append((recipe, meal_data))
-            
-            # Get substitute FDC data
-            sub_filter = build_filters_from_where(
-                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(target_substitute_fdc_id)}
-            )
-            sub_results = fdc_collection.query.fetch_objects(filters=sub_filter, limit=1)
-            if not sub_results.objects:
-                yield Error(f"Substitute FDC ID {target_substitute_fdc_id} not found")
-                return
-            substitute_fdc = sub_results.objects[0].properties
-            
-            # Update recipes that contain the original ingredient
-            for recipe, meal_data in recipes_to_update:
-                food_id = recipe.get("food_id")
-                ingredient_map = recipe.get("ingredient_fdc_map", [])
-                
-                # Check if recipe uses original ingredient
-                uses_original = False
-                updated_map = []
-                for ing_entry in ingredient_map:
-                    if isinstance(ing_entry, dict) and ing_entry.get("fdc_id") == original_fdc_id:
-                        uses_original = True
-                        # Replace with substitute
-                        updated_map.append({
-                            **ing_entry,
-                            "fdc_id": target_substitute_fdc_id,
-                            "ingredient_en": substitute_fdc.get("description", ing_entry.get("ingredient_en", "")),
-                        })
-                    else:
-                        updated_map.append(ing_entry)
-                
-                if uses_original:
-                    # Update recipe in Weaviate
-                    recipe_filter = build_filters_from_where(
-                        {"path": ["food_id"], "operator": "Equal", "valueString": food_id}
+
+            # Helper: match ingredient by fdc_id or name when fdc_id missing
+            def _uses_original(ing_entry: Dict[str, Any]) -> bool:
+                if not isinstance(ing_entry, dict):
+                    return False
+                fdc_match = False
+                name_match = False
+                entry_fdc = _to_int_or_none(ing_entry.get("fdc_id"))
+                if original_fdc_id_int is not None and entry_fdc is not None:
+                    fdc_match = entry_fdc == original_fdc_id_int
+                if not fdc_match and original_ingredient_name:
+                    candidate_fields = [
+                        str(ing_entry.get("ingredient_vn", "")),
+                        str(ing_entry.get("ingredient_en", "")),
+                        str(ing_entry.get("ingredient", "")),
+                        str(ing_entry.get("name", "")),
+                        str(ing_entry.get("description", "")),
+                    ]
+                    needle = original_ingredient_name.lower()
+                    name_match = any(needle in field.lower() for field in candidate_fields if field)
+                return fdc_match or name_match
+
+            if recipe_level:
+                # Replace whole recipes with beef recipes matched by macros/name
+                from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+
+                def _recipe_match_score(original_recipe: Dict[str, Any], candidate: Dict[str, Any]) -> float:
+                    orig_macros = _get_meal_macros(original_recipe)
+                    cand_macros = _get_meal_macros(candidate)
+                    return _macro_match_score(orig_macros, cand_macros, tolerance)
+
+                for recipe, meal_data in recipes_to_update:
+                    food_id = recipe.get("food_id")
+                    ingredient_map = recipe.get("ingredient_fdc_map", [])
+                    if not any(_uses_original(ing) for ing in ingredient_map):
+                        continue
+                    search_name = f"{recipe.get('dish_name', original_ingredient_name)} thịt bò"
+                    candidate_results = recipe_collection.query.bm25(query=search_name, limit=50)
+                    logger.debug(
+                        "substitute_tool: recipe-level bm25 | query=%s | results=%s",
+                        search_name,
+                        len(candidate_results.objects) if candidate_results and candidate_results.objects else 0,
                     )
-                    recipe_results = recipe_collection.query.fetch_objects(filters=recipe_filter, limit=1)
-                    if recipe_results.objects:
-                        recipe_obj = recipe_results.objects[0]
-                        recipe_obj.properties["ingredient_fdc_map"] = updated_map
-                        recipe_collection.data.update(uuid=recipe_obj.uuid, properties=recipe_obj.properties)
-                        
-                        # Update recipe in plan
-                        recipe["ingredient_fdc_map"] = updated_map
-                        updated_recipes.append(food_id)
-            
-            if not updated_recipes:
-                yield Response(f"ℹ️ No recipes in plan use ingredient with FDC ID {original_fdc_id}")
-                return
+                    scored = []
+                    for obj in candidate_results.objects:
+                        cand = obj.properties
+                        # Skip if not beef-ish
+                        desc = (cand.get("dish_name") or cand.get("description") or "").lower()
+                        if "bò" not in desc and "beef" not in desc:
+                            continue
+                        score = _recipe_match_score(recipe, cand)
+                        if score > 0:
+                            scored.append((score, cand))
+                    if not scored:
+                        continue
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    best_cand = scored[0][1]
+                    meal_data["recipe"] = best_cand
+                    updated_recipes.append(food_id)
+
+                if not updated_recipes:
+                    yield Response(f"ℹ️ No recipes in plan use ingredient with FDC ID {original_fdc_id}")
+                    return
+            else:
+                # Ingredient-level replacement
+                # Get substitute FDC data
+                sub_filter = build_filters_from_where(
+                    {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(target_substitute_fdc_id)}
+                )
+                sub_results = fdc_collection.query.fetch_objects(filters=sub_filter, limit=1)
+                if not sub_results.objects:
+                    yield Error(f"Substitute FDC ID {target_substitute_fdc_id} not found")
+                    return
+                substitute_fdc = sub_results.objects[0].properties
+
+                # Update recipes that contain the original ingredient
+                for recipe, meal_data in recipes_to_update:
+                    food_id = recipe.get("food_id")
+                    ingredient_map = recipe.get("ingredient_fdc_map", [])
+                    
+                    # Check if recipe uses original ingredient
+                    uses_original = False
+                    updated_map = []
+                    for ing_entry in ingredient_map:
+                        if _uses_original(ing_entry):
+                            uses_original = True
+                            # Replace with substitute
+                            updated_map.append({
+                                **ing_entry,
+                                "fdc_id": target_substitute_fdc_id,
+                                "ingredient_en": substitute_fdc.get("description", ing_entry.get("ingredient_en", "")),
+                            })
+                        else:
+                            updated_map.append(ing_entry)
+                    
+                    if uses_original:
+                        # Update recipe in Weaviate
+                        recipe_filter = build_filters_from_where(
+                            {"path": ["food_id"], "operator": "Equal", "valueString": food_id}
+                        )
+                        recipe_results = recipe_collection.query.fetch_objects(filters=recipe_filter, limit=1)
+                        if recipe_results.objects:
+                            recipe_obj = recipe_results.objects[0]
+                            recipe_obj.properties["ingredient_fdc_map"] = updated_map
+                            recipe_collection.data.update(uuid=recipe_obj.uuid, properties=recipe_obj.properties)
+                            
+                            # Update recipe in plan
+                            recipe["ingredient_fdc_map"] = updated_map
+                            updated_recipes.append(food_id)
+
+                if not updated_recipes:
+                    yield Response(f"ℹ️ No recipes in plan use ingredient with FDC ID {original_fdc_id}")
+                    return
             
             # Recalculate macros if requested
             macros_recalculated = False
-            if recalculate_macros and kwargs.get("base_lm"):
+            if recalculate_macros and base_lm:
                 yield Response("Recalculating recipe macros after substitution...")
                 for food_id in updated_recipes:
                     try:
@@ -375,7 +593,7 @@ async def substitute_tool(
                             complex_lm=None,
                             tree_data=tree_data,
                             client_manager=client_manager,
-                            base_lm=kwargs.get("base_lm"),
+                            base_lm=base_lm,
                         ):
                             if isinstance(result, Error):
                                 yield Response(f"Warning: Failed to recalculate macros for recipe {food_id}")
@@ -384,7 +602,7 @@ async def substitute_tool(
                     except Exception as e:
                         logging.warning(f"substitute_tool: Error recalculating macros for recipe {food_id}: {str(e)}")
                         yield Response(f"Warning: Error recalculating macros for recipe {food_id}")
-            elif recalculate_macros and not kwargs.get("base_lm"):
+            elif recalculate_macros and not base_lm:
                 yield Response("Warning: base_lm not provided. Macros not recalculated.")
             
             # Recalculate plan totals
