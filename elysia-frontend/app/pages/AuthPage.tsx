@@ -78,14 +78,14 @@ const AuthPage: React.FC = () => {
       </TabsList>
       <TabsContent value="login">
         <Card className="border-secondary/10 bg-background_alt">
-          <CardHeader>
+          {/* <CardHeader>
             <CardTitle>Sign in</CardTitle>
             <CardDescription>
               Access your MealAgent workspace
             </CardDescription>
-          </CardHeader>
+          </CardHeader> */}
           <CardContent>
-            <form className="space-y-4" onSubmit={handleLoginSubmit}>
+            <form className="space-y-4 mt-4" onSubmit={handleLoginSubmit}>
               <div>
                 <Label htmlFor="login-email" className="text-sm">Email</Label>
                 <Input
@@ -123,14 +123,14 @@ const AuthPage: React.FC = () => {
       </TabsContent>
       <TabsContent value="register">
         <Card className="border-secondary/10 bg-background_alt">
-          <CardHeader>
+          {/* <CardHeader>
             <CardTitle>Create account</CardTitle>
             <CardDescription>
               Set up your credentials to save preferences
             </CardDescription>
-          </CardHeader>
+          </CardHeader> */}
           <CardContent>
-            <form className="space-y-4" onSubmit={handleRegisterSubmit}>
+            <form className="space-y-4 mt-4" onSubmit={handleRegisterSubmit}>
               <div>
                 <Label htmlFor="register-name" className="text-sm">Display name</Label>
                 <Input
