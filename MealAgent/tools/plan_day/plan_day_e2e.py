@@ -1937,21 +1937,26 @@ async def plan_day_e2e_tool(
             
             max_main_kcal = 550.0
             min_main_protein = base_min_protein
+            min_main_kcal = 200.0  # CRITICAL: Require minimum kcal to ensure sufficient nutrition
             if remaining_targets:
                 protein_remaining = remaining_targets.get("protein_g", 0.0)
                 protein_ratio = protein_remaining / daily_protein if daily_protein > 0 else 1.0
                 if protein_ratio > 0.5:
                     max_main_kcal = 650.0
                     min_main_protein = max(base_min_protein, 40.0)
+                    min_main_kcal = 300.0  # Increased minimum kcal
                 elif protein_remaining > daily_protein * 0.4:
                     max_main_kcal = 600.0
                     min_main_protein = max(base_min_protein, 35.0)
+                    min_main_kcal = 250.0
                 elif protein_remaining > daily_protein * 0.2:
                     min_main_protein = max(base_min_protein, 30.0)
+                    min_main_kcal = 200.0
             elif targets:
                 # If no remaining_targets but have targets, assume we need protein
                 max_main_kcal = 600.0
                 min_main_protein = base_min_protein
+                min_main_kcal = 200.0
             
             logging.debug(
                 f"LUNCH_MAIN_SELECTION: "
