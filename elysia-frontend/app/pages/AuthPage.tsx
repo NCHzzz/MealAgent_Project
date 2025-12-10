@@ -199,7 +199,7 @@ const AuthPage: React.FC = () => {
         {/* Auth forms (centered) */}
         <div className="w-full">
           <div className="text-center mb-6 lg:mb-8">
-            <h1 className="text-2xl lg:text-3xl font-semibold text-primary">
+            <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">
               {isAuthenticated
                 ? "Redirecting to your dashboard..."
                 : "Welcome to MealAgent"}
