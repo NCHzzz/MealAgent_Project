@@ -23,6 +23,8 @@ export default function MealHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<MealHistoryResponse | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const [selectedDate, setSelectedDate] = useState<string | null>(null); // YYYY-MM-DD
 
   const fetchMealHistory = async () => {
     if (!id) {
@@ -83,6 +85,35 @@ export default function MealHistoryPage() {
     ];
   };
 
+        // Helper: format YYYY-MM-DD
+        const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
+
+        // Build calendar days for the current month (array of Date or null for blanks)
+        const buildMonthGrid = (month: Date) => {
+          const first = new Date(month.getFullYear(), month.getMonth(), 1);
+          const last = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+          const startWeekday = first.getDay(); // 0 (Sun) - 6
+          const days: (Date | null)[] = [];
+          // Fill blanks before first day
+          for (let i = 0; i < startWeekday; i++) days.push(null);
+          for (let d = 1; d <= last.getDate(); d++) days.push(new Date(month.getFullYear(), month.getMonth(), d));
+          // Pad to complete weeks (42 cells)
+          while (days.length % 7 !== 0) days.push(null);
+          return days;
+        };
+
+        const monthGrid = buildMonthGrid(currentMonth);
+
+        // Map logs by date (YYYY-MM-DD)
+        const logsByDate: Record<string, any[]> = {};
+        if (historyData && historyData.logs) {
+          historyData.logs.forEach((log) => {
+            const d = log.logged_at.slice(0, 10);
+            if (!logsByDate[d]) logsByDate[d] = [] as any;
+            logsByDate[d].push(log as any);
+          });
+        }
+
   return (
     <div className="w-full">
       <div className="container mx-auto px-4 py-8 max-w-6xl">
@@ -105,6 +136,52 @@ export default function MealHistoryPage() {
           </CardHeader>
           <CardContent>
             <Separator className="mb-4" />
+
+            {/* Calendar */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}>&lt;</Button>
+                  <div className="text-sm font-medium">{currentMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</div>
+                  <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}>&gt;</Button>
+                </div>
+                <div>
+                  <Button size="sm" variant={selectedDate ? "default" : "outline"} onClick={() => setSelectedDate(null)}>Show All</Button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-1 text-xs text-secondary mb-1">
+                <div className="text-center">Sun</div>
+                <div className="text-center">Mon</div>
+                <div className="text-center">Tue</div>
+                <div className="text-center">Wed</div>
+                <div className="text-center">Thu</div>
+                <div className="text-center">Fri</div>
+                <div className="text-center">Sat</div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-2">
+                {monthGrid.map((d, idx) => {
+                  if (!d) return <div key={idx} />;
+                  const dayKey = fmtDate(d);
+                  const hasLogs = !!logsByDate[dayKey] && logsByDate[dayKey].length > 0;
+                  const kcal = historyData?.daily_totals?.[dayKey]?.kcal;
+                  const isSelected = selectedDate === dayKey;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => setSelectedDate(dayKey)}
+                      className={`p-2 rounded-lg text-sm w-full text-left ${isSelected ? 'bg-accent/10 border border-accent' : 'hover:bg-foreground/5'} `}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">{d.getDate()}</span>
+                        {hasLogs && <span className="text-xs text-secondary">{kcal ? Math.round(kcal) + ' kcal' : '●'}</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {loading && (
               <div className="flex w-full h-40 items-center justify-center">
@@ -129,7 +206,29 @@ export default function MealHistoryPage() {
                   <div className="w-full">
                     <div className="max-h-[60vh] overflow-y-auto px-2">
                       <div className="mx-auto w-full max-w-3xl">
-                        <MealHistoryDisplay history={getDisplayData()} />
+                        {(() => {
+                          // If a specific date is selected, show only that day's logs
+                          if (selectedDate) {
+                            const dayLogs = (logsByDate[selectedDate] || []).map((log: any) => ({
+                              log_id: log.log_id,
+                              logged_at: log.logged_at,
+                              meal_description: log.meal_description,
+                              parsed_dish: log.parsed_dish,
+                              calculated_macros: log.calculated_macros,
+                              calculated_micros: log.calculated_micros,
+                              portion_size: log.portion_size,
+                              ingredients: log.ingredients,
+                            }));
+                            const payload = [
+                              {
+                                logs: dayLogs,
+                                daily_totals: selectedDate && historyData?.daily_totals ? { [selectedDate]: historyData.daily_totals[selectedDate] } : {},
+                              } as any as MealHistoryPayload,
+                            ];
+                            return <MealHistoryDisplay history={payload} />;
+                          }
+                          return <MealHistoryDisplay history={getDisplayData()} />;
+                        })()}
                       </div>
                     </div>
                   </div>
