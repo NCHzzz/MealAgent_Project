@@ -5,6 +5,7 @@ IMPORTANT: Tools should load plans from Weaviate (source of truth), not from env
 Environment is only for LLM agent navigation and system operations.
 """
 
+import json
 import logging
 from typing import Dict, Any, Optional, List
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
@@ -46,9 +47,13 @@ def load_plan_from_weaviate(
     """
     try:
         client = client_manager.get_client()
-        plan_collection = client.collections.get("MealPlan")
-        item_collection = client.collections.get("MealPlanItem")
-        recipe_collection = client.collections.get("Recipe")
+        try:
+            plan_collection = client.collections.get("MealPlan")
+            item_collection = client.collections.get("MealPlanItem")
+            recipe_collection = client.collections.get("Recipe")
+        except Exception as e:
+            logger.error(f"load_plan_from_weaviate: collections not available: {str(e)}")
+            return None
         
         # Load plan metadata
         plan_filter = build_filters_from_where(
@@ -180,15 +185,24 @@ def load_plan_from_weaviate(
 
                     # If the plan item already stored aggregated macros (actual_macros), prefer it
                     actual_macros = item.get("actual_macros")
-                    if isinstance(actual_macros, dict) and actual_macros:
-                        # Override macros with server-side saved totals (already includes accompaniments)
-                        meal_data["macros"] = {
-                            "kcal": float(actual_macros.get("kcal", meal_data["macros"]["kcal"])),
-                            "protein_g": float(actual_macros.get("protein_g", meal_data["macros"]["protein_g"])),
-                            "fat_g": float(actual_macros.get("fat_g", meal_data["macros"]["fat_g"])),
-                            "carb_g": float(actual_macros.get("carb_g", meal_data["macros"]["carb_g"])),
-                        }
-                        meal_data["macros_total"] = meal_data["macros"]
+                    if actual_macros:
+                        # Parse JSON string if needed
+                        if isinstance(actual_macros, str):
+                            try:
+                                actual_macros = json.loads(actual_macros)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to parse actual_macros JSON for item {item.get('recipe_id')}")
+                                actual_macros = None
+                        
+                        if isinstance(actual_macros, dict) and actual_macros:
+                            # Override macros with server-side saved totals (already includes accompaniments)
+                            meal_data["macros"] = {
+                                "kcal": float(actual_macros.get("kcal", meal_data["macros"]["kcal"])),
+                                "protein_g": float(actual_macros.get("protein_g", meal_data["macros"]["protein_g"])),
+                                "fat_g": float(actual_macros.get("fat_g", meal_data["macros"]["fat_g"])),
+                                "carb_g": float(actual_macros.get("carb_g", meal_data["macros"]["carb_g"])),
+                            }
+                            meal_data["macros_total"] = meal_data["macros"]
                 
                 plan["meals"][meal_type] = meal_data
                 
@@ -227,7 +241,11 @@ def load_latest_plan_from_weaviate(
     """
     try:
         client = client_manager.get_client()
-        plan_collection = client.collections.get("MealPlan")
+        try:
+            plan_collection = client.collections.get("MealPlan")
+        except Exception as e:
+            logger.error(f"load_latest_plan_from_weaviate: MealPlan collection not available: {str(e)}")
+            return None
         
         # Find latest plan for user
         user_filter = build_filters_from_where({
@@ -239,20 +257,28 @@ def load_latest_plan_from_weaviate(
         })
         
         # Sort by created_at descending, get most recent
+        # Note: Weaviate may not support sort parameter directly, so we fetch multiple and sort in-memory
         plan_results = plan_collection.query.fetch_objects(
             filters=user_filter,
-            limit=1,
-            sort="created_at:desc" if hasattr(plan_collection.query, 'sort') else None,
+            limit=10,  # Fetch top 10 and sort in-memory
         )
         
         if not plan_results.objects:
             logger.debug(f"No {plan_type} plan found for user {user_id}")
             return None
         
-        plan_obj = plan_results.objects[0]
+        # Sort by created_at descending (most recent first)
+        sorted_plans = sorted(
+            plan_results.objects,
+            key=lambda obj: obj.properties.get("created_at", ""),
+            reverse=True
+        )
+        
+        plan_obj = sorted_plans[0]
         plan_id = plan_obj.properties.get("plan_id")
         
         if not plan_id:
+            logger.warning(f"load_latest_plan_from_weaviate: plan found but plan_id is missing")
             return None
         
         # Load full plan using plan_id

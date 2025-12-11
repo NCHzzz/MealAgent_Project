@@ -25,9 +25,9 @@ except ImportError:
     ElysiaQuery = None
 
 # Defaults
-DEFAULT_SEARCH_LIMIT = 50
+DEFAULT_SEARCH_LIMIT = 100
 DEFAULT_HYBRID_ALPHA = 0.7  # Phase 1.3: Vector 0.7, keyword 0.3 (as per flow doc)
-DEFAULT_TOP_K = 50
+DEFAULT_TOP_K = 100
 DEFAULT_SEARCH_THRESHOLD = 0.6  # Phase 1.3: Minimum score threshold for search results
 
 
@@ -185,7 +185,7 @@ async def _search_with_custom_logic(
             where = constraints_results[0]["objects"][0].get("where")
 
         # Determine fetch limit and offset for better diversity
-        fetch_limit = min(max(limit, 50), sample_size)
+        fetch_limit = min(max(limit, 100), sample_size)
         offset = 0
         if randomize_offset:
             try:
@@ -642,27 +642,29 @@ async def search_and_rank_tool(
                 )
 
             missing_before_refresh = _count_missing(top_items)
-            try:
-                client = client_manager.get_client()
-                top_items = refresh_recipes(top_items, client, collection_name="Recipe", hydrate_fields=True)
-                missing_after_refresh = _count_missing(top_items)
-                missing_ids = [
-                    str(item.get("food_id") or item.get("recipe_id") or item.get("id"))
-                    for item in top_items
-                    if not item.get("macros_per_serving")
-                    or not isinstance(item.get("macros_per_serving"), dict)
-                    or not item.get("macros_per_serving", {}).get("kcal")
-                ][:5]
-                logging.debug(
-                    "search_and_rank_tool: refreshed %d recipes (missing macros before=%d, after=%d, sample_missing=%s)",
-                    len(top_items),
-                    missing_before_refresh,
-                    missing_after_refresh,
-                    missing_ids or "none",
-                )
-            except Exception as refresh_exc:
-                logging.debug(f"Failed to refresh recipes from Weaviate: {refresh_exc}")
-                # Continue with existing items if refresh fails
+            # Optimization: skip refresh when all items already have macros to save time
+            if missing_before_refresh > 0:
+                try:
+                    client = client_manager.get_client()
+                    top_items = refresh_recipes(top_items, client, collection_name="Recipe", hydrate_fields=True)
+                    missing_after_refresh = _count_missing(top_items)
+                    missing_ids = [
+                        str(item.get("food_id") or item.get("recipe_id") or item.get("id"))
+                        for item in top_items
+                        if not item.get("macros_per_serving")
+                        or not isinstance(item.get("macros_per_serving"), dict)
+                        or not item.get("macros_per_serving", {}).get("kcal")
+                    ][:5]
+                    logging.debug(
+                        "search_and_rank_tool: refreshed %d recipes (missing macros before=%d, after=%d, sample_missing=%s)",
+                        len(top_items),
+                        missing_before_refresh,
+                        missing_after_refresh,
+                        missing_ids or "none",
+                    )
+                except Exception as refresh_exc:
+                    logging.debug(f"Failed to refresh recipes from Weaviate: {refresh_exc}")
+                    # Continue with existing items if refresh fails
             
             # Check for missing macros (should be rare if recipes are pre-processed)
             missing_macros_count = sum(

@@ -187,6 +187,8 @@ type MealComponent = {
 };
 
 export type MealPlanPayload = DefaultResultPayload & {
+  plan_id?: string;
+  user_id?: string;
   plan_type: "day" | "week";
   meals?: {
     [mealKey: string]: MealComponent & {

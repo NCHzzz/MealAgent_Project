@@ -1,12 +1,14 @@
 "use client";
 
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { motion } from "framer-motion";
 import { MealPlanPayload } from "@/app/types/displays";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import DisplayPagination from "../../components/DisplayPagination";
 import { ImageIcon } from "lucide-react";
+import { acceptPlan } from "@/app/api/acceptPlan";
 
 type DailyMeal = NonNullable<MealPlanPayload["meals"]>[string];
 type WeeklyMeal = NonNullable<
@@ -27,6 +29,10 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
   handleResultPayloadChange,
 }) => {
   if (plans.length === 0) return null;
+
+  const [acceptingPlanId, setAcceptingPlanId] = useState<string | null>(null);
+  const [acceptMessage, setAcceptMessage] = useState<string | null>(null);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
 
   const formatMacro = (value: number, unit: string = "g") => {
     // Round to 1 decimal place for consistency
@@ -87,6 +93,38 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
       undefined
     );
   };
+
+  const handleAcceptPlan = useCallback(
+    async (plan: MealPlanPayload) => {
+      setAcceptMessage(null);
+      setAcceptError(null);
+
+      if (!plan.plan_id || !plan.user_id) {
+        setAcceptError(
+          "Thiếu user hoặc plan_id. Đã gửi tín hiệu tới agent để xử lý."
+        );
+        handleResultPayloadChange?.("accept_plan", {
+          plan_id: plan.plan_id,
+          user_id: plan.user_id,
+        });
+        return;
+      }
+
+      setAcceptingPlanId(plan.plan_id);
+      const res = await acceptPlan(plan.user_id, plan.plan_id);
+      setAcceptingPlanId(null);
+
+      if (res.success) {
+        setAcceptMessage(res.message || "Đã chấp nhận kế hoạch");
+        handleResultPayloadChange?.("refresh_meal_history", {
+          plan_id: plan.plan_id,
+        });
+      } else {
+        setAcceptError(res.error || "Không thể chấp nhận kế hoạch");
+      }
+    },
+    [handleResultPayloadChange]
+  );
 
   const openRecipeDetail = (
     e: React.MouseEvent,
@@ -198,9 +236,23 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
     return (
       <Card className="w-full bg-background_alt border-secondary/10">
         <CardHeader>
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-2">
             <CardTitle className="text-lg">Daily Meal Plan</CardTitle>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => handleAcceptPlan(plan)}
+              disabled={acceptingPlanId === plan.plan_id}
+            >
+              {acceptingPlanId === plan.plan_id ? "Đang lưu..." : "Accept plan"}
+            </Button>
           </div>
+          {(acceptMessage || acceptError) && (
+            <div className="text-sm mt-2">
+              {acceptMessage && <span className="text-green-600">{acceptMessage}</span>}
+              {acceptError && <span className="text-red-500">{acceptError}</span>}
+            </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Meals */}
@@ -354,9 +406,23 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
     return (
       <Card className="w-full bg-background_alt border-secondary/10">
         <CardHeader>
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-2">
             <CardTitle className="text-lg">Weekly Meal Plan</CardTitle>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => handleAcceptPlan(plan)}
+              disabled={acceptingPlanId === plan.plan_id}
+            >
+              {acceptingPlanId === plan.plan_id ? "Đang lưu..." : "Accept plan"}
+            </Button>
           </div>
+          {(acceptMessage || acceptError) && (
+            <div className="text-sm mt-2">
+              {acceptMessage && <span className="text-green-600">{acceptMessage}</span>}
+              {acceptError && <span className="text-red-500">{acceptError}</span>}
+            </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Days */}

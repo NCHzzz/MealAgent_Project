@@ -163,6 +163,11 @@ def _create_default_white_rice_recipe() -> Dict[str, Any]:
     }
 
 
+def _is_default_white_rice_id(recipe_id: str | None) -> bool:
+    """Return True if the id corresponds to the default white rice fallback."""
+    return str(recipe_id) == "default_white_rice"
+
+
 def _is_hotpot(recipe: Dict[str, Any]) -> bool:
     """Detect lẩu/hotpot dishes to avoid for inappropriate meals (e.g., breakfast)."""
     name = str(recipe.get("dish_name", "")).lower()
@@ -229,6 +234,7 @@ def _select_carb_with_validation(
     recipes: List[Dict[str, Any]],
     excluded: List[Dict[str, Any]],
     recent_recipe_ids_set: set[str],
+    used_today_ids_set: set[str],
     selection_strategy: str,
     targets: Optional[Dict[str, float]],
     meal_max_kcal: float,
@@ -243,6 +249,7 @@ def _select_carb_with_validation(
         if (
             recipe not in excluded
             and str(recipe.get("food_id", "")) not in recent_recipe_ids_set
+            and str(recipe.get("food_id", "")) not in used_today_ids_set
             and _is_rice_dish(recipe)
             and not _is_main_dish(recipe)
             and not _is_combined_dish(recipe)
@@ -257,7 +264,7 @@ def _select_carb_with_validation(
     # Try LLM suggestions first
     carb_recipe = _try_select_from_llm_suggestions(
         llm_draft, meal_slot, "carb",
-        recipes, excluded, recent_recipe_ids_set,
+        recipes, excluded, recent_recipe_ids_set | used_today_ids_set,
         min_kcal=100.0, max_kcal=meal_max_kcal
     )
     
@@ -275,7 +282,7 @@ def _select_carb_with_validation(
         carb_recipe = select_meal_by_strategy(
             recipes, selection_strategy if targets else "balanced",
             exclude=excluded,
-            used_recipe_ids=recent_recipe_ids_set,
+            used_recipe_ids=recent_recipe_ids_set | used_today_ids_set,
             preferred_meal_type=meal_slot,
             dish_category="rice",
             target_macros=targets,
@@ -285,7 +292,7 @@ def _select_carb_with_validation(
     # Try standalone noodle dishes if still not found
     if not carb_recipe:
         for recipe in recipes:
-            if recipe in excluded or str(recipe.get("food_id", "")) in recent_recipe_ids_set:
+            if recipe in excluded or str(recipe.get("food_id", "")) in recent_recipe_ids_set or str(recipe.get("food_id", "")) in used_today_ids_set:
                 continue
             if _is_noodle_soup(recipe) and not _is_combined_dish(recipe):
                 macros = recipe.get("macros_per_serving", {})
@@ -856,23 +863,28 @@ async def plan_day_e2e_tool(
 
         # At this point, `recipes` must be non-empty
         
-        # IMPROVED VARIETY: Shuffle recipes and exclude recent plans to ensure better variety
-        # Shuffle recipes multiple times for better randomization
-        for _ in range(3):  # Shuffle 3 times for better randomization
-            random.shuffle(recipes)
-        
-        # Check for recent plans and exclude their recipes (configurable minutes, default 10 minutes for testing)
+        # IMPROVED VARIETY: shuffle and exclude recently used recipes/names with stronger penalty
+        def _shuffle_recipes(items: list[Dict[str, Any]], times: int = 3) -> None:
+            for _ in range(times):
+                random.shuffle(items)
+
+        _shuffle_recipes(recipes, times=3)
+
         recent_recipe_ids = set()
+        recent_recipe_names: set[str] = set()
         try:
             client = client_manager.get_client()
             plan_collection = client.collections.get("MealPlan")
             item_collection = client.collections.get("MealPlanItem")
-            recent_recipe_names: set[str] = set()
-            
-            # Get recent plans within configured window (days) for this user
-            # Use 7 days to ensure better variety and avoid repetition
+            # Tracking counters to understand where blocklist comes from
+            ids_from_mealplan = 0
+            names_from_mealplan = 0
+            ids_from_meallog = 0
+            names_from_meallog = 0
+            ids_from_env_cache = 0
+            names_from_env_cache = 0
+
             if user_id:
-                # Use 7 days window for better variety (instead of minutes)
                 window_days = 7
                 recent_date = ensure_rfc3339_datetime(
                     datetime.now(timezone.utc) - timedelta(days=window_days)
@@ -884,81 +896,131 @@ async def plan_day_e2e_tool(
                         {"path": ["created_at"], "operator": "GreaterThan", "valueDate": recent_date}
                     ]
                 })
-                
-                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=10)
+
+                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=20)
                 if recent_plans.objects:
-                    # Collect all recipe IDs from recent plans
                     for plan_obj in recent_plans.objects:
-                        plan_id = plan_obj.properties.get("plan_id")
-                        if plan_id:
-                            item_filter = build_filters_from_where(
-                                {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
-                            )
-                            items = item_collection.query.fetch_objects(filters=item_filter, limit=50)
-                            for item_obj in items.objects:
-                                recipe_id = item_obj.properties.get("recipe_id")
-                                if recipe_id:
-                                    recent_recipe_ids.add(str(recipe_id))
-                                dish_name = item_obj.properties.get("dish_name")
-                                if dish_name:
-                                    recent_recipe_names.add(str(dish_name).lower().strip())
-                    
-                    # Also add meal history recipe IDs to exclusion
-                    if 'meal_history_recipe_ids' in locals():
-                        recent_recipe_ids.update(meal_history_recipe_ids)
-                    # And add meal history names to name-based exclusion
-                    if 'meal_history_dish_names' in locals():
-                        recent_recipe_names.update(
-                            str(name).lower().strip() for name in meal_history_dish_names if name
+                        pid = plan_obj.properties.get("plan_id")
+                        if not pid:
+                            continue
+                        item_filter = build_filters_from_where(
+                            {"path": ["plan_id"], "operator": "Equal", "valueString": pid}
                         )
-                    
-                    # Filter out recently used recipes (but keep at least 30 recipes for better variety)
-                    # This ensures we have enough candidates even after exclusion
-                    if recent_recipe_ids and len(recipes) > 30:
-                        original_count = len(recipes)
-                        recipes = [r for r in recipes if str(r.get("food_id", "")) not in recent_recipe_ids]
-                        # Shuffle again after filtering
-                        random.shuffle(recipes)
-                        if original_count > len(recipes):
-                            yield Response(
-                                f"🔄 Excluded {original_count - len(recipes)} recently used recipe(s) "
-                                f"to ensure variety in your meal plan"
-                            )
-                    elif recent_recipe_ids and len(recipes) <= 30:
-                        # If we have few recipes, still exclude but warn
-                        original_count = len(recipes)
-                        recipes = [r for r in recipes if str(r.get("food_id", "")) not in recent_recipe_ids]
-                        random.shuffle(recipes)
-                        if len(recipes) < 10:
-                            yield Response(
-                                f"⚠️ Limited recipe variety: only {len(recipes)} unique recipes available "
-                                f"after excluding {original_count - len(recipes)} recently used ones"
-                            )
-                    
-                    # Additional safeguard: exclude by dish name from recent plans + meal history
-                    if recent_recipe_names:
-                        name_blocklist = {name for name in recent_recipe_names if name}
-                        if name_blocklist and len(recipes) > 30:
-                            original_count = len(recipes)
-                            recipes = [r for r in recipes if str(r.get("dish_name", "")).lower().strip() not in name_blocklist]
-                            random.shuffle(recipes)
-                            if original_count > len(recipes):
-                                yield Response(
-                                    f"🔄 Excluded {original_count - len(recipes)} recently eaten dish(es) (name match) "
-                                    f"to avoid repetition"
-                                )
-                        elif name_blocklist and len(recipes) <= 30:
-                            original_count = len(recipes)
-                            recipes = [r for r in recipes if str(r.get("dish_name", "")).lower().strip() not in name_blocklist]
-                            random.shuffle(recipes)
-                            if len(recipes) < 10:
-                                yield Response(
-                                    f"⚠️ Limited variety after excluding recently eaten dishes by name; "
-                                    f"only {len(recipes)} recipes remain"
-                                )
+                        items = item_collection.query.fetch_objects(filters=item_filter, limit=128)
+                        for item_obj in items.objects:
+                            rid = item_obj.properties.get("recipe_id")
+                            if rid:
+                                recent_recipe_ids.add(str(rid))
+                                ids_from_mealplan += 1
+                            dname = item_obj.properties.get("dish_name")
+                            if dname:
+                                recent_recipe_names.add(str(dname).lower().strip())
+                                names_from_mealplan += 1
+
+            # Add meal history blocklists
+            if "meal_history_recipe_ids" in locals():
+                before_len = len(recent_recipe_ids)
+                recent_recipe_ids.update(meal_history_recipe_ids)
+                ids_from_meallog = len(recent_recipe_ids) - before_len
+            if "meal_history_dish_names" in locals():
+                before_len_names = len(recent_recipe_names)
+                recent_recipe_names.update(str(n).lower().strip() for n in meal_history_dish_names if n)
+                names_from_meallog = len(recent_recipe_names) - before_len_names
+
+            # Also block dishes from the last plan cached in environment (previous run in session)
+            env_plans = tree_data.environment.find("plan_day_e2e_tool", "plan")
+            if env_plans:
+                latest_plan_entry = env_plans[-1]
+                latest_plan_objs = latest_plan_entry.get("objects") or []
+                if latest_plan_objs:
+                    try:
+                        last_plan = latest_plan_objs[-1]
+                        last_meals = last_plan.get("meals") or {}
+                        for meal_obj in last_meals.values():
+                            main_recipe = meal_obj.get("recipe") or {}
+                            rid = str(main_recipe.get("food_id", "")).strip()
+                            rname = str(main_recipe.get("dish_name", "")).lower().strip()
+                            if rid:
+                                ids_from_env_cache += 1
+                                recent_recipe_ids.add(rid)
+                            if rname:
+                                names_from_env_cache += 1
+                                recent_recipe_names.add(rname)
+                            for acc in meal_obj.get("accompaniments", []) or []:
+                                acc_recipe = acc.get("recipe") or {}
+                                acc_rid = str(acc_recipe.get("food_id", "")).strip()
+                                acc_name = str(acc_recipe.get("dish_name", "")).lower().strip()
+                                if acc_rid:
+                                    ids_from_env_cache += 1
+                                    recent_recipe_ids.add(acc_rid)
+                                if acc_name:
+                                    names_from_env_cache += 1
+                                    recent_recipe_names.add(acc_name)
+                    except Exception as env_exc:
+                        logging.debug(f"plan_day_e2e_tool: failed to parse env cached plan for variety: {env_exc}")
+
+            # Always allow default white rice as fallback (do not block it)
+            recent_recipe_ids.discard("default_white_rice")
+            recent_recipe_names.discard("cơm trắng")
+            recent_recipe_names.discard("com trang")
+            recent_recipe_names.discard("white rice")
+
+            logging.debug(
+                "plan_day_e2e_tool: blocklist summary | ids=%d names=%d | "
+                "from_mealplan ids=%d names=%d | from_meallog ids=%d names=%d | from_env_cache ids=%d names=%d",
+                len(recent_recipe_ids),
+                len(recent_recipe_names),
+                ids_from_mealplan,
+                names_from_mealplan,
+                ids_from_meallog,
+                names_from_meallog,
+                ids_from_env_cache,
+                names_from_env_cache,
+            )
+
+            def _apply_exclusion(pool: list[Dict[str, Any]], ids: set[str], names: set[str]) -> list[Dict[str, Any]]:
+                if not pool:
+                    return pool
+                id_block = ids or set()
+                name_block = names or set()
+                # Always try strong exclusion first; keep a minimum pool of 40 items
+                filtered = [r for r in pool if str(r.get("food_id", "")) not in id_block and str(r.get("dish_name", "")).lower().strip() not in name_block]
+                if len(filtered) >= 40:
+                    return filtered
+                # If too few remain, relax name block but keep ID block
+                filtered = [r for r in pool if str(r.get("food_id", "")) not in id_block]
+                if len(filtered) >= 30:
+                    return filtered
+                # Last resort: keep all but de-duplicate later
+                return pool
+
+            before = len(recipes)
+            recipes = _apply_exclusion(recipes, recent_recipe_ids, recent_recipe_names)
+            after = len(recipes)
+            dropped = before - after
+            if dropped > 0:
+                yield Response(f"🔄 Giảm lặp: bỏ {dropped} món đã xuất hiện gần đây để tăng đa dạng.")
+                logging.debug(
+                    "plan_day_e2e_tool: variety_filter | before=%d after=%d dropped=%d recent_ids=%d recent_names=%d | "
+                    "block_from_mealplan ids=%d names=%d | block_from_meallog ids=%d names=%d | "
+                    "block_from_env_cache ids=%d names=%d",
+                    before,
+                    after,
+                    dropped,
+                    len(recent_recipe_ids),
+                    len(recent_recipe_names),
+                    ids_from_mealplan,
+                    names_from_mealplan,
+                    ids_from_meallog,
+                    names_from_meallog,
+                    ids_from_env_cache,
+                    names_from_env_cache,
+                )
+
+            _shuffle_recipes(recipes, times=2)
+
         except Exception as e:
             logging.debug(f"plan_day_e2e_tool: Could not check recent plans for variety: {e}")
-            # Continue with all recipes if check fails
 
         if len(recipes) < 3:
             yield Error(
@@ -979,37 +1041,28 @@ async def plan_day_e2e_tool(
             )
 
         missing_before_refresh = _count_missing_macros(recipes)
-        try:
-            client = client_manager.get_client()
-            recipes = refresh_recipes(recipes, client, collection_name="Recipe", hydrate_fields=True)
-            missing_after_refresh = _count_missing_macros(recipes)
-            missing_ids = [
-                str(r.get("food_id") or r.get("recipe_id") or r.get("id"))
-                for r in recipes
-                if not r.get("macros_per_serving")
-                or not isinstance(r.get("macros_per_serving"), dict)
-                or not r.get("macros_per_serving", {}).get("kcal")
-            ][:5]
-            logging.debug(
-                "plan_day_e2e_tool: refreshed %d recipes (missing macros before=%d, after=%d, sample_missing=%s)",
-                len(recipes),
-                missing_before_refresh,
-                missing_after_refresh,
-                missing_ids or "none",
-            )
-            logging.debug(
-                "plan_day_e2e_tool: recipe sample after refresh %s",
-                [
-                    (
-                        str(r.get("food_id") or r.get("recipe_id") or r.get("id")),
-                        (r.get("macros_per_serving") or {}).get("kcal"),
-                    )
-                    for r in recipes[:5]
-                ],
-            )
-        except Exception as refresh_exc:
-            logging.debug(f"Failed to refresh recipes from Weaviate: {refresh_exc}")
-            # Continue with existing recipes if refresh fails
+        missing_after_refresh = missing_before_refresh
+        # Skip refresh if all recipes already have macros to save time/tokens
+        if missing_before_refresh > 0:
+            try:
+                client = client_manager.get_client()
+                recipes = refresh_recipes(recipes, client, collection_name="Recipe", hydrate_fields=True)
+                missing_after_refresh = _count_missing_macros(recipes)
+                missing_ids = [
+                    str(r.get("food_id") or r.get("recipe_id") or r.get("id"))
+                    for r in recipes
+                    if not r.get("macros_per_serving")
+                    or not isinstance(r.get("macros_per_serving"), dict)
+                    or not r.get("macros_per_serving", {}).get("kcal")
+                ][:3]
+                logging.debug(
+                    "plan_day_e2e_tool: refresh_recipes done | missing_before=%d missing_after=%d sample_missing=%s",
+                    missing_before_refresh,
+                    missing_after_refresh,
+                    missing_ids or "none",
+                )
+            except Exception as refresh_exc:
+                logging.debug(f"plan_day_e2e_tool: refresh_recipes failed, continue without refresh: {refresh_exc}")
         
         # Check for missing macros (should be rare if recipes are pre-processed)
         missing_macros = [
@@ -1074,6 +1127,30 @@ async def plan_day_e2e_tool(
         recent_recipe_ids_set = recent_recipe_ids if 'recent_recipe_ids' in locals() else set()
         if 'meal_history_recipe_ids' in locals():
             recent_recipe_ids_set.update(meal_history_recipe_ids)
+        # Ensure default white rice is never blocked by recency filters
+        recent_recipe_ids_set.discard("default_white_rice")
+
+        # Track recipes used inside this planning session to avoid intra-plan repetition
+        used_today_ids: set[str] = set()
+        used_today_names: set[str] = set()
+
+        def _mark_used(recipe: Dict[str, Any] | None):
+            """Remember selected recipe to avoid reusing within the same plan."""
+            if not recipe:
+                return
+            rid = str(recipe.get("food_id", "") or "")
+            name = str(recipe.get("dish_name", "")).lower().strip()
+            if rid and rid != "default_white_rice":
+                used_today_ids.add(rid)
+            if name and name not in {"cơm trắng", "com trang", "white rice"}:
+                used_today_names.add(name)
+            logging.debug(
+                "plan_day_e2e_tool: mark_used id=%s name=%s | used_today_ids=%d used_today_names=%d",
+                rid,
+                name,
+                len(used_today_ids),
+                len(used_today_names),
+            )
         
         # Use macro_fit strategy if targets available for better quality
         selection_strategy = "macro_fit" if targets else "balanced"
@@ -1113,7 +1190,7 @@ async def plan_day_e2e_tool(
                     recipes,
                     "breakfast"
                 )
-                if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set and str(mapped_recipe.get("food_id", "")) not in used_today_ids:
                     if _is_hotpot(mapped_recipe):
                         logging.warning(
                             "BREAKFAST_REJECT_HOTPOT: Skipping hotpot for breakfast suggestion: %s",
@@ -1122,6 +1199,7 @@ async def plan_day_e2e_tool(
                         continue
                     breakfast = mapped_recipe
                     yield Response(f"✅ Selected breakfast from AI suggestion: {breakfast.get('dish_name', 'Unknown')}")
+                    _mark_used(breakfast)
                     break
         
         # Fallback to rule-based selection if LLM mapping failed
@@ -1161,7 +1239,7 @@ async def plan_day_e2e_tool(
             
             breakfast = select_meal_by_strategy(
                 recipes, breakfast_strategy, 
-                used_recipe_ids=recent_recipe_ids_set,
+                used_recipe_ids=recent_recipe_ids_set | used_today_ids,
                 preferred_meal_type="breakfast",
                 dish_category="breakfast",
                 target_macros=breakfast_targets,
@@ -1173,6 +1251,8 @@ async def plan_day_e2e_tool(
             if breakfast and _is_hotpot(breakfast):
                 logging.warning("BREAKFAST_REJECT_HOTPOT: Rule-based breakfast is hotpot, retrying fallback...")
                 breakfast = None
+            if breakfast:
+                _mark_used(breakfast)
         if not breakfast:
             # Fallback: try any breakfast-type dish (still with kcal limit and protein requirement)
             breakfast_targets = targets.copy() if targets else None
@@ -1199,7 +1279,7 @@ async def plan_day_e2e_tool(
             
             breakfast = select_meal_by_strategy(
                 recipes, breakfast_strategy, 
-                used_recipe_ids=recent_recipe_ids_set,
+                used_recipe_ids=recent_recipe_ids_set | used_today_ids,
                 preferred_meal_type="breakfast",
                 dish_category="breakfast",  # CRITICAL: Ensure only breakfast dishes are selected
                 target_macros=breakfast_targets,
@@ -1211,49 +1291,55 @@ async def plan_day_e2e_tool(
             if breakfast and _is_hotpot(breakfast):
                 logging.warning("BREAKFAST_REJECT_HOTPOT: Fallback breakfast is hotpot, clearing...")
                 breakfast = None
+            if breakfast:
+                _mark_used(breakfast)
         if not breakfast:
             yield Response("⚠️ No breakfast dish found. Selecting best available Vietnamese breakfast option...")
             # CRITICAL: Only select Vietnamese breakfast dishes, not main dishes
             best_breakfast = None
             best_protein = 0.0
             for recipe in recipes:
-                if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
-                    # CRITICAL: Must be Vietnamese breakfast dish
-                    if not _is_vietnamese_breakfast(recipe):
-                        continue
-                    if _is_hotpot(recipe):
-                        continue
-                    macros = recipe.get("macros_per_serving", {})
-                    if isinstance(macros, dict):
-                        kcal = macros.get("kcal", 0)
-                        protein = macros.get("protein_g", 0)
-                        if 100 <= kcal <= breakfast_max_kcal and protein > best_protein:
-                            best_breakfast = recipe
-                            best_protein = protein
+                rid = str(recipe.get("food_id", ""))
+                if rid in recent_recipe_ids_set or rid in used_today_ids:
+                    continue
+                if not _is_vietnamese_breakfast(recipe):
+                    continue
+                if _is_hotpot(recipe):
+                    continue
+                macros = recipe.get("macros_per_serving", {})
+                if isinstance(macros, dict):
+                    kcal = macros.get("kcal", 0)
+                    protein = macros.get("protein_g", 0)
+                    if 100 <= kcal <= breakfast_max_kcal and protein > best_protein:
+                        best_breakfast = recipe
+                        best_protein = protein
             if best_breakfast:
                 breakfast = best_breakfast
             elif recipes:
                 # Last resort: find highest protein Vietnamese breakfast regardless of kcal
                 for recipe in recipes:
-                    if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
-                        # CRITICAL: Must be Vietnamese breakfast dish
-                        if not _is_vietnamese_breakfast(recipe):
-                            continue
-                        macros = recipe.get("macros_per_serving", {})
-                        if isinstance(macros, dict):
-                            protein = macros.get("protein_g", 0)
-                            if protein > best_protein:
-                                best_breakfast = recipe
-                                best_protein = protein
+                    rid = str(recipe.get("food_id", ""))
+                    if rid in recent_recipe_ids_set or rid in used_today_ids:
+                        continue
+                    if not _is_vietnamese_breakfast(recipe):
+                        continue
+                    macros = recipe.get("macros_per_serving", {})
+                    if isinstance(macros, dict):
+                        protein = macros.get("protein_g", 0)
+                        if protein > best_protein:
+                            best_breakfast = recipe
+                            best_protein = protein
                 if best_breakfast:
                     breakfast = best_breakfast
                 else:
                     # Final fallback: find any Vietnamese breakfast dish
                     for recipe in recipes:
-                        if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
-                            if _is_vietnamese_breakfast(recipe):
-                                breakfast = recipe
-                                break
+                        rid = str(recipe.get("food_id", ""))
+                        if rid in recent_recipe_ids_set or rid in used_today_ids:
+                            continue
+                        if _is_vietnamese_breakfast(recipe):
+                            breakfast = recipe
+                            break
             if not breakfast:
                 yield Response("❌ No Vietnamese breakfast dishes available. Please search for breakfast recipes first.")
                 return
@@ -1278,6 +1364,11 @@ async def plan_day_e2e_tool(
             else:
                 yield Response("❌ No valid Vietnamese breakfast dishes found. Please ensure breakfast recipes are available.")
                 return
+
+        # Remember breakfast to avoid reusing within this plan (avoid double-marking)
+        bf_id = str(breakfast.get("food_id", ""))
+        if bf_id not in used_today_ids:
+            _mark_used(breakfast)
         
         # CRITICAL: Validate breakfast kcal and protein after selection
         breakfast_macros = _get_meal_macros(breakfast)
@@ -1422,7 +1513,7 @@ async def plan_day_e2e_tool(
         # Select lunch carb with validation (use lunch_max_kcal for lighter lunch)
         lunch_carb, is_lunch_combined, is_lunch_noodle = _select_carb_with_validation(
             llm_draft, "lunch",
-            recipes, excluded, recent_recipe_ids_set,
+            recipes, excluded, recent_recipe_ids_set, used_today_ids,
             selection_strategy, lunch_targets, lunch_max_kcal
         )
         
@@ -1434,6 +1525,7 @@ async def plan_day_e2e_tool(
                 yield Response("ℹ️ No suitable lunch dish found. Using default white rice.")
         
         lunch_rice = lunch_carb
+        _mark_used(lunch_rice)
         
         # Select accompaniments
         if lunch_rice:
@@ -1469,6 +1561,10 @@ async def plan_day_e2e_tool(
                 elif _is_main_dish(lunch_veg):
                     logging.warning(f"Lunch vegetable '{lunch_veg.get('dish_name', 'Unknown')}' is actually a main dish, rejecting...")
                     lunch_veg = None
+
+            # Mark used to prevent intra-plan reuse
+            for dish in (lunch_rice, lunch_main, lunch_veg, lunch_soup, lunch_fruit):
+                _mark_used(dish)
             
             # CRITICAL: Ensure no duplicate dishes in lunch
             lunch_dishes = [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit]
@@ -1970,7 +2066,7 @@ async def plan_day_e2e_tool(
             lunch_main = select_meal_by_strategy(
                 recipes, "highest_protein", 
                 exclude=excluded, 
-                used_recipe_ids=recent_recipe_ids_set,
+                used_recipe_ids=recent_recipe_ids_set | used_today_ids,
                 preferred_meal_type="lunch", 
                 dish_category="main",  # CRITICAL: Specify category to ensure correct selection
                 target_macros=targets,
@@ -2001,7 +2097,7 @@ async def plan_day_e2e_tool(
                 lunch_main = select_meal_by_strategy(
                     recipes, "highest_protein",
                     exclude=excluded,
-                    used_recipe_ids=recent_recipe_ids_set,
+                    used_recipe_ids=recent_recipe_ids_set | used_today_ids,
                     preferred_meal_type="lunch",
                     target_macros=targets,
                     require_macros=True,
@@ -2032,7 +2128,7 @@ async def plan_day_e2e_tool(
         # Select dinner carb with validation (use dinner_max_kcal for heavier dinner)
         dinner_carb, is_dinner_combined, is_dinner_noodle = _select_carb_with_validation(
             llm_draft, "dinner",
-            recipes, excluded, recent_recipe_ids_set,
+            recipes, excluded, recent_recipe_ids_set, used_today_ids,
             selection_strategy, dinner_targets, dinner_max_kcal
         )
         
@@ -2044,6 +2140,7 @@ async def plan_day_e2e_tool(
                 yield Response("ℹ️ No suitable dinner dish found. Using default white rice.")
         
         dinner_rice = dinner_carb
+        _mark_used(dinner_rice)
         
         # Select accompaniments
         if dinner_rice:
@@ -2076,6 +2173,10 @@ async def plan_day_e2e_tool(
                 elif _is_main_dish(dinner_veg):
                     logging.warning(f"Dinner vegetable '{dinner_veg.get('dish_name', 'Unknown')}' is actually a main dish, rejecting...")
                     dinner_veg = None
+
+            # Mark used to prevent intra-plan reuse (before supplementary selection)
+            for dish in (dinner_rice, dinner_main, dinner_veg, dinner_soup, dinner_fruit):
+                _mark_used(dish)
             
             # CRITICAL: Ensure no duplicate dishes
             all_selected_dishes = [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit, dinner_rice, dinner_main, dinner_soup, dinner_veg, dinner_fruit]
@@ -2593,7 +2694,7 @@ async def plan_day_e2e_tool(
             dinner_main = select_meal_by_strategy(
                 recipes, "highest_protein", 
                 exclude=excluded, 
-                used_recipe_ids=recent_recipe_ids_set,
+                used_recipe_ids=recent_recipe_ids_set | used_today_ids,
                 preferred_meal_type="dinner", 
                 dish_category="main",  # CRITICAL: Specify category to ensure correct selection
                 target_macros=targets,
@@ -2624,7 +2725,7 @@ async def plan_day_e2e_tool(
                 dinner_main = select_meal_by_strategy(
                     recipes, "highest_protein",
                     exclude=excluded,
-                    used_recipe_ids=recent_recipe_ids_set,
+                    used_recipe_ids=recent_recipe_ids_set | used_today_ids,
                     preferred_meal_type="dinner",
                     target_macros=targets,
                     require_macros=True,

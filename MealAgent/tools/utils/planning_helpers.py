@@ -444,9 +444,11 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "day_index": day_index,
                     "meal_type": meal_data.get("meal_type", meal_key),
                     "recipe_id": str(recipe_id),
+                    # Persist dish_name so variety filters can block by name in future plans
+                    "dish_name": str(recipe.get("dish_name", "")).strip(),
                     "servings": servings,
                     # Store as map to align with MealPlanItem schema
-                    "actual_macros": total_macros,
+                    "actual_macros": total_macros if isinstance(total_macros, dict) else {},
                 }
             )
 
@@ -641,6 +643,25 @@ async def _calculate_plan_micronutrients(
     }
 
 
+def _ensure_meal_plan_collections(client):
+    """
+    Ensure MealPlan and MealPlanItem collections exist, return (plan_collection, item_collection) or (None, None).
+    
+    Args:
+        client: Weaviate client
+        
+    Returns:
+        Tuple of (plan_collection, item_collection) or (None, None) if collections don't exist
+    """
+    try:
+        plan_collection = client.collections.get("MealPlan")
+        item_collection = client.collections.get("MealPlanItem")
+        return plan_collection, item_collection
+    except Exception as e:
+        logging.error(f"MealPlan collections not available: {str(e)}. Ensure collections are created via migrations.")
+        return None, None
+
+
 def sync_plan_to_weaviate(
     plan: Dict[str, Any],
     user_id: str,
@@ -649,25 +670,45 @@ def sync_plan_to_weaviate(
 ) -> Dict[str, Any]:
     """
     Upsert MealPlan + MealPlanItem records so downstream tools can rely on persisted data.
+    
+    IMPORTANT: This function is the source of truth for plan persistence.
+    Always call this after modifying a plan to ensure changes are saved.
+    
+    Args:
+        plan: Plan dictionary (will be modified in-place with plan_id, user_id, dates)
+        user_id: User ID
+        client_manager: ClientManager instance
+        start_date: Optional start date override
+        
+    Returns:
+        Plan dictionary with plan_id, user_id, start_date, created_at set
     """
     if not user_id:
+        logging.warning("sync_plan_to_weaviate: user_id not provided, skipping persistence")
         return plan
 
     client = client_manager.get_client()
-    try:
-        plan_collection = client.collections.get("MealPlan")
-        item_collection = client.collections.get("MealPlanItem")
-    except Exception as e:
-        logging.error(f"Failed to access MealPlan collections: {str(e)}")
-        return plan  # Return plan without persisting if collections unavailable
+    plan_collection, item_collection = _ensure_meal_plan_collections(client)
+    if not plan_collection or not item_collection:
+        logging.warning("sync_plan_to_weaviate: collections unavailable, returning plan without persistence")
+        return plan
 
     plan_type = plan.get("plan_type", "day")
     plan_id = plan.get("plan_id") or _generate_plan_id(user_id)
-    created_at = ensure_rfc3339_datetime(plan.get("created_at"))
-    plan_start_date = ensure_rfc3339_datetime(
-        plan.get("start_date") or start_date,
-        date_only=True,
-    )
+    
+    # Normalize dates to RFC3339 format (UTC, 'Z' suffix)
+    try:
+        created_at = ensure_rfc3339_datetime(plan.get("created_at"))
+        plan_start_date = ensure_rfc3339_datetime(
+            plan.get("start_date") or start_date,
+            date_only=True,
+        )
+    except Exception as e:
+        logging.error(f"sync_plan_to_weaviate: date parsing error: {str(e)}")
+        # Fallback to current time
+        now = datetime.now(timezone.utc)
+        created_at = ensure_rfc3339_datetime(now)
+        plan_start_date = ensure_rfc3339_datetime(now, date_only=True)
 
     plan_payload = {
         "plan_id": plan_id,
@@ -677,37 +718,101 @@ def sync_plan_to_weaviate(
         "created_at": created_at,
     }
 
+    # Prevent duplicate day plans on the same date for the same user:
+    # if a new day plan is being saved for a date where another day plan exists, delete the old plan + items.
+    if plan_type == "day":
+        try:
+            duplicate_filter = build_filters_from_where(
+                {
+                    "operator": "And",
+                    "operands": [
+                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                        {"path": ["plan_type"], "operator": "Equal", "valueString": "day"},
+                        {"path": ["start_date"], "operator": "Equal", "valueDate": plan_start_date},
+                    ],
+                }
+            )
+            existing_same_day = plan_collection.query.fetch_objects(
+                filters=duplicate_filter,
+                limit=5,
+            )
+            if existing_same_day.objects:
+                for obj in existing_same_day.objects:
+                    old_plan_id = obj.properties.get("plan_id")
+                    # Delete old MealPlanItem records tied to the old plan
+                    if old_plan_id:
+                        old_plan_filter = build_filters_from_where(
+                            {"path": ["plan_id"], "operator": "Equal", "valueString": old_plan_id}
+                        )
+                        old_items = item_collection.query.fetch_objects(filters=old_plan_filter, limit=256)
+                        for itm in old_items.objects:
+                            try:
+                                item_collection.data.delete_by_id(itm.uuid)
+                            except Exception as e:
+                                logging.debug(f"sync_plan_to_weaviate: failed deleting old item {itm.uuid}: {str(e)}")
+                    # Delete the old MealPlan record
+                    try:
+                        plan_collection.data.delete_by_id(obj.uuid)
+                    except Exception as e:
+                        logging.debug(f"sync_plan_to_weaviate: failed deleting old plan {obj.uuid}: {str(e)}")
+        except Exception as e:
+            logging.warning(f"sync_plan_to_weaviate: unable to purge existing day plan for {plan_start_date}: {str(e)}")
+
     plan_filter = build_filters_from_where(
         {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
     )
-    existing_plan = plan_collection.query.fetch_objects(filters=plan_filter, limit=1)
-    if existing_plan.objects:
-        plan_collection.data.update(uuid=existing_plan.objects[0].uuid, properties=plan_payload)
-    else:
-        plan_collection.data.insert(plan_payload)
+    
+    # Upsert MealPlan
+    try:
+        existing_plan = plan_collection.query.fetch_objects(filters=plan_filter, limit=1)
+        if existing_plan.objects:
+            plan_collection.data.update(uuid=existing_plan.objects[0].uuid, properties=plan_payload)
+            logging.debug(f"sync_plan_to_weaviate: updated MealPlan {plan_id}")
+        else:
+            plan_collection.data.insert(plan_payload)
+            logging.debug(f"sync_plan_to_weaviate: inserted new MealPlan {plan_id}")
+    except Exception as e:
+        logging.error(f"sync_plan_to_weaviate: failed to upsert MealPlan: {str(e)}")
+        return plan  # Return plan without items if plan metadata fails
 
+    # Build and sync MealPlanItems
     items = _build_plan_items(plan)
+    if not items:
+        logging.warning(f"sync_plan_to_weaviate: no items to sync for plan {plan_id}")
+        plan["plan_id"] = plan_id
+        plan["user_id"] = user_id
+        plan["start_date"] = plan_start_date
+        plan["created_at"] = created_at
+        return plan
 
     # OPTIMIZATION: Batch delete existing items
-    if plan_filter:
+    try:
         existing_items = item_collection.query.fetch_objects(filters=plan_filter, limit=256)
         if existing_items.objects:
-            # Batch delete using list of UUIDs (more efficient than individual deletes)
-            uuids_to_delete = [obj.uuid for obj in existing_items.objects]
-            for uuid in uuids_to_delete:
+            deleted_count = 0
+            for obj in existing_items.objects:
                 try:
-                    item_collection.data.delete_by_id(uuid)
-                except Exception:
-                    pass  # Continue if item already deleted
+                    item_collection.data.delete_by_id(obj.uuid)
+                    deleted_count += 1
+                except Exception as e:
+                    logging.debug(f"sync_plan_to_weaviate: item {obj.uuid} already deleted or error: {str(e)}")
+            logging.debug(f"sync_plan_to_weaviate: deleted {deleted_count} existing MealPlanItems for plan {plan_id}")
+    except Exception as e:
+        logging.warning(f"sync_plan_to_weaviate: failed to delete existing items: {str(e)}, continuing with insert")
 
-    # OPTIMIZATION: Batch insert items (if collection supports it, otherwise keep individual)
+    # OPTIMIZATION: Batch insert items
+    inserted_count = 0
     for item in items:
         try:
             item_collection.data.insert({"plan_id": plan_id, **item})
+            inserted_count += 1
         except Exception as e:
-            logging.warning(f"Failed to insert plan item: {str(e)}")
+            logging.warning(f"sync_plan_to_weaviate: failed to insert plan item: {str(e)}")
             continue  # Continue with other items
+    
+    logging.debug(f"sync_plan_to_weaviate: inserted {inserted_count}/{len(items)} MealPlanItems for plan {plan_id}")
 
+    # Update plan dict with persisted values
     plan["plan_id"] = plan_id
     plan["user_id"] = user_id
     plan["start_date"] = plan_start_date

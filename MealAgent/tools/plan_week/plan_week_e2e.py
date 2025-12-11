@@ -534,6 +534,12 @@ async def plan_week_e2e_tool(
                     if dish_name:
                         recent_recipe_names.add(str(dish_name).lower().strip())
                 
+                # Always allow default white rice as fallback (do not block it)
+                recent_recipe_ids.discard("default_white_rice")
+                recent_recipe_names.discard("cơm trắng")
+                recent_recipe_names.discard("com trang")
+                recent_recipe_names.discard("white rice")
+
                 # Filter out recently used recipes (IDs) - keep at least 30 recipes
                 if recent_recipe_ids and len(recipes) > 30:
                     original_count = len(recipes)
@@ -730,8 +736,19 @@ async def plan_week_e2e_tool(
         used_recipes: List[Dict[str, Any]] = []
         # CRITICAL: Track breakfast IDs separately to avoid repetition across days
         used_breakfast_ids: set[str] = set()
+        # Track dish names to reduce repeats across the week (case-insensitive)
+        used_dish_names: set[str] = set()
         # CRITICAL: Track recently used recipes per day to avoid repetition in recent days
         recently_used_per_day: Dict[int, set[str]] = {}
+
+        def _track_name(recipe: Dict[str, Any]) -> None:
+            dname = str(recipe.get("dish_name", "")).lower().strip() if recipe else ""
+            if dname:
+                used_dish_names.add(dname)
+
+        def _is_default_white_rice_id(recipe_id: str | None) -> bool:
+            """Return True if the id corresponds to the default white rice fallback."""
+            return str(recipe_id) == "default_white_rice"
         
         # Calculate max_kcal per meal to avoid selecting dishes that are too high
         # Align with daily planner: lighter lunch, heavier dinner for VN pattern
@@ -801,6 +818,7 @@ async def plan_week_e2e_tool(
             all_recipes: List[Dict[str, Any]] | None,
             used_ids: set[str],
             used_breakfast_ids: set[str] | None,
+            used_names: set[str],
             min_kcal: float,
             max_kcal: float,
             min_protein: float = 0.0,
@@ -827,6 +845,9 @@ async def plan_week_e2e_tool(
                             continue
                         if recipe_id in used_breakfast_ids:
                             continue
+                        dish_name = str(recipe.get("dish_name", "")).lower().strip()
+                        if dish_name and dish_name in used_names:
+                            continue
                         if not _is_vietnamese_breakfast(recipe):
                             continue
                         
@@ -847,6 +868,9 @@ async def plan_week_e2e_tool(
                     recipe_id = str(recipe.get("food_id", ""))
                     if recipe_id in used_ids:
                         continue
+                        dish_name = str(recipe.get("dish_name", "")).lower().strip()
+                        if dish_name and dish_name in used_names:
+                            continue
                     if not _is_vietnamese_breakfast(recipe):
                         continue
                     
@@ -867,6 +891,7 @@ async def plan_week_e2e_tool(
             available_recipes: List[Dict[str, Any]],
             excluded: List[Dict[str, Any]],
             used_ids: set[str],
+            used_names: set[str],
             meal_targets: Dict[str, float] | None,
             max_kcal: float,
             min_protein: float,
@@ -883,6 +908,10 @@ async def plan_week_e2e_tool(
                     available_recipes, excluded, used_ids,
                     min_kcal=50.0, max_kcal=max_kcal
                 )
+                if candidate:
+                    dname = str(candidate.get("dish_name", "")).lower().strip()
+                    if dname and dname in used_names:
+                        candidate = None  # reject if repeated by name
             
             # Fallback to rule-based selection
             # CRITICAL: Try multiple strategies with rotation to increase variety
@@ -905,10 +934,14 @@ async def plan_week_e2e_tool(
                         min_protein=min_protein,
                     )
                     if candidate:
-                        logging.debug(
-                            f"plan_week_e2e_tool: Day {day_index + 1} - {meal_slot} main selected using strategy '{current_strategy}'"
-                        )
-                        break
+                        dname = str(candidate.get("dish_name", "")).lower().strip()
+                        if dname and dname in used_names:
+                            candidate = None  # skip repeated dish name across week
+                        else:
+                            logging.debug(
+                                f"plan_week_e2e_tool: Day {day_index + 1} - {meal_slot} main selected using strategy '{current_strategy}'"
+                            )
+                            break
             
             # Final fallback: try without category restriction for maximum variety
             if not candidate:
@@ -921,6 +954,10 @@ async def plan_week_e2e_tool(
                     min_kcal=50.0,
                     max_kcal=max_kcal,
                 )
+                if candidate:
+                    dname = str(candidate.get("dish_name", "")).lower().strip()
+                    if dname and dname in used_names:
+                        candidate = None
             
             # Validate candidate
             if candidate:
@@ -966,6 +1003,7 @@ async def plan_week_e2e_tool(
             available_recipes: List[Dict[str, Any]],
             excluded: List[Dict[str, Any]],
             used_ids: set[str],
+            used_names: set[str],
             meal_targets: Dict[str, float] | None,
             max_retries: int = 3,
         ) -> Dict[str, Any] | None:
@@ -990,6 +1028,10 @@ async def plan_week_e2e_tool(
                     min_kcal=30.0,
                     max_kcal=150.0,
                 )
+                if candidate:
+                    dname = str(candidate.get("dish_name", "")).lower().strip()
+                    if dname and dname in used_names:
+                        candidate = None
                 
                 # Validate candidate
                 if candidate and validator(candidate):
@@ -1945,7 +1987,9 @@ async def plan_week_e2e_tool(
             accompaniments.append(
                 {"recipe": supp, "servings": 1.0, "type": dish_type}
             )
-            used_recipe_ids.add(str(supp.get("food_id", "")))
+            supp_id = str(supp.get("food_id", ""))
+            if not _is_default_white_rice_id(supp_id):
+                used_recipe_ids.add(supp_id)
             # Re-trim mains if we added another main
             _trim_excess_mains(accompaniments)
 
@@ -2084,7 +2128,8 @@ async def plan_week_e2e_tool(
                             if new_score + 0.005 < best_score:  # require a real improvement
                                 # Accept swap
                                 used_recipe_ids.discard(current_id)
-                                used_recipe_ids.add(cand_id)
+                                if not _is_default_white_rice_id(cand_id):
+                                    used_recipe_ids.add(cand_id)
                                 best_score = new_score
                                 total_macros.update(new_totals)
                                 swaps_made += 1
@@ -2377,30 +2422,33 @@ async def plan_week_e2e_tool(
                 # Use unified function to select and validate main dish
                 lunch_main = _validate_and_select_main_dish(
                     "lunch", day_index, None,
-                    available_recipes, excluded, used_recipe_ids,
+                    available_recipes, excluded, used_recipe_ids, used_dish_names,
                     lunch_targets, max_main_kcal, min_main_protein,
                     llm_draft=llm_draft,
                 )
                 if lunch_main:
                     excluded.append(lunch_main)
+                    _track_name(lunch_main)
                 
                 # Use unified function to select side dishes
                 lunch_veg = _select_side_dish(
                     "lunch", day_index, "vegetable",
-                    available_recipes, excluded, used_recipe_ids,
+                    available_recipes, excluded, used_recipe_ids, used_dish_names,
                     lunch_targets,
                 )
                 if lunch_veg:
                     excluded.append(lunch_veg)
+                    _track_name(lunch_veg)
 
             # Fruit: always allowed, even for combined/noodle (keeps meal light)
             lunch_fruit = _select_side_dish(
                 "lunch", day_index, "fruit",
-                available_recipes, excluded, used_recipe_ids,
+                available_recipes, excluded, used_recipe_ids, used_dish_names,
                 lunch_targets,
             )
             if lunch_fruit:
                 excluded.append(lunch_fruit)
+                _track_name(lunch_fruit)
             
             # Fallback: if no rice/main, use any available recipe
             if not lunch_rice or not lunch_main:
@@ -2504,30 +2552,33 @@ async def plan_week_e2e_tool(
                 # Use unified function to select and validate main dish
                 dinner_main = _validate_and_select_main_dish(
                     "dinner", day_index, None,
-                    available_recipes, excluded, used_recipe_ids,
+                    available_recipes, excluded, used_recipe_ids, used_dish_names,
                     dinner_targets, max_main_kcal, min_main_protein,
                     llm_draft=llm_draft,
                 )
                 if dinner_main:
                     excluded.append(dinner_main)
+                    _track_name(dinner_main)
                 
                 # Use unified function to select side dishes
                 dinner_veg = _select_side_dish(
                     "dinner", day_index, "vegetable",
-                    available_recipes, excluded, used_recipe_ids,
+                    available_recipes, excluded, used_recipe_ids, used_dish_names,
                     dinner_targets,
                 )
                 if dinner_veg:
                     excluded.append(dinner_veg)
+                    _track_name(dinner_veg)
 
             # Fruit: always allowed, even for combined/noodle (keeps meal light)
             dinner_fruit = _select_side_dish(
-                "dinner", day_index, "fruit",
-                available_recipes, excluded, used_recipe_ids,
+            "dinner", day_index, "fruit",
+            available_recipes, excluded, used_recipe_ids, used_dish_names,
                 dinner_targets,
             )
             if dinner_fruit:
                 excluded.append(dinner_fruit)
+            _track_name(dinner_fruit)
             
             # Fallback for dinner
             if not dinner_rice or not dinner_main:
@@ -2560,8 +2611,9 @@ async def plan_week_e2e_tool(
             for meal in all_meals:
                 if meal and meal.get("food_id"):
                     meal_id = str(meal.get("food_id"))
-                    used_recipe_ids.add(meal_id)
-                    day_used_ids.add(meal_id)
+                    if not _is_default_white_rice_id(meal_id):
+                        used_recipe_ids.add(meal_id)
+                        day_used_ids.add(meal_id)
                     used_recipes.append(meal)
             
             # Store recently used recipes for this day

@@ -26,6 +26,8 @@ async def _log_meal_with_macros(
     user_id: str,
     meal_description: str,
     meal_macros: Dict[str, float],
+    recipe: Optional[Dict[str, Any]] = None,
+    accompaniments: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Log a meal with pre-calculated macros (no LLM parsing needed).
@@ -117,8 +119,50 @@ async def _log_meal_with_macros(
             "calculated_micros": json.dumps({}),
             "validation_status": "complete",
             "parsing_method": "pre_calculated",
+            # Persist IDs/names for variety filters
+            "recipe_id": str((recipe or {}).get("food_id") or (recipe or {}).get("recipe_id") or ""),
+            "dish_name": str((recipe or {}).get("dish_name") or meal_description).strip(),
         }
         log_collection.data.insert(log_entry)
+
+        # Also log accompaniments as separate entries to capture their names/IDs for variety
+        if accompaniments:
+            for acc in accompaniments:
+                acc_recipe = acc.get("recipe", {})
+                acc_macros = acc.get("macros", {})
+                acc_servings = _safe_float(acc.get("servings", 1.0), 1.0)
+                # compute macros for accompaniment if not provided
+                if not acc_macros or not isinstance(acc_macros, dict):
+                    try:
+                        from MealAgent.tools.utils.planning_helpers import _get_meal_macros
+                        acc_macros = _get_meal_macros(acc_recipe)
+                    except Exception:
+                        acc_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                acc_total = {
+                    "kcal": acc_macros.get("kcal", 0.0) * acc_servings,
+                    "protein_g": acc_macros.get("protein_g", 0.0) * acc_servings,
+                    "fat_g": acc_macros.get("fat_g", 0.0) * acc_servings,
+                    "carb_g": acc_macros.get("carb_g", 0.0) * acc_servings,
+                }
+                acc_entry = {
+                    "log_id": f"log_{user_id}_{int(datetime.now().timestamp())}_{acc_recipe.get('food_id','acc')}",
+                    "user_id": user_id,
+                    "logged_at": logged_at_iso,
+                    "meal_description": f"{meal_description} - {acc_recipe.get('dish_name','Side')}",
+                    "parsed_dish": acc_recipe.get("dish_name", "Side"),
+                    "ingredients": json.dumps([]),
+                    "portion_size": acc_servings,
+                    "calculated_macros": json.dumps(acc_total),
+                    "calculated_micros": json.dumps({}),
+                    "validation_status": "complete",
+                    "parsing_method": "pre_calculated",
+                    "recipe_id": str(acc_recipe.get("food_id") or acc_recipe.get("recipe_id") or ""),
+                    "dish_name": str(acc_recipe.get("dish_name", "")).strip(),
+                }
+                try:
+                    log_collection.data.insert(acc_entry)
+                except Exception as e:
+                    logging.debug(f"log_meal_e2e: failed to insert accompaniment log: {e}")
 
         # Update profile
         profile["updated_at"] = logged_at_iso
@@ -163,13 +207,14 @@ async def _log_single_meal(
     meal_description: str,
     meal_macros: Dict[str, float],
     recipe: Optional[Dict[str, Any]] = None,
+    accompaniments: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Log a single meal with pre-calculated macros.
     Wrapper around _log_meal_with_macros for consistency.
     """
     async for result in _log_meal_with_macros(
-        tree_data, client_manager, user_id, meal_description, meal_macros
+        tree_data, client_manager, user_id, meal_description, meal_macros, recipe, accompaniments
     ):
         yield result
 
@@ -307,7 +352,7 @@ async def log_meal_e2e_tool(
                 
                 # Log this meal
                 async for result in _log_single_meal(
-                    tree_data, client_manager, base_lm, user_id, meal_desc, meal_macros, recipe
+                    tree_data, client_manager, base_lm, user_id, meal_desc, meal_macros, recipe, accompaniments
                 ):
                     yield result
                     if isinstance(result, Result) and result.name == "updated_profile":
@@ -370,7 +415,7 @@ async def log_meal_e2e_tool(
                     f"accompaniments_count={len(accompaniments)}"
                 )
                 async for result in _log_meal_with_macros(
-                    tree_data, client_manager, user_id, meal_desc, meal_macros
+                    tree_data, client_manager, user_id, meal_desc, meal_macros, recipe, accompaniments
                 ):
                     yield result
                     if isinstance(result, Result) and result.name == "updated_profile":
@@ -432,7 +477,7 @@ async def log_meal_e2e_tool(
                     f"accompaniments_count={len(accompaniments)}"
                 )
                 async for result in _log_meal_with_macros(
-                    tree_data, client_manager, user_id, meal_desc, meal_macros
+                    tree_data, client_manager, user_id, meal_desc, meal_macros, recipe, accompaniments
                 ):
                     yield result
                     if isinstance(result, Result) and result.name == "updated_profile":

@@ -144,7 +144,8 @@ def add_supplementary_dishes(
     
     # CRITICAL: Add dishes if we're below targets - but STRICTLY control excess
     # Priority: protein first, then kcal, but STOP if we exceed targets
-    max_additional_dishes = 3  # tighter cap to avoid runaway additions
+    # Tighter cap to avoid runaway additions/repeated mains
+    max_additional_dishes = 1
     dishes_added = 0
     
     # Get all excluded dish IDs
@@ -282,7 +283,7 @@ def add_supplementary_dishes(
                 f"kcal_deficit_ratio={kcal_deficit_ratio*100:.1f}%"
             )
             
-            # Find a main dish with high protein
+            # Find a main dish with high protein (only 1 supplementary allowed overall)
             best_main = None
             best_score = 0.0
             for recipe in recipes:
