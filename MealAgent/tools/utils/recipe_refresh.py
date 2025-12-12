@@ -41,15 +41,16 @@ def fetch_latest_recipe(
             results = collection.query.fetch_objects(filters=recipe_filter, limit=1)
             if results.objects:
                 props = results.objects[0].properties
-                logger.debug(
-                    "fetch_latest_recipe: hit %s=%s macros=%s",
-                    payload["path"][0],
-                    payload.get("valueString") or payload.get("valueInt"),
-                    bool(props.get("macros_per_serving")),
-                )
+                # Reduced logging: only log if macros were found (important case)
+                if props.get("macros_per_serving"):
+                    logger.debug(
+                        "fetch_latest_recipe: found recipe %s=%s with macros",
+                        payload["path"][0],
+                        payload.get("valueString") or payload.get("valueInt"),
+                    )
                 return props if hydrate_fields else props
         except Exception as exc:
-            logger.debug("fetch_latest_recipe: failed filter %s due to %s", payload, exc)
+            # Reduced logging: only log if all filters failed (error case)
             continue
 
     return None
@@ -103,11 +104,12 @@ def refresh_recipes(
             for key in ("macros_per_serving", "ingredient_fdc_map", "dish_name", "dish_type", "meal_type"):
                 if key in latest:
                     merged[key] = latest[key]
+            # Reduced logging: only log if macros were added (important case)
             if not recipe.get("macros_per_serving") and merged.get("macros_per_serving"):
-                logger.debug("refresh_recipes: macros updated for %s via %s", rid, rid_field)
+                logger.debug("refresh_recipes: macros added for recipe id=%s", rid)
             refreshed.append(merged)
         else:
-            logger.debug("refresh_recipes: keeping original recipe (no latest) id=%s", rid)
+            # Reduced logging: removed per-recipe "keeping original" log
             refreshed.append(recipe)
     missing_after = sum(
         1

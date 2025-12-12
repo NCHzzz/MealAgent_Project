@@ -5,6 +5,7 @@ from typing import AsyncGenerator, Dict, Any, List
 import copy
 import logging
 import random
+from difflib import SequenceMatcher
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -445,6 +446,22 @@ async def substitute_tool(
                 score = _recipe_match_score(recipe, cand)
                 if score > 0:
                     scored.append((score, cand))
+
+            # Fallback when macros are missing (score=0): use name similarity so we still swap
+            if not scored and candidates:
+                for cand in candidates:
+                    cand_id = cand.get("food_id") or cand.get("recipe_id") or cand.get("id")
+                    if cand_id in used_candidate_ids:
+                        continue
+                    name_sim = SequenceMatcher(
+                        None, str(recipe.get("dish_name", "")), str(cand.get("dish_name", ""))
+                    ).ratio()
+                    # Keep a small floor score so we always have at least one option
+                    scored.append((max(name_sim * 50, 1.0), cand))
+                logger.debug(
+                    "substitute_tool: macro-based scoring empty; using name similarity fallback for recipe %s",
+                    food_id,
+                )
 
             if not scored:
                 logger.debug(f"substitute_tool: no candidates for recipe {food_id}")

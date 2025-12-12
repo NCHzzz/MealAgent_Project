@@ -110,6 +110,39 @@ def _is_vietnamese_breakfast(recipe: Dict[str, Any]) -> bool:
     return False
 
 
+def _is_glutinous_rice_dish(recipe: Dict[str, Any]) -> bool:
+    """
+    Check if recipe is a glutinous rice dish (bánh chưng, bánh tét, xôi, etc.).
+    These should NOT be selected if white rice is already in the meal.
+    """
+    dish_name = str(recipe.get("dish_name", "")).lower()
+    
+    # Glutinous rice keywords
+    glutinous_keywords = [
+        "bánh chưng", "banh chung", "bánh tét", "banh tet",
+        "xôi", "xoi", "xôi mặn", "xoi man", "xôi ngô", "xoi ngo", "xôi gấc", "xoi gac",
+        "bánh nếp", "banh nep", "bánh dày", "banh day",
+        "sticky rice", "glutinous rice"
+    ]
+    
+    for keyword in glutinous_keywords:
+        if keyword in dish_name:
+            return True
+    
+    return False
+
+
+def _is_carb_dish(recipe: Dict[str, Any]) -> bool:
+    """
+    Check if recipe is any type of carb dish (rice, noodle, bread, glutinous rice).
+    Used to prevent duplicate carbs in the same meal.
+    """
+    return (_is_rice_dish(recipe) or 
+            _is_noodle_soup(recipe) or 
+            _is_glutinous_rice_dish(recipe) or
+            _is_combined_dish(recipe))
+
+
 def _is_rice_dish(recipe: Dict[str, Any]) -> bool:
     """Check if recipe is a rice dish (cơm) - plain rice, not main dishes."""
     dish_name = str(recipe.get("dish_name", "")).lower()

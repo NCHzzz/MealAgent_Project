@@ -94,6 +94,89 @@ def _log_plan_meal(
     log_collection.data.insert(log_entry)
 
 
+def log_plan_to_meal_log(
+    plan: Dict[str, Any],
+    user_id: str,
+    client_manager: ClientManager,
+) -> list[Dict[str, Any]]:
+    """
+    Persist a plan into MealLogEntry and return logged meal metadata.
+    Raises exceptions on failure for the caller to handle (tool or API layer).
+    """
+    client = client_manager.get_client()
+    try:
+        log_collection = client.collections.get("MealLogEntry")
+    except Exception as e:
+        raise RuntimeError(f"MealLogEntry collection not found: {str(e)}")
+
+    logged: list[Dict[str, Any]] = []
+    plan_type = plan.get("plan_type", "day")
+    plan_start_date = _ensure_date_only(plan.get("start_date"))
+
+    def _day_logged_at(day_offset: int | None = None, explicit_date: str | None = None) -> str:
+        """Return logged_at ISO anchored to plan date or today."""
+        base_date = _ensure_date_only(explicit_date) or plan_start_date
+        if not base_date:
+            base_date = datetime.now(timezone.utc).date().isoformat()
+        if day_offset is not None:
+            try:
+                dt = datetime.fromisoformat(f"{base_date}T00:00:00") + timedelta(days=day_offset)
+                base_date = dt.date().isoformat()
+            except Exception:
+                pass
+        # use noon to avoid DST edge cases, always UTC
+        return f"{base_date}T12:00:00Z"
+
+    def _log_meal(meal_obj: Dict[str, Any], meal_label: str, logged_at: str):
+        recipe = meal_obj.get("recipe", {}) if isinstance(meal_obj, dict) else {}
+        dish_name = recipe.get("dish_name") or meal_label
+        servings = meal_obj.get("servings", 1.0) if isinstance(meal_obj, dict) else 1.0
+        macros = (
+            meal_obj.get("macros_total")
+            or meal_obj.get("macros")
+            or recipe.get("macros_per_serving")
+            or {}
+        )
+        # Multiply macros by servings if they look like per-serving
+        scaled_macros = {}
+        for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
+            scaled_macros[k] = float(macros.get(k, 0.0)) * float(servings or 1.0)
+
+        ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []
+        _log_plan_meal(
+            log_collection,
+            user_id=user_id,
+            meal_desc=f"{meal_label}: {dish_name}",
+            macros=scaled_macros,
+            ingredients=ingredients if isinstance(ingredients, list) else [],
+            logged_at=logged_at,
+        )
+        logged.append({"meal": meal_label, "dish": dish_name, "macros": scaled_macros})
+
+    if plan_type == "day":
+        # Remove existing logs for the plan date
+        if plan_start_date:
+            _delete_logs_for_date(log_collection, user_id, plan_start_date)
+        for meal_key in ["breakfast", "lunch", "dinner"]:
+            meal_obj = plan.get("meals", {}).get(meal_key) if plan.get("meals") else plan.get(meal_key)
+            if meal_obj:
+                _log_meal(meal_obj, meal_key, _day_logged_at())
+    elif plan_type == "week":
+        for day in plan.get("days", {}).values():
+            meals = day.get("meals", {})
+            day_idx = day.get("day_index") or day.get("day") or 0
+            day_date = _ensure_date_only(day.get("date"))
+            logged_at = _day_logged_at(day_offset=int(day_idx), explicit_date=day_date)
+            if day_date:
+                _delete_logs_for_date(log_collection, user_id, day_date)
+            for meal_key, meal_obj in meals.items():
+                _log_meal(meal_obj, f"day_{day_idx}_{meal_key}", logged_at)
+    else:
+        raise ValueError(f"Unsupported plan_type: {plan_type}")
+
+    return logged
+
+
 @tool
 async def accept_plan_tool(
     tree_data: TreeData,
@@ -139,79 +222,7 @@ async def accept_plan_tool(
         return
 
     try:
-        client = client_manager.get_client()
-        try:
-            log_collection = client.collections.get("MealLogEntry")
-        except Exception as e:
-            yield Error(f"MealLogEntry collection not found: {str(e)}")
-            return
-
-        logged = []
-        plan_type = plan.get("plan_type", "day")
-
-        plan_start_date = _ensure_date_only(plan.get("start_date"))
-
-        def _day_logged_at(day_offset: int | None = None, explicit_date: str | None = None) -> str:
-            """Return logged_at ISO anchored to plan date or today."""
-            base_date = _ensure_date_only(explicit_date) or plan_start_date
-            if not base_date:
-                base_date = datetime.now(timezone.utc).date().isoformat()
-            if day_offset is not None:
-                try:
-                    dt = datetime.fromisoformat(f"{base_date}T00:00:00") + timedelta(days=day_offset)
-                    base_date = dt.date().isoformat()
-                except Exception:
-                    pass
-            # use noon to avoid DST edge cases, always UTC
-            return f"{base_date}T12:00:00Z"
-
-        def _log_meal(meal_obj: Dict[str, Any], meal_label: str, logged_at: str):
-            recipe = meal_obj.get("recipe", {}) if isinstance(meal_obj, dict) else {}
-            dish_name = recipe.get("dish_name") or meal_label
-            servings = meal_obj.get("servings", 1.0) if isinstance(meal_obj, dict) else 1.0
-            macros = (
-                meal_obj.get("macros_total")
-                or meal_obj.get("macros")
-                or recipe.get("macros_per_serving")
-                or {}
-            )
-            # Multiply macros by servings if they look like per-serving
-            scaled_macros = {}
-            for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
-                scaled_macros[k] = float(macros.get(k, 0.0)) * float(servings or 1.0)
-
-            ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []
-            _log_plan_meal(
-                log_collection,
-                user_id=user_id,
-                meal_desc=f"{meal_label}: {dish_name}",
-                macros=scaled_macros,
-                ingredients=ingredients if isinstance(ingredients, list) else [],
-                logged_at=logged_at,
-            )
-            logged.append({"meal": meal_label, "dish": dish_name, "macros": scaled_macros})
-
-        if plan_type == "day":
-            # Remove existing logs for the plan date
-            if plan_start_date:
-                _delete_logs_for_date(log_collection, user_id, plan_start_date)
-            for meal_key in ["breakfast", "lunch", "dinner"]:
-                meal_obj = plan.get("meals", {}).get(meal_key) if plan.get("meals") else plan.get(meal_key)
-                if meal_obj:
-                    _log_meal(meal_obj, meal_key, _day_logged_at())
-        elif plan_type == "week":
-            for day in plan.get("days", {}).values():
-                meals = day.get("meals", {})
-                day_idx = day.get("day_index") or day.get("day") or 0
-                day_date = _ensure_date_only(day.get("date"))
-                logged_at = _day_logged_at(day_offset=int(day_idx), explicit_date=day_date)
-                if day_date:
-                    _delete_logs_for_date(log_collection, user_id, day_date)
-                for meal_key, meal_obj in meals.items():
-                    _log_meal(meal_obj, f"day_{day_idx}_{meal_key}", logged_at)
-        else:
-            yield Error(f"Unsupported plan_type: {plan_type}")
-            return
+        logged = log_plan_to_meal_log(plan, user_id, client_manager)
 
         yield Result(
             name="plan_accepted",

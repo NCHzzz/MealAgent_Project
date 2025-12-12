@@ -414,43 +414,78 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     def _append_meal_entries(meals: Dict[str, Any], day_index: int):
         for meal_key, meal_data in meals.items():
-            # Main recipe
+            meal_type = meal_data.get("meal_type", meal_key)
+            
+            # CRITICAL: Save main recipe as a separate MealPlanItem
             recipe = meal_data.get("recipe", {})
-            if not isinstance(recipe, dict):
-                continue
-            recipe_id = recipe.get("food_id") or recipe.get("recipe_id")
-            if not recipe_id:
-                continue
-            servings = _safe_float(meal_data.get("servings", 1.0), default=1.0)
-            macros = _get_meal_macros(recipe)
+            if isinstance(recipe, dict):
+                recipe_id = recipe.get("food_id") or recipe.get("recipe_id")
+                if recipe_id:
+                    servings = _safe_float(meal_data.get("servings", 1.0), default=1.0)
+                    macros = _get_meal_macros(recipe)
+                    main_macros = {
+                        k: macros.get(k, 0.0) * servings for k in ["kcal", "protein_g", "fat_g", "carb_g"]
+                    }
+                    
+                    main_dish_name = str(recipe.get("dish_name", "")).strip()
+                    items.append(
+                        {
+                            "day_index": day_index,
+                            "meal_type": meal_type,
+                            "recipe_id": str(recipe_id),
+                            # Persist dish_name so variety filters can block by name in future plans
+                            "dish_name": main_dish_name,
+                            "servings": servings,
+                            # Store main recipe macros only (not including accompaniments)
+                            "actual_macros": main_macros if isinstance(main_macros, dict) else {},
+                        }
+                    )
+                    logging.debug(
+                        f"_build_plan_items: Saved main recipe as MealPlanItem | "
+                        f"meal_type={meal_type} recipe_id={recipe_id} dish_name={main_dish_name}"
+                    )
             
-            # Calculate total macros including accompaniments
-            total_macros = {
-                k: macros.get(k, 0.0) * servings for k in ["kcal", "protein_g", "fat_g", "carb_g"]
-            }
-            
-            # Add accompaniments macros (for Vietnamese meals)
+            # CRITICAL: Save each accompaniment as a separate MealPlanItem
+            # This ensures variety filter can block accompaniments (main dishes, soup, vegetables, fruits)
             accompaniments = meal_data.get("accompaniments", [])
+            if accompaniments:
+                logging.debug(
+                    f"_build_plan_items: Found {len(accompaniments)} accompaniments for {meal_type}, "
+                    f"saving each as separate MealPlanItem"
+                )
+            
             for acc in accompaniments:
                 acc_recipe = acc.get("recipe", {})
+                if not isinstance(acc_recipe, dict):
+                    continue
+                
+                acc_recipe_id = acc_recipe.get("food_id") or acc_recipe.get("recipe_id")
+                if not acc_recipe_id:
+                    continue
+                
                 acc_servings = _safe_float(acc.get("servings", 1.0), default=1.0)
-                if acc_recipe and isinstance(acc_recipe, dict):
-                    acc_macros = _get_meal_macros(acc_recipe)
-                    for k in total_macros:
-                        total_macros[k] += acc_macros.get(k, 0.0) * acc_servings
-            
-            items.append(
-                {
-                    "day_index": day_index,
-                    "meal_type": meal_data.get("meal_type", meal_key),
-                    "recipe_id": str(recipe_id),
-                    # Persist dish_name so variety filters can block by name in future plans
-                    "dish_name": str(recipe.get("dish_name", "")).strip(),
-                    "servings": servings,
-                    # Store as map to align with MealPlanItem schema
-                    "actual_macros": total_macros if isinstance(total_macros, dict) else {},
+                acc_macros = _get_meal_macros(acc_recipe)
+                acc_total_macros = {
+                    k: acc_macros.get(k, 0.0) * acc_servings for k in ["kcal", "protein_g", "fat_g", "carb_g"]
                 }
-            )
+                
+                acc_dish_name = str(acc_recipe.get("dish_name", "")).strip()
+                items.append(
+                    {
+                        "day_index": day_index,
+                        "meal_type": meal_type,  # Same meal_type as main recipe (lunch/dinner)
+                        "recipe_id": str(acc_recipe_id),
+                        # Persist dish_name so variety filters can block by name in future plans
+                        "dish_name": acc_dish_name,
+                        "servings": acc_servings,
+                        # Store accompaniment macros separately
+                        "actual_macros": acc_total_macros if isinstance(acc_total_macros, dict) else {},
+                    }
+                )
+                logging.debug(
+                    f"_build_plan_items: Saved accompaniment as MealPlanItem | "
+                    f"meal_type={meal_type} recipe_id={acc_recipe_id} dish_name={acc_dish_name}"
+                )
 
     if plan_type == "day":
         _append_meal_entries(plan.get("meals", {}), day_index=0)

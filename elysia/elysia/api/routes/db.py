@@ -1,15 +1,24 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 import json
+
+from pydantic import BaseModel
 
 from elysia.api.dependencies.common import get_user_manager
 from elysia.api.services.user import UserManager
 from elysia.util.client import ClientManager
 from weaviate.classes.query import Filter, Sort
+from MealAgent.tools.meal_logging.accept_plan import log_plan_to_meal_log
+from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
 
 # Logging
 from elysia.api.core.log import logger
+
+
+class AcceptPlanPayload(BaseModel):
+    plan_id: str
+
 
 router = APIRouter()
 
@@ -121,6 +130,93 @@ async def delete_tree(
     except Exception as e:
         logger.error(f"Error deleting tree: {str(e)}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@router.post("/{user_id}/accept_plan")
+async def accept_plan(
+    user_id: str,
+    payload: AcceptPlanPayload = Body(...),
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    headers = {"Cache-Control": "no-cache"}
+
+    try:
+        user_local = await user_manager.get_user_local(user_id)
+    except Exception as e:
+        logger.error(f"User {user_id} not found for accept_plan: {str(e)}")
+        return JSONResponse(
+            content={"success": False, "error": f"User {user_id} not found"},
+            status_code=404,
+            headers=headers,
+        )
+
+    client_manager: ClientManager = user_local["client_manager"]
+    if not client_manager.is_client:
+        return JSONResponse(
+            content={"success": False, "error": "Client manager is not connected"},
+            status_code=400,
+            headers=headers,
+        )
+
+    plan_id = (payload.plan_id or "").strip()
+    if not plan_id:
+        return JSONResponse(
+            content={"success": False, "error": "plan_id is required"},
+            status_code=400,
+            headers=headers,
+        )
+    try:
+        plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
+    except Exception as e:
+        logger.exception(f"Failed to load plan {plan_id} for user {user_id}")
+        return JSONResponse(
+            content={
+                "success": False,
+                "error": f"Failed to load plan {plan_id}: {str(e)}",
+            },
+            status_code=500,
+            headers=headers,
+        )
+
+    if not plan:
+        return JSONResponse(
+            content={
+                "success": False,
+                "error": f"Plan {plan_id} not found for user {user_id}",
+            },
+            status_code=404,
+            headers=headers,
+        )
+
+    try:
+        logged = log_plan_to_meal_log(plan, user_id, client_manager)
+        return JSONResponse(
+            content={
+                "success": True,
+                "plan_id": plan_id,
+                "user_id": user_id,
+                "logged": logged,
+                "logged_count": len(logged),
+                "message": f"Saved {len(logged)} meals to MealLogEntry",
+                "error": "",
+            },
+            status_code=200,
+            headers=headers,
+        )
+    except Exception as e:
+        logger.exception("Error accepting plan")
+        return JSONResponse(
+            content={
+                "success": False,
+                "plan_id": plan_id,
+                "user_id": user_id,
+                "logged": [],
+                "logged_count": 0,
+                "error": str(e),
+            },
+            status_code=500,
+            headers=headers,
+        )
 
 
 @router.get("/{user_id}/meal_history")

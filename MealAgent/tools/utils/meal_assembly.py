@@ -5,6 +5,7 @@ Centralizes logic for assembling meals with accompaniments and supplementary dis
 
 from typing import Dict, Any, List, Optional, Tuple
 import logging
+import random
 
 from MealAgent.tools.utils.planning_helpers import _get_meal_macros
 from MealAgent.tools.utils.recipe_classifiers import (
@@ -12,6 +13,10 @@ from MealAgent.tools.utils.recipe_classifiers import (
     _is_vegetable_dish,
     _is_fruit,
     _is_soup,
+    _is_carb_dish,
+    _is_glutinous_rice_dish,
+    _is_rice_dish,
+    _is_noodle_soup,
 )
 from MealAgent.tools.utils.meal_selection import select_meal_by_strategy
 
@@ -142,15 +147,62 @@ def add_supplementary_dishes(
         f"remaining_meal_kcal={meal_max_kcal - current_meal_macros.get('kcal', 0):.1f}"
     )
     
+    # Init counters BEFORE any logic that may adjust them
+    max_additional_dishes = 1
+    dishes_added = 0
+
     # CRITICAL: Add dishes if we're below targets - but STRICTLY control excess
     # Priority: protein first, then kcal, but STOP if we exceed targets
     # Tighter cap to avoid runaway additions/repeated mains
-    max_additional_dishes = 1
-    dishes_added = 0
     
     # Get all excluded dish IDs
     excluded_ids = {str(d.get("food_id", "")) for d in excluded if d}
     excluded_ids.update({str(d.get("food_id", "")) for d in current_dishes if d})
+
+    # PRIORITY 0: Carb booster khi protein đã cao nhưng kcal/carb còn thiếu (cần excluded_ids đã có)
+    protein_excess_ratio = (
+        (total_consumed_so_far.get("protein_g", 0.0) + current_meal_macros.get("protein_g", 0.0) - daily_protein) / daily_protein
+        if total_consumed_so_far and daily_protein > 0
+        else 0.0
+    )
+    if (
+        kcal_deficit_ratio > 0.20
+        and carb_deficit_ratio > 0.20
+        and protein_excess_ratio > 0.20
+        and fat_excess_ratio < 0.40
+    ):
+        carb_candidates = [
+            r for r in recipes
+            if r
+            and str(r.get("food_id", "")) not in excluded_ids
+            and str(r.get("food_id", "")) not in recent_recipe_ids_set
+            and not _is_main_dish(r)  # tránh thêm main nhiều đạm
+            and _get_meal_macros(r).get("protein_g", 0.0) <= 12.0
+            and _get_meal_macros(r).get("fat_g", 0.0) <= 8.0
+            and _get_meal_macros(r).get("carb_g", 0.0) >= 40.0
+            and 200.0 <= _get_meal_macros(r).get("kcal", 0.0) <= 450.0
+        ]
+        if carb_candidates:
+            random.shuffle(carb_candidates)
+            booster = carb_candidates[0]
+            additional_dishes.append({"recipe": booster, "servings": 1.0, "type": "carb_booster"})
+            excluded_ids.add(str(booster.get("food_id", "")))
+            current_dishes.append(booster)
+            current_meal_macros = calculate_meal_macros(current_dishes)
+            kcal_needed = max(0.0, targets.get("tdee_kcal", 0.0) - current_meal_macros.get("kcal", 0.0))
+            logger.info(
+                f"ADD_SUPP_PRIORITY0_{meal_slot.upper()}: Added carb booster '{booster.get('dish_name', 'Unknown')}' "
+                f"kcal={_get_meal_macros(booster).get('kcal', 0):.1f} protein={_get_meal_macros(booster).get('protein_g', 0):.1f} "
+                f"fat={_get_meal_macros(booster).get('fat_g', 0):.1f} carb={_get_meal_macros(booster).get('carb_g', 0):.1f}"
+            )
+            protein_needed = remaining_targets.get("protein_g", 0.0)
+            kcal_deficit_ratio = kcal_needed / daily_kcal if daily_kcal > 0 else 0.0
+            carb_needed = remaining_targets.get("carb_g", 0.0)
+            carb_deficit_ratio = carb_needed / daily_carb if daily_carb > 0 and carb_needed > 0 else 0.0
+
+    # Nếu carb vẫn thiếu nhiều và chưa thêm đủ, nâng trần số món phụ thêm (tối đa 2 khi carb thiếu >30%)
+    if carb_deficit_ratio > 0.30 and max_additional_dishes < 2:
+        max_additional_dishes = 2
     
     # Initialize excess flags
     has_severe_fat_excess = False
@@ -246,19 +298,25 @@ def add_supplementary_dishes(
             # CRITICAL: Calculate min_protein_needed more aggressively to meet targets
             min_protein_needed = min(protein_needed * 0.25, 12.0)  # Lower threshold to allow more dishes
             
-            # CRITICAL: STRICTLY control max_kcal_for_dish to prevent over-eating
-            # Don't allow dishes that would cause meal to exceed meal_max_kcal by more than 20%
-            max_meal_kcal_allowed = meal_max_kcal * 1.2  # Maximum 20% over meal_max_kcal
-            remaining_before_exceed = max_meal_kcal_allowed - current_meal_macros.get("kcal", 0.0)
+            # CRITICAL: Allow adding dishes when DAILY deficit is high, even if meal_kcal is low
+            # Prioritize meeting daily targets over strict meal limits when deficit is significant
+            max_meal_kcal_allowed = meal_max_kcal * 1.5  # Increased to 50% to allow more dishes when daily deficit is high
+            # Even if current_meal_kcal already exceeds cap, keep a small positive budget so we can still add low-kcal veg/soup when daily deficit is high
+            remaining_before_exceed = max(50.0, max_meal_kcal_allowed - current_meal_macros.get("kcal", 0.0))
             
-            if remaining_meal_kcal < 0:
-                # If already exceeded meal_max_kcal, only allow small dishes (max 200-300 kcal)
-                if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                    max_kcal_for_dish = min(350.0, remaining_before_exceed)  # Increased to allow larger dishes when deficit is high
-                    min_kcal_for_dish = 30.0
+            # CRITICAL: When daily deficit is high (>30% kcal or >40% protein), allow larger dishes
+            # even if remaining_meal_kcal is small or negative
+            if remaining_meal_kcal < 0 or (remaining_meal_kcal < 50.0 and (protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40)):
+                # If daily deficit is high, allow larger dishes to meet daily targets
+                if protein_deficit_ratio > 0.40 or kcal_deficit_ratio > 0.50:
+                    max_kcal_for_dish = min(500.0, remaining_before_exceed)  # Allow large dishes when daily deficit is very high
+                    min_kcal_for_dish = 50.0
+                elif protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
+                    max_kcal_for_dish = min(400.0, remaining_before_exceed)  # Allow medium-large dishes
+                    min_kcal_for_dish = 50.0
                 elif protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                    max_kcal_for_dish = min(300.0, remaining_before_exceed)  # Increased to allow medium dishes
-                    min_kcal_for_dish = 30.0
+                    max_kcal_for_dish = min(300.0, remaining_before_exceed)  # Allow medium dishes
+                    min_kcal_for_dish = 40.0
                 else:
                     max_kcal_for_dish = min(200.0, remaining_before_exceed)  # Keep smaller for low deficit
                     min_kcal_for_dish = 30.0
@@ -267,9 +325,9 @@ def add_supplementary_dishes(
                 # CRITICAL: Allow larger dishes when deficit is high to meet nutrition targets
                 # Increase max_kcal when deficit is significant
                 if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                    effective_max_kcal = min(remaining_meal_kcal * 1.3, remaining_before_exceed, 500.0)  # Allow larger when deficit is high
+                    effective_max_kcal = min(remaining_meal_kcal * 1.5, remaining_before_exceed, 500.0)  # Increased multiplier
                 else:
-                    effective_max_kcal = min(remaining_meal_kcal * 1.1, remaining_before_exceed, 400.0)  # Normal case
+                    effective_max_kcal = min(remaining_meal_kcal * 1.2, remaining_before_exceed, 400.0)  # Normal case
                 max_kcal_for_dish = max(100.0, effective_max_kcal)  # At least 100 kcal
                 min_kcal_for_dish = max(50.0, remaining_meal_kcal * 0.2) if remaining_meal_kcal < 200.0 else 80.0
             
@@ -283,9 +341,9 @@ def add_supplementary_dishes(
                 f"kcal_deficit_ratio={kcal_deficit_ratio*100:.1f}%"
             )
             
-            # Find a main dish with high protein (only 1 supplementary allowed overall)
-            best_main = None
-            best_score = 0.0
+            # Find main dishes with high protein - collect top candidates for variety
+            # CRITICAL: Instead of always picking the highest score, collect top candidates and add randomness
+            candidates = []
             for recipe in recipes:
                 recipe_id = str(recipe.get("food_id", ""))
                 if recipe_id in excluded_ids or recipe_id in recent_recipe_ids_set:
@@ -303,8 +361,10 @@ def add_supplementary_dishes(
                         min_kcal_for_dish <= kcal <= max_kcal_for_dish and
                         _is_main_dish(recipe)):
                         # CRITICAL: Score based on protein and kcal, but penalize fat/carb if we have excess
-                        # Base score: prioritize protein and kcal
-                        score = protein * 3.0 + (kcal / 5.0)
+                        # Base score: prioritize protein and kcal, but balance more evenly
+                        # Reduced protein weight from 3.0 to 2.5 to allow more variety
+                        # Increased kcal weight from 0.2 to 0.3 to balance better
+                        score = protein * 2.5 + (kcal * 0.3)
                         
                         # CRITICAL: MUCH stronger penalty for fat when fat excess is very high (>40%)
                         if has_fat_excess:
@@ -356,9 +416,87 @@ def add_supplementary_dishes(
                         elif has_carb_excess and carb <= 25.0:
                             score += 3.0  # Bonus for low-carb dishes
                         
-                        if score > best_score:
-                            best_main = recipe
-                            best_score = score
+                        # CRITICAL: Add diversity penalty for dishes that might be overused
+                        # Automatically detect similarity with already selected dishes in current meal/session
+                        dish_name_lower = str(recipe.get("dish_name", "")).lower()
+                        diversity_penalty = 0.0
+                        
+                        # Penalize if recipe ID was used recently (already excluded, but add extra penalty)
+                        if recipe_id in recent_recipe_ids_set:
+                            diversity_penalty += 50.0  # Heavy penalty for recently used IDs
+                        
+                        # CRITICAL: Automatically detect similar dish names in current meal/session
+                        # Check if any dish in current_dishes or excluded has a similar name
+                        # This prevents selecting dishes with very similar names (e.g., "cá kho riềng" vs "cá kho tộ")
+                        for existing_dish in current_dishes + excluded:
+                            if not existing_dish:
+                                continue
+                            existing_name_lower = str(existing_dish.get("dish_name", "")).lower()
+                            
+                            # Calculate simple similarity: count common words
+                            # Split dish names into words and check overlap
+                            recipe_words = set(dish_name_lower.split())
+                            existing_words = set(existing_name_lower.split())
+                            
+                            # Skip very short names or single words
+                            if len(recipe_words) < 2 or len(existing_words) < 2:
+                                continue
+                            
+                            # Calculate word overlap ratio
+                            common_words = recipe_words & existing_words
+                            # Remove very common words (articles, prepositions, etc.)
+                            common_stopwords = {"và", "với", "của", "cho", "từ", "the", "a", "an", "of", "with", "and"}
+                            common_words = common_words - common_stopwords
+                            
+                            if len(common_words) >= 2:  # If 2+ meaningful words overlap
+                                # Calculate similarity ratio
+                                similarity_ratio = len(common_words) / max(len(recipe_words), len(existing_words))
+                                if similarity_ratio > 0.5:  # More than 50% word overlap
+                                    diversity_penalty += 20.0 * similarity_ratio  # Penalty proportional to similarity
+                                    logger.debug(
+                                        f"ADD_SUPP_DIVERSITY_PENALTY: '{dish_name_lower}' similar to "
+                                        f"'{existing_name_lower}' (overlap: {len(common_words)} words, "
+                                        f"ratio: {similarity_ratio:.2f}, penalty: {diversity_penalty:.1f})"
+                                    )
+                        
+                        # Apply diversity penalty
+                        score -= diversity_penalty
+                        
+                        # CRITICAL: Add randomness to score (±15%) to increase variety
+                        # This prevents the same high-protein dishes from always being selected
+                        score_with_variety = score * (1.0 + random.uniform(-0.15, 0.15))
+                        
+                        candidates.append((recipe, score_with_variety, score))
+            
+            # Sort by score_with_variety (includes randomness)
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            
+            # CRITICAL: Select from top 5 candidates with weighted random (not just the top 1)
+            # This ensures variety while still prioritizing high-scoring dishes
+            best_main = None
+            if candidates:
+                top_n = min(5, len(candidates))
+                top_candidates = candidates[:top_n]
+                
+                # Use weighted random: higher score = higher weight, but all top candidates have a chance
+                # This prevents the same dish from always being selected
+                weights = []
+                for _, score_with_variety, base_score in top_candidates:
+                    # Normalize weights: use base_score (without randomness) for more stable selection
+                    # but still allow lower-scored dishes to be selected occasionally
+                    weight = max(0.1, base_score / 100.0)  # Minimum weight of 0.1 ensures all candidates have a chance
+                    weights.append(weight)
+                
+                # Select with weighted random
+                selected_idx = random.choices(range(len(top_candidates)), weights=weights, k=1)[0]
+                best_main = top_candidates[selected_idx][0]
+                
+                logger.debug(
+                    f"ADD_SUPP_PRIORITY1_{meal_slot.upper()}_SELECTED: "
+                    f"chose '{best_main.get('dish_name', 'Unknown')}' from top {top_n} candidates "
+                    f"(base_score={top_candidates[selected_idx][2]:.1f}, "
+                    f"variety_score={top_candidates[selected_idx][1]:.1f})"
+                )
             
             if best_main:
                 additional_dishes.append(best_main)
@@ -400,7 +538,19 @@ def add_supplementary_dishes(
     
     # Priority 2: Add vegetable dish if still need more nutrition and have kcal budget
     # CRITICAL: Check excess before adding - stop if we have severe excess
-    should_add_veg = (protein_deficit_ratio > 0.05 or kcal_deficit_ratio > 0.05) and dishes_added < max_additional_dishes
+    # CRITICAL: Use daily deficit ratios (not just current meal) to decide when to add vegetables
+    # Vegetables are lighter and can help fill kcal gaps without adding too much protein/fat
+    # Allow adding vegetables even if protein deficit is low, as long as kcal deficit exists
+    # CRITICAL: Prioritize adding vegetables/soup when fat excess is high but kcal deficit exists
+    # Vegetables and soups are low-fat and can help fill kcal gaps without worsening fat excess
+    should_add_veg = (
+        (protein_deficit_ratio > 0.02 or kcal_deficit_ratio > 0.02) and  # Lower threshold: 2% instead of 5%
+        dishes_added < max_additional_dishes and
+        kcal_needed > 50.0 and  # Only add if we still need at least 50 kcal
+        # CRITICAL: Even if fat excess is high, still add vegetables if kcal deficit is significant
+        # Vegetables are low-fat and won't worsen fat excess
+        (fat_excess_ratio < 0.50 or kcal_deficit_ratio > 0.20)  # Allow adding if fat excess <50% OR kcal deficit >20%
+    )
     if should_stop_adding():
         should_add_veg = False
         logger.debug(
@@ -419,10 +569,22 @@ def add_supplementary_dishes(
     
     if should_add_veg:
         remaining_meal_kcal = meal_max_kcal - current_meal_macros.get("kcal", 0.0)
-        # Allow adding even with small budget if we still need nutrition
-        if remaining_meal_kcal > 20.0 or (protein_deficit_ratio > 0.15 or kcal_deficit_ratio > 0.20):
-            effective_max_kcal = max(remaining_meal_kcal * 1.2, 100.0) if remaining_meal_kcal < 150.0 else min(remaining_meal_kcal * 1.3, 300.0)
-            max_kcal_for_dish = min(effective_max_kcal, 300.0)  # Increased back to 300.0 to allow more nutrition
+        # CRITICAL: Allow adding vegetables even with small budget if we still need kcal
+        # Vegetables are lighter and can help fill kcal gaps
+        # Be more lenient: allow adding if we need kcal, even if remaining_meal_kcal is small or negative
+        # CRITICAL: When daily kcal deficit is high, ignore meal kcal limit and use daily deficit instead
+        if remaining_meal_kcal > 15.0 or kcal_needed > 100.0 or (protein_deficit_ratio > 0.10 or kcal_deficit_ratio > 0.15):
+            # CRITICAL: If remaining_meal_kcal is negative or very small but daily deficit is high,
+            # use a reasonable max_kcal based on daily deficit, not meal limit
+            if remaining_meal_kcal < 0 and kcal_deficit_ratio > 0.20:
+                # Daily deficit is high, allow vegetables up to 200 kcal to help fill daily gap
+                max_kcal_for_dish = 200.0
+            elif remaining_meal_kcal < 50.0 and kcal_needed > 200.0:
+                # Small remaining budget but high daily need, allow up to 200 kcal
+                max_kcal_for_dish = 200.0
+            else:
+                effective_max_kcal = max(remaining_meal_kcal * 1.2, 100.0) if remaining_meal_kcal < 150.0 else min(remaining_meal_kcal * 1.3, 300.0)
+                max_kcal_for_dish = min(effective_max_kcal, 300.0)  # Increased back to 300.0 to allow more nutrition
             
             # Find a vegetable dish
             best_veg = None
@@ -472,11 +634,37 @@ def add_supplementary_dishes(
                     f"remaining_kcal={kcal_needed:.1f}"
                 )
             else:
-                logger.debug(f"ADD_SUPP_PRIORITY2_{meal_slot.upper()}_NO_MATCH: No suitable vegetable dish found")
+                # Promote to INFO when deficit is high so we can trace why kcal not met
+                if kcal_deficit_ratio > 0.25 or protein_deficit_ratio > 0.25 or kcal_needed > 300:
+                    logger.info(
+                        "ADD_SUPP_PRIORITY2_%s_NO_MATCH: No suitable vegetable dish found | "
+                        "remaining_meal_kcal=%.1f | kcal_needed=%.1f | protein_needed=%.1f | "
+                        "fat_excess=%.1f%% | carb_excess=%.1f%%",
+                        meal_slot.upper(),
+                        remaining_meal_kcal,
+                        kcal_needed,
+                        protein_needed,
+                        fat_excess_ratio * 100,
+                        carb_excess_ratio * 100,
+                    )
+                else:
+                    logger.debug(f"ADD_SUPP_PRIORITY2_{meal_slot.upper()}_NO_MATCH: No suitable vegetable dish found")
     
     # Priority 3: Add soup if still need more nutrition and have kcal budget
     # CRITICAL: Check excess before adding - stop if we have severe excess
-    should_add_soup = (protein_deficit_ratio > 0.03 or kcal_deficit_ratio > 0.03) and dishes_added < max_additional_dishes
+    # CRITICAL: Use daily deficit ratios (not just current meal) to decide when to add soup
+    # Soups are lighter and can help fill kcal gaps without adding too much protein/fat
+    # Allow adding soup even if protein deficit is low, as long as kcal deficit exists
+    # CRITICAL: Prioritize adding soup when fat excess is high but kcal deficit exists
+    # Soups are low-fat and can help fill kcal gaps without worsening fat excess
+    should_add_soup = (
+        (protein_deficit_ratio > 0.01 or kcal_deficit_ratio > 0.01) and  # Lower threshold: 1% instead of 3%
+        dishes_added < max_additional_dishes and
+        kcal_needed > 30.0 and  # Only add if we still need at least 30 kcal
+        # CRITICAL: Even if fat excess is high, still add soup if kcal deficit is significant
+        # Soups are low-fat and won't worsen fat excess
+        (fat_excess_ratio < 0.50 or kcal_deficit_ratio > 0.20)  # Allow adding if fat excess <50% OR kcal deficit >20%
+    )
     if should_stop_adding():
         should_add_soup = False
         logger.debug(
@@ -495,10 +683,22 @@ def add_supplementary_dishes(
     
     if should_add_soup:
         remaining_meal_kcal = meal_max_kcal - current_meal_macros.get("kcal", 0.0)
-        # Allow adding even with small budget if we still need nutrition
-        if remaining_meal_kcal > 15.0 or (protein_deficit_ratio > 0.10 or kcal_deficit_ratio > 0.15):
-            effective_max_kcal = max(remaining_meal_kcal * 1.2, 80.0) if remaining_meal_kcal < 120.0 else min(remaining_meal_kcal * 1.3, 250.0)
-            max_kcal_for_dish = min(effective_max_kcal, 250.0)  # Increased back to 250.0
+        # CRITICAL: Allow adding soup even with small budget if we still need kcal
+        # Soups are lighter and can help fill kcal gaps
+        # Be more lenient: allow adding if we need kcal, even if remaining_meal_kcal is small or negative
+        # CRITICAL: When daily kcal deficit is high, ignore meal kcal limit and use daily deficit instead
+        if remaining_meal_kcal > 10.0 or kcal_needed > 80.0 or (protein_deficit_ratio > 0.08 or kcal_deficit_ratio > 0.12):
+            # CRITICAL: If remaining_meal_kcal is negative or very small but daily deficit is high,
+            # use a reasonable max_kcal based on daily deficit, not meal limit
+            if remaining_meal_kcal < 0 and kcal_deficit_ratio > 0.20:
+                # Daily deficit is high, allow soup up to 180 kcal to help fill daily gap
+                max_kcal_for_dish = 180.0
+            elif remaining_meal_kcal < 40.0 and kcal_needed > 150.0:
+                # Small remaining budget but high daily need, allow up to 180 kcal
+                max_kcal_for_dish = 180.0
+            else:
+                effective_max_kcal = max(remaining_meal_kcal * 1.2, 80.0) if remaining_meal_kcal < 120.0 else min(remaining_meal_kcal * 1.3, 250.0)
+                max_kcal_for_dish = min(effective_max_kcal, 250.0)  # Increased back to 250.0
             
             # Find a soup
             best_soup = None
@@ -546,7 +746,21 @@ def add_supplementary_dishes(
                     f"remaining_kcal={kcal_needed:.1f}"
                 )
             else:
-                logger.debug(f"ADD_SUPP_PRIORITY3_{meal_slot.upper()}_NO_MATCH: No suitable soup found")
+                # Promote to INFO when deficit is high so we can trace why kcal not met
+                if kcal_deficit_ratio > 0.25 or protein_deficit_ratio > 0.25 or kcal_needed > 300:
+                    logger.info(
+                        "ADD_SUPP_PRIORITY3_%s_NO_MATCH: No suitable soup found | "
+                        "remaining_meal_kcal=%.1f | kcal_needed=%.1f | protein_needed=%.1f | "
+                        "fat_excess=%.1f%% | carb_excess=%.1f%%",
+                        meal_slot.upper(),
+                        remaining_meal_kcal,
+                        kcal_needed,
+                        protein_needed,
+                        fat_excess_ratio * 100,
+                        carb_excess_ratio * 100,
+                    )
+                else:
+                    logger.debug(f"ADD_SUPP_PRIORITY3_{meal_slot.upper()}_NO_MATCH: No suitable soup found")
     
     # Priority 4: Continue adding main dishes if still significantly deficient in protein or kcal
     # CRITICAL: STRICTLY control to prevent over-eating
@@ -804,6 +1018,7 @@ def select_accompaniments(
     targets: Optional[Dict[str, float]],
     llm_draft: Any = None,
     try_select_from_llm_suggestions: Optional[callable] = None,
+    carb_dish: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Select meal accompaniments (main, soup, vegetable, fruit).
@@ -819,10 +1034,36 @@ def select_accompaniments(
         selection_strategy: Selection strategy
         targets: Target macros
         try_select_from_llm_suggestions: Function to try selecting from LLM suggestions
+        carb_dish: The carb dish already selected for this meal (to prevent duplicate carbs)
     
     Returns:
         Tuple of (main, soup, vegetable, fruit)
     """
+    # CRITICAL: Prevent duplicate carbs in accompaniments
+    # If white rice exists, exclude all other carb dishes (rice, noodle, glutinous rice)
+    filtered_excluded = list(excluded)
+    if carb_dish:
+        dish_name_lower = str(carb_dish.get('dish_name', '')).lower()
+        is_white_rice = any(term in dish_name_lower for term in ['cơm trắng', 'com trang', 'white rice'])
+        
+        if is_white_rice:
+            # White rice exists - exclude all other carb dishes
+            for recipe in recipes:
+                if (_is_carb_dish(recipe) or _is_glutinous_rice_dish(recipe) or 
+                    _is_rice_dish(recipe) or _is_noodle_soup(recipe)):
+                    if recipe not in filtered_excluded and recipe != carb_dish:
+                        filtered_excluded.append(recipe)
+                        logger.debug(f"Excluding duplicate carb from accompaniments: {recipe.get('dish_name', 'Unknown')}")
+        else:
+            # Other carb exists - exclude white rice and glutinous rice
+            for recipe in recipes:
+                dish_name_lower = str(recipe.get('dish_name', '')).lower()
+                if (any(term in dish_name_lower for term in ['cơm trắng', 'com trang', 'white rice']) or
+                    _is_glutinous_rice_dish(recipe)):
+                    if recipe not in filtered_excluded and recipe != carb_dish:
+                        filtered_excluded.append(recipe)
+                        logger.debug(f"Excluding duplicate carb from accompaniments: {recipe.get('dish_name', 'Unknown')}")
+    
     main = None
     soup = None
     vegetable = None
@@ -841,7 +1082,7 @@ def select_accompaniments(
         if not fruit:
             fruit = select_meal_by_strategy(
                 recipes, "balanced",
-                exclude=excluded,
+                exclude=filtered_excluded,
                 used_recipe_ids=recent_recipe_ids_set,
                 preferred_meal_type=meal_slot,
                 dish_category="fruit",
@@ -913,7 +1154,7 @@ def select_accompaniments(
                 if not main:
                     main = select_meal_by_strategy(
                         recipes, "highest_protein",
-                        exclude=excluded,
+                        exclude=filtered_excluded,
                         used_recipe_ids=recent_recipe_ids_set,
                         preferred_meal_type=meal_slot,
                         dish_category="main",
@@ -927,7 +1168,7 @@ def select_accompaniments(
                     # Fallback: try without min_protein requirement but still prioritize protein
                     main = select_meal_by_strategy(
                         recipes, "highest_protein",
-                        exclude=excluded,
+                        exclude=filtered_excluded,
                         used_recipe_ids=recent_recipe_ids_set,
                         preferred_meal_type=meal_slot,
                         target_macros=targets,
@@ -947,7 +1188,7 @@ def select_accompaniments(
                 if not main:
                     main = select_meal_by_strategy(
                         recipes, selection_strategy if targets else "highest_protein",
-                        exclude=excluded,
+                        exclude=filtered_excluded,
                         used_recipe_ids=recent_recipe_ids_set,
                         preferred_meal_type=meal_slot,
                         dish_category="main",
@@ -961,7 +1202,7 @@ def select_accompaniments(
                     # Fallback: try without min_protein requirement
                     main = select_meal_by_strategy(
                         recipes, "highest_protein",
-                        exclude=excluded,
+                        exclude=filtered_excluded,
                         used_recipe_ids=recent_recipe_ids_set,
                         preferred_meal_type=meal_slot,
                         target_macros=targets,
@@ -990,7 +1231,7 @@ def select_accompaniments(
             if not main:
                 main = select_meal_by_strategy(
                     recipes, "highest_protein",
-                    exclude=excluded,
+                    exclude=filtered_excluded,
                     used_recipe_ids=recent_recipe_ids_set,
                     preferred_meal_type=meal_slot,
                     dish_category="main",
@@ -1004,7 +1245,7 @@ def select_accompaniments(
                 # Fallback: try with lower min_protein but still prioritize protein
                 main = select_meal_by_strategy(
                     recipes, "highest_protein",
-                    exclude=excluded,
+                    exclude=filtered_excluded,
                     used_recipe_ids=recent_recipe_ids_set,
                     preferred_meal_type=meal_slot,
                     dish_category="main",
@@ -1027,7 +1268,7 @@ def select_accompaniments(
             if main:
                 soup = select_meal_by_strategy(
                     recipes, "balanced",
-                    exclude=excluded,
+                    exclude=filtered_excluded,
                     used_recipe_ids=recent_recipe_ids_set,
                     preferred_meal_type=meal_slot,
                     target_macros=targets,
@@ -1061,7 +1302,7 @@ def select_accompaniments(
             if not vegetable:
                 vegetable = select_meal_by_strategy(
                     recipes, "balanced",
-                    exclude=excluded,
+                    exclude=filtered_excluded,
                     used_recipe_ids=recent_recipe_ids_set,
                     preferred_meal_type=meal_slot,
                     dish_category="vegetable",
@@ -1097,7 +1338,7 @@ def select_accompaniments(
                 if not fruit:
                     fruit = select_meal_by_strategy(
                         recipes, "balanced",
-                        exclude=excluded,
+                        exclude=filtered_excluded,
                         used_recipe_ids=recent_recipe_ids_set,
                         preferred_meal_type=meal_slot,
                         dish_category="fruit",

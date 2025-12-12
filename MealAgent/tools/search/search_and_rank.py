@@ -712,7 +712,38 @@ async def search_and_rank_tool(
 
         # Use recipe_card payload_type if collection is Recipe for better frontend detection
         payload_type = "recipe_card" if collection_name == "Recipe" else "generic"
-        
+
+        # To keep LLM context/token usage small, only show a lightweight preview to the model/UI
+        preview_limit = min(50, len(top_items))
+        preview_items = []
+        for item in top_items[:preview_limit]:
+            preview_items.append(
+                {
+                    "food_id": item.get("food_id") or item.get("recipe_id") or item.get("id"),
+                    "dish_name": item.get("dish_name"),
+                    "fit_score": item.get("fit_score"),
+                    "kcal": (item.get("macros_per_serving") or {}).get("kcal"),
+                    "_score_breakdown": item.get("_score_breakdown", {}),
+                }
+            )
+
+        # Full results remain available for downstream tools, but are hidden from chat to avoid
+        # ballooning the decision prompt with 100 recipe objects.
+        yield Result(
+            name="topk_preview",
+            objects=preview_items,
+            metadata={
+                "top_k": preview_limit,
+                "total_scored": len(scored_items),
+                "has_targets": has_targets,
+                "collection": collection_name,
+                "query": query_text,
+                "preview_only": True,
+            },
+            payload_type=payload_type,
+            display=True,
+        )
+
         yield Result(
             name="topk",
             objects=top_items,
@@ -724,7 +755,7 @@ async def search_and_rank_tool(
                 "query": query_text,
             },
             payload_type=payload_type,
-            display=True,
+            display=False,
         )
 
     except Exception as e:

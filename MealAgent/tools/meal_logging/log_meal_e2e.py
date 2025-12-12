@@ -318,12 +318,19 @@ async def log_meal_e2e_tool(
         return
     
     # Option 1: Log entire plan if plan_id provided
+    # IMPORTANT: Always load from Weaviate (database is source of truth)
+    # Environment is only for support (e.g., storing plan_id for quick reference)
     if plan_id:
         from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
         
+        # Load plan from Weaviate (database is source of truth)
         plan = load_plan_from_weaviate(plan_id, client_manager, user_id)  # Not async, no await needed
+        
         if not plan:
-            yield Error(f"Plan {plan_id} not found. Please check the plan_id or create a plan first.")
+            yield Error(
+                f"Plan {plan_id} not found in Weaviate database. "
+                f"Please check the plan_id or create a new plan."
+            )
             return
         
         # Log all meals from the plan
@@ -337,6 +344,7 @@ async def log_meal_e2e_tool(
             recipe = breakfast.get("recipe", {})
             servings = breakfast.get("servings", 1.0)
             macros = breakfast.get("macros", {})
+            accompaniments = breakfast.get("accompaniments", [])
             
             if recipe and macros:
                 dish_name = recipe.get("dish_name", "Breakfast")
@@ -504,23 +512,42 @@ async def log_meal_e2e_tool(
     
     # Option 2: Log single meal (original behavior)
     if not meal_description:
-        # Try to get plan from environment as fallback
-        plan_result = tree_data.environment.find("plan_day_e2e_tool", "plan")
-        if plan_result and plan_result[0].get("objects"):
-            plan = plan_result[0]["objects"][0]
-            plan_id_from_env = plan.get("plan_id")
-            if plan_id_from_env:
-                # Recursively call with plan_id
-                async for result in log_meal_e2e_tool(
-                    tree_data=tree_data,
-                    client_manager=client_manager,
-                    base_lm=base_lm,
-                    user_id=user_id,
-                    plan_id=plan_id_from_env,
-                    **kwargs,
-                ):
-                    yield result
-                return
+        # Try to get plan_id from environment as fallback (environment is only for support)
+        # IMPORTANT: We only use environment to get plan_id, then load plan from Weaviate (database)
+        plan_id_from_env = None
+        
+        # Try to get plan_id from environment (support only, not source of truth)
+        plan_id_result = tree_data.environment.find("plan_day_e2e_tool", "plan_id")
+        if plan_id_result and plan_id_result[0].get("objects"):
+            plan_id_obj = plan_id_result[0]["objects"][0] if plan_id_result[0]["objects"] else None
+            # plan_id is stored as dict {"plan_id": "..."}
+            if isinstance(plan_id_obj, dict):
+                plan_id_from_env = plan_id_obj.get("plan_id")
+            elif isinstance(plan_id_obj, str):
+                # Fallback: if it's a string (old format)
+                plan_id_from_env = plan_id_obj
+            else:
+                plan_id_from_env = None
+        
+        # Fallback: Try to get plan_id from plan object in environment
+        if not plan_id_from_env:
+            plan_result = tree_data.environment.find("plan_day_e2e_tool", "plan")
+            if plan_result and plan_result[0].get("objects"):
+                plan_obj = plan_result[0]["objects"][0]
+                plan_id_from_env = plan_obj.get("plan_id") if isinstance(plan_obj, dict) else None
+        
+        if plan_id_from_env:
+            # Recursively call with plan_id - this will load plan from Weaviate (database)
+            async for result in log_meal_e2e_tool(
+                tree_data=tree_data,
+                client_manager=client_manager,
+                base_lm=base_lm,
+                user_id=user_id,
+                plan_id=plan_id_from_env,
+                **kwargs,
+            ):
+                yield result
+            return
         
         yield Error("Either meal_description or plan_id is required")
         return

@@ -53,18 +53,38 @@ async def meal_history_tool(
         # Build where clause
         where_conditions = [{"path": ["user_id"], "operator": "Equal", "valueString": user_id}]
 
-        if start_date:
-            where_conditions.append({"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": start_date})
-        if end_date:
-            where_conditions.append({"path": ["logged_at"], "operator": "LessThanEqual", "valueDate": end_date})
+        def _to_rfc3339(date_str: str | None, end_of_day: bool = False) -> str | None:
+            if not date_str:
+                return None
+            try:
+                # Accept both date-only (YYYY-MM-DD) and full RFC3339 inputs
+                if len(date_str) == 10:
+                    dt = datetime.fromisoformat(date_str)
+                else:
+                    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                if end_of_day:
+                    dt = dt.replace(hour=23, minute=59, second=59, microsecond=0)
+                return dt.isoformat().replace("+00:00", "Z")
+            except Exception:
+                return None
+
+        start_rfc3339 = _to_rfc3339(start_date, end_of_day=False)
+        end_rfc3339 = _to_rfc3339(end_date, end_of_day=True)
+
+        if start_rfc3339:
+            where_conditions.append({"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": start_rfc3339})
+        if end_rfc3339:
+            where_conditions.append({"path": ["logged_at"], "operator": "LessThanEqual", "valueDate": end_rfc3339})
 
         where_clause = where_conditions[0] if len(where_conditions) == 1 else {"operator": "And", "operands": where_conditions}
 
         filters = build_filters_from_where(where_clause)
+        # Use Sort object from Weaviate instead of dict
+        from weaviate.collections.classes.grpc import Sort
         results = log_collection.query.fetch_objects(
             filters=filters,
             limit=limit,
-            sort={"path": ["logged_at"], "order": "desc"},
+            sort=Sort.by_property("logged_at", ascending=False),
         )
 
         logs = [obj.properties for obj in results.objects]
