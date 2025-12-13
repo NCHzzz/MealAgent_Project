@@ -173,14 +173,14 @@ graph TB
 
 ---
 
-## 3. Agent Framework Module
+## 3. Agent Framework Module (Elysia Core)
 
 ### Architecture Diagram
 
 ```mermaid
 graph TB
-    subgraph Agent["3️⃣ Agent Framework Module"]
-        Tree["🌲 Decision Tree<br/>Main Orchestrator"]
+    subgraph Agent["3️⃣ Agent Framework Module (Elysia Core)"]
+        Tree["🌲 Tree Class<br/>Main Orchestrator"]
         TreeData["📝 TreeData<br/>Query & State"]
         Environment["📝 Environment<br/>Shared State"]
         Branches["🌿 Branches<br/>Branch Routing"]
@@ -199,6 +199,7 @@ graph TB
         end
         
         ToolExecutor["⚙️ Tool Executor"]
+        ToolDecorator["@tool<br/>Decorator"]
     end
     
     Tree --> TreeData
@@ -225,6 +226,7 @@ graph TB
     style Agent fill:#ff6b6b,stroke:#c92a2a,stroke-width:2px,color:#fff
     style DecisionNode fill:#ff9800,stroke:#f57c00,stroke-width:2px,color:#fff
     style Tree fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff
+    style ToolDecorator fill:#ff9800,stroke:#f57c00,stroke-width:2px,color:#fff
 ```
 
 ### Key Components
@@ -234,22 +236,63 @@ graph TB
 - **Environment**: Shared state giữa tools (read/write via `find()` và `add_objects()`)
 - **Branches**: Route queries to specialized branches
 - **Built-in Tools**: Query, Aggregate, Objects, Chunk, CitedSummarizer, TextResponse, Visualize, Regression, SummariseItems
+- **@tool Decorator**: Decorator để đăng ký tools vào Tree
+- **Tool Executor**: Executes tools và updates Environment
 
 ---
 
-## 4. MealAgent Module
+## 4. MealAgent Module (Extends Elysia Core)
 
 > 📖 **Xem chi tiết**: [MealAgent Architecture](./mealagent_architecture.md)
 
-### Overview Diagram
+### Integration with Elysia Core
+
+```mermaid
+graph TB
+    subgraph ElysiaCore["Elysia Core Framework"]
+        TreeClass["🌲 Tree Class"]
+        TreeData["📝 TreeData"]
+        Environment["📝 Environment"]
+        DecisionNode["🌿 DecisionNode"]
+        ToolDecorator["@tool Decorator"]
+        BuiltInTools["🛠️ Built-in Tools"]
+    end
+    
+    subgraph MealAgent["MealAgent Module (Extends Elysia)"]
+        TreeBuilder["🔧 build_meal_agent_tree()<br/>Creates Tree instance"]
+        MealAgentTools["🛠️ 15 MealAgent Tools<br/>Uses @tool decorator"]
+        Branches["🌿 9 Custom Branches"]
+        Schemas["📋 Data Schemas"]
+        Utils["⚙️ Utility Functions"]
+    end
+    
+    TreeClass -->|"inherits from"| TreeBuilder
+    TreeBuilder -->|"creates instance"| TreeClass
+    TreeBuilder -->|"adds"| Branches
+    ToolDecorator -->|"decorates"| MealAgentTools
+    MealAgentTools -->|"uses"| TreeData
+    MealAgentTools -->|"uses"| Environment
+    MealAgentTools -->|"uses"| ClientManager["ClientManager<br/>from Elysia"]
+    TreeBuilder -->|"registers"| MealAgentTools
+    DecisionNode -->|"can select"| BuiltInTools
+    DecisionNode -->|"can select"| MealAgentTools
+    MealAgentTools --> Schemas
+    MealAgentTools --> Utils
+    
+    style ElysiaCore fill:#ff6b6b,stroke:#c92a2a,stroke-width:2px,color:#fff
+    style MealAgent fill:#4ecdc4,stroke:#26a69a,stroke-width:2px,color:#fff
+    style TreeBuilder fill:#4ecdc4,stroke:#26a69a,stroke-width:3px,color:#fff
+```
+
+### Architecture Diagram
 
 ```mermaid
 graph TB
     subgraph MealAgent["4️⃣ MealAgent Module"]
         TreeBuilder["🔧 build_meal_agent_tree()<br/>Tree Builder Function"]
-        Config["⚙️ Config.tree_builder<br/>Registered in Config"]
+        Config["⚙️ MEAL_AGENT_TOOLS<br/>15 Tools Registry"]
         
-        subgraph Branches["9 Branches"]
+        subgraph Branches["9 Custom Branches"]
             ProfileBranch["👤 profile"]
             SearchBranch["🔍 search"]
             NutritionBranch["🥗 nutrition"]
@@ -261,7 +304,7 @@ graph TB
             ExplainBranch["💬 explain"]
         end
         
-        subgraph Tools["15 Tools"]
+        subgraph Tools["15 Custom Tools"]
             ProfileTools["👤 Profile (2)"]
             SearchTools["🔍 Search (2)"]
             NutritionTools["🥗 Nutrition (2)"]
@@ -276,21 +319,38 @@ graph TB
         Utils["⚙️ Utility Functions<br/>Helpers"]
     end
     
-    Config -->|"tree_builder"| TreeBuilder
-    TreeBuilder -->|"creates"| Branches
+    subgraph ElysiaCore["Elysia Core"]
+        TreeClass["🌲 Tree Class"]
+        ToolDecorator["@tool"]
+        TreeData["TreeData"]
+        Environment["Environment"]
+    end
+    
+    Config -->|"provides"| TreeBuilder
+    TreeBuilder -->|"creates"| TreeClass
+    TreeBuilder -->|"adds"| Branches
     TreeBuilder -->|"registers"| Tools
+    ToolDecorator -->|"decorates"| Tools
+    Tools -->|"uses"| TreeData
+    Tools -->|"uses"| Environment
     Tools --> Schemas
     Tools --> Utils
     
     style MealAgent fill:#4ecdc4,stroke:#26a69a,stroke-width:2px,color:#fff
     style TreeBuilder fill:#4ecdc4,stroke:#26a69a,stroke-width:3px,color:#fff
+    style ElysiaCore fill:#ff6b6b,stroke:#c92a2a,stroke-width:2px,color:#fff
 ```
 
 ### Key Components
 
-- **Tree Builder**: `build_meal_agent_tree()` function creates Tree with 9 branches
-- **9 Branches**: profile, search, nutrition, planning, optimization, pantry, logging, cooking, explain
-- **15 Tools**: Domain-specific meal planning tools registered to branches
+- **Tree Builder**: `build_meal_agent_tree()` function creates Elysia Tree instance with custom configuration
+- **9 Custom Branches**: profile, search, nutrition, planning, optimization, pantry, logging, cooking, explain
+- **15 Custom Tools**: Domain-specific meal planning tools using Elysia's `@tool` decorator
+- **Elysia Integration**: 
+  - Uses `TreeData`, `Environment`, `ClientManager` from Elysia
+  - Tools decorated with `@tool` from Elysia
+  - Tools registered to Tree via `tree.add_tool()`
+  - DecisionNode can select both built-in and custom tools
 - **Schemas**: Pydantic data models (UserProfile, MealPlan, Recipe, etc.)
 - **Utils**: Nutrition, planning, recipe utilities
 

@@ -244,7 +244,61 @@ graph TB
     style Cooking fill:#ffebee,stroke:#d32f2f,stroke-width:2px
 ```
 
-### 3.2. Tool Dependencies
+### 3.2. Detailed Tools Diagram
+
+```mermaid
+graph TB
+    subgraph ProfileTools["👤 Profile Tools (2)"]
+        ProfileCRUD["profile_crud_tool<br/>📝 CRUD UserProfile<br/>📤 Writes: profile"]
+        MacroCalc["macro_calc_tool<br/>🧮 Calculate TDEE & Targets<br/>📥 Reads: profile<br/>📤 Writes: targets"]
+    end
+    
+    subgraph SearchTools["🔍 Search Tools (2)"]
+        ConstraintsGuard["constraints_guard_tool<br/>🛡️ Generate Filters<br/>📥 Reads: UserProfile<br/>📤 Writes: filters"]
+        SearchRank["search_and_rank_tool<br/>🔍 Hybrid Search & Rank<br/>📥 Reads: filters<br/>📤 Writes: topk"]
+    end
+    
+    subgraph NutritionTools["🥗 Nutrition Tools (2)"]
+        CalcMacros["calculate_recipe_macros_tool<br/>🧮 Per-recipe Nutrition<br/>📥 Reads: Recipe<br/>📤 Updates: Recipe macros"]
+        AutoCalc["auto_calculate_macros_tool<br/>⚡ Batch Calculation<br/>📥 Reads: Multiple Recipes<br/>📤 Updates: Recipe macros"]
+    end
+    
+    subgraph PlanningTools["📅 Planning Tools (2)"]
+        PlanDay["plan_day_e2e_tool<br/>📅 Daily Meal Planning E2E<br/>📥 Reads: profile, targets, filters<br/>📤 Writes: plan, missing_macros"]
+        PlanWeek["plan_week_e2e_tool<br/>📆 Weekly Meal Planning E2E<br/>📥 Reads: profile, targets, filters<br/>📤 Writes: plan"]
+    end
+    
+    subgraph OptimizationTools["⚡ Optimization Tools (3)"]
+        GapFill["gap_fill_tool<br/>⚡ Fill Calorie Gaps<br/>📥 Reads: plan<br/>📤 Writes: snacks"]
+        Substitute["substitute_tool<br/>🔄 Recipe Substitution<br/>📥 Reads: plan<br/>📤 Writes: substitutions"]
+        Micros["micros_tool<br/>💊 Micronutrient Analysis<br/>📥 Reads: plan<br/>📤 Writes: micros_analysis"]
+    end
+    
+    subgraph PantryTools["🏪 Pantry Tools (2)"]
+        PantryCRUD["pantry_crud_tool<br/>📝 CRUD Pantry<br/>📤 Writes: state"]
+        PantryDiff["pantry_diff_tool<br/>🛒 Shopping List<br/>📥 Reads: plan, state<br/>📤 Writes: shopping_list"]
+    end
+    
+    subgraph LoggingTools["📝 Logging Tools (2)"]
+        LogMeal["log_meal_e2e_tool<br/>📝 Meal Logging E2E<br/>📥 Reads: plan (optional)<br/>📤 Writes: log"]
+        MealHistory["meal_history_tool<br/>📚 History Retrieval<br/>📤 Writes: history"]
+    end
+    
+    subgraph CookingTool["👨‍🍳 Cooking Tools (1)"]
+        CookMode["cook_mode_tool<br/>👨‍🍳 Cooking Instructions<br/>📥 Reads: Recipe<br/>📤 Writes: instructions"]
+    end
+    
+    style ProfileTools fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style SearchTools fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    style NutritionTools fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    style PlanningTools fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style OptimizationTools fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    style PantryTools fill:#e0f2f1,stroke:#00796b,stroke-width:2px
+    style LoggingTools fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style CookingTool fill:#ffebee,stroke:#d32f2f,stroke-width:2px
+```
+
+### 3.3. Tool Dependencies
 
 ```mermaid
 graph LR
@@ -264,7 +318,7 @@ graph LR
     style PlanDay fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff
 ```
 
-### 3.3. Tool Registration Flow
+### 3.4. Tool Registration Flow
 
 ```mermaid
 graph TB
