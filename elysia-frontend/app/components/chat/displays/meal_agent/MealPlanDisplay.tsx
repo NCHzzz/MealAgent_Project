@@ -116,9 +116,8 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
 
       if (res.success) {
         setAcceptMessage(res.message || "Đã chấp nhận kế hoạch");
-        handleResultPayloadChange?.("refresh_meal_history", {
-          plan_id: plan.plan_id,
-        });
+        // Only show popup notification, do not trigger refresh or navigation
+        // User can manually refresh meal history if needed
       } else {
         setAcceptError(res.error || "Không thể chấp nhận kế hoạch");
       }

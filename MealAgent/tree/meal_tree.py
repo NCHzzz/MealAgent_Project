@@ -457,7 +457,14 @@ def build_meal_agent_tree(
                 "- Pantry/shopping inventory → pantry branch. "
                 "- Cooking steps/how to make → cooking branch. "
                 "- Meal logging ('vừa ăn', 'log', 'ghi lại bữa') → logging branch. "
-                "- Explanations/summary → explain branch. "
+                "- After plan_day_e2e_tool completes → go to explain branch to summarize using cited_summarize, then END. "
+                "- Explicit requests for explanations/summary → explain branch. "
+                "CRITICAL: After plan_day_e2e_tool completes, go to explain branch to summarize, then END. "
+                "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after planning. "
+                "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts (via UI button or chat message). "
+                "CRITICAL: After accept_plan_tool completes successfully, the task is COMPLETE. "
+                "DO NOT call profile_crud_tool, macro_calc_tool, or any other tools. "
+                "Simply confirm to the user that the plan has been saved and END the conversation."
                 "- Recipe browsing without full plan → search branch. "
                 "If none match, ask the user a clarifying question before selecting a branch."
             ),
@@ -487,11 +494,15 @@ def build_meal_agent_tree(
                 "Assemble NEW daily/weekly meal plans per requirements doc. "
                 "Only choose this when the user explicitly requests a 'thực đơn/kế hoạch' cho ngày/tuần "
                 "or asks for a comprehensive plan refresh. "
-                "If the user only needs to add calories/snacks or tweak a current plan, DO NOT use this branch—go to optimization."
+                "If the user only needs to add calories/snacks or tweak a current plan, DO NOT use this branch—go to optimization. "
+                "CRITICAL: After plan_day_e2e_tool completes successfully, go to explain branch to summarize the plan using cited_summarize, then END the conversation. "
+                "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool. "
+                "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts the plan (via UI button or chat message)."
             ),
             "description": (
                 "Runs plan_day_e2e_tool / plan_week_e2e_tool to build a fresh plan using profile, targets, constraints, and ranked recipes. "
-                "Requires full planning workflow and typically yields `plan_day_e2e_tool.plan` objects."
+                "Requires full planning workflow and typically yields `plan_day_e2e_tool.plan` objects. "
+                "After planning completes, go to explain branch to summarize, then END."
             ),
             "status": "Planning meals...",
         },
@@ -513,8 +524,13 @@ def build_meal_agent_tree(
             "status": "Managing pantry...",
         },
         "logging": {
-            "instruction": "Log consumed meals and inspect meal history.",
-            "description": "Updates remaining targets and feeds gap analysis.",
+            "instruction": (
+                "Log consumed meals and inspect meal history. "
+                "Use accept_plan_tool ONLY when user explicitly accepts a plan (via UI button or chat message). "
+                "After accept_plan_tool completes successfully, the task is COMPLETE - DO NOT call any additional tools. "
+                "Simply confirm to the user and END the conversation."
+            ),
+            "description": "Updates remaining targets and feeds gap analysis. Use accept_plan_tool for plan acceptance.",
             "status": "Logging meal...",
         },
         "cooking": {
@@ -523,8 +539,14 @@ def build_meal_agent_tree(
             "status": "Cooking...",
         },
         "explain": {
-            "instruction": "Summarize decisions and provide rationale to the user.",
-            "description": "Use after planning/logging flows to build trust.",
+            "instruction": (
+                "Summarize decisions and provide rationale to the user. "
+                "After plan_day_e2e_tool completes, use cited_summarize to summarize the plan, then END the conversation. "
+                "Also use when user explicitly requests explanation, summary, or rationale. "
+                "CRITICAL: After summarizing a plan, END the conversation. "
+                "DO NOT call accept_plan_tool or log_meal_e2e_tool unless user explicitly accepts the plan."
+            ),
+            "description": "Use cited_summarize to explain plans after planning, or when user requests explanation. After explaining, END.",
             "status": "Summarizing...",
         },
     }
@@ -624,6 +646,7 @@ def build_meal_agent_tree(
 
     # logging branch
     add_tool("logging", "log_meal_e2e_tool")
+    add_tool("logging", "accept_plan_tool")  # Preferred tool for accepting plans
     add_tool("logging", "meal_history_tool")
 
     # pantry branch (merged from pantry + shopping)

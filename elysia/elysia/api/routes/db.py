@@ -190,6 +190,7 @@ async def accept_plan(
 
     try:
         logged = log_plan_to_meal_log(plan, user_id, client_manager)
+        logger.info(f"accept_plan: Successfully logged {len(logged)} meals for plan {plan_id}")
         return JSONResponse(
             content={
                 "success": True,

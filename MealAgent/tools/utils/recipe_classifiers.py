@@ -217,13 +217,20 @@ def _is_soup(recipe: Dict[str, Any]) -> bool:
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
     
+    # CRITICAL: Exclude gỏi/salad and other non-soup dishes first
+    exclude_keywords = [
+        "phở", "pho", "bún", "bun", "mì", "mi ", "miến", "mien", "hủ tiếu", "hu tieu",
+        "gỏi", "goi", "salad", "nộm", "nom",  # Exclude salads/gỏi
+        "chè", "che", "dessert", "pudding",  # Exclude desserts
+        "bánh", "banh", "cake", "pancake"  # Exclude cakes
+    ]
+    if any(kw in dish_name or kw in dish_type for kw in exclude_keywords):
+        return False
+    
     soup_keywords = ["canh", "soup"]
-    exclude_keywords = ["phở", "pho", "bún", "bun", "mì", "mi ", "miến", "mien", "hủ tiếu", "hu tieu"]
-    
     has_soup = any(kw in dish_name or kw in dish_type for kw in soup_keywords)
-    has_noodle = any(kw in dish_name or kw in dish_type for kw in exclude_keywords)
     
-    return has_soup and not has_noodle
+    return has_soup
 
 
 def _is_main_dish(recipe: Dict[str, Any]) -> bool:

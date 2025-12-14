@@ -2291,10 +2291,14 @@ async def plan_day_e2e_tool(
                             total_consumed_so_far=total_consumed_so_far,  # CRITICAL: Pass total consumed for accurate excess detection
                         )
                         # Filter out invalid/empty supplementary entries (avoid 'Unknown' zero-macro dishes)
-                        supplementary_dishes = [
-                            d for d in supplementary_dishes
-                            if isinstance(d, dict) and d.get("recipe")
-                        ]
+                        # CRITICAL: accept both formats: direct recipe objects OR {"recipe": ...} format
+                        filtered_supplementary = []
+                        for d in supplementary_dishes:
+                            if isinstance(d, dict):
+                                # Check if it's a recipe object (has dish_name/food_id) OR wrapped format
+                                if d.get("recipe") or d.get("dish_name") or d.get("food_id"):
+                                    filtered_supplementary.append(d)
+                        supplementary_dishes = filtered_supplementary
                     if not supplementary_dishes:
                         logging.debug(f"LUNCH_SUPP_ITERATION_{iteration + 1}: No more supplementary dishes found, stopping")
                         break  # No more dishes to add
@@ -2964,10 +2968,15 @@ async def plan_day_e2e_tool(
                                 macro_tolerance_percent,
                                 total_consumed_so_far=total_consumed_so_far,
                             )
-                            supplementary_dishes = [
-                                d for d in supplementary_dishes
-                                if isinstance(d, dict) and d.get("recipe")
-                            ]
+                            # Filter out invalid/empty supplementary entries (avoid 'Unknown' zero-macro dishes)
+                            # CRITICAL: accept both formats: direct recipe objects OR {"recipe": ...} format
+                            filtered_supplementary = []
+                            for d in supplementary_dishes:
+                                if isinstance(d, dict):
+                                    # Check if it's a recipe object (has dish_name/food_id) OR wrapped format
+                                    if d.get("recipe") or d.get("dish_name") or d.get("food_id"):
+                                        filtered_supplementary.append(d)
+                            supplementary_dishes = filtered_supplementary
                     else:
                         # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
                         # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
@@ -2989,10 +2998,15 @@ async def plan_day_e2e_tool(
                             macro_tolerance_percent,
                             total_consumed_so_far=total_consumed_so_far_dinner,  # CRITICAL: Pass total consumed for accurate excess detection
                         )
-                        supplementary_dishes = [
-                            d for d in supplementary_dishes
-                            if isinstance(d, dict) and d.get("recipe")
-                        ]
+                        # Filter out invalid/empty supplementary entries (avoid 'Unknown' zero-macro dishes)
+                        # CRITICAL: accept both formats: direct recipe objects OR {"recipe": ...} format
+                        filtered_supplementary = []
+                        for d in supplementary_dishes:
+                            if isinstance(d, dict):
+                                # Check if it's a recipe object (has dish_name/food_id) OR wrapped format
+                                if d.get("recipe") or d.get("dish_name") or d.get("food_id"):
+                                    filtered_supplementary.append(d)
+                        supplementary_dishes = filtered_supplementary
                     
                     if not supplementary_dishes:
                         logging.debug(f"DINNER_SUPP_ITERATION_{iteration + 1}: No more supplementary dishes found, stopping")
@@ -4300,7 +4314,11 @@ async def plan_day_e2e_tool(
         #    - These are saved IMMEDIATELY after plan generation (BEFORE yielding to UI)
         #    - Used for: Plan history, variety filtering, plan retrieval
         # 2. MealLogEntry: Stores ACCEPTED/CONSUMED meals (meals that user has accepted or actually eaten)
-        #    - These are saved ONLY when user explicitly accepts the plan via log_meal_e2e_tool
+        #    - These are saved ONLY in 3 cases:
+        #      a) User accepts plan via UI (use accept_plan_tool)
+        #      b) User says they accept in chat (call log_meal_e2e_tool with user_accepted=True)
+        #      c) User says they ate something (call log_meal_e2e_tool with meal_description)
+        #    - DO NOT automatically call log_meal_e2e_tool after creating plan
         #    - Used for: Daily nutrition tracking, meal history, remaining targets calculation
         
         # CRITICAL: Save SUGGESTED plan to MealPlan and MealPlanItem collections BEFORE yielding Result
@@ -4374,43 +4392,54 @@ async def plan_day_e2e_tool(
             display=True,  # Display on UI immediately for user review
         )
         
-        # Suggest next action: ask user to accept and log meal history
+        # Plan is ready - suggest agent to explain/summarize and then END
         # NOTE: This does NOT automatically log to MealLogEntry - user must accept first
-        yield Response("👍 Kế hoạch đã sẵn sàng. Nếu bạn chấp nhận, tôi sẽ lưu vào lịch sử bữa ăn.")
+        yield Response("👍 Kế hoạch đã sẵn sàng.")
         
         logging.info(
-            "plan_day_e2e_tool: MEALLOG_HINT | plan_id=%s | "
-            "NOTE: Plan saved to MealPlan/MealPlanItem. MealLogEntry created only after user accepts.",
+            "plan_day_e2e_tool: PLAN_READY | plan_id=%s | "
+            "NOTE: Plan saved to MealPlan/MealPlanItem. Next: explain/summarize then END. MealLogEntry created only after user accepts.",
             plan_output.get("plan_id"),
         )
         
-        # Hint for agent: When user accepts plan, call log_meal_e2e_tool with plan_id
-        # IMPORTANT: This hint tells the agent how to handle user acceptance
+        # Hint for agent: After creating plan, go to explain branch to summarize, then END
+        # DO NOT automatically call accept_plan_tool or log_meal_e2e_tool. Only call when:
+        # 1. User explicitly accepts via UI (use accept_plan_tool)
+        # 2. User says they accept in chat (call log_meal_e2e_tool with user_accepted=True)
+        # 3. User says they ate something (call log_meal_e2e_tool with meal_description)
         yield Result(
             name="next_action_hint",
             objects=[
                 {
-                    "suggested_action": "log_meal",
-                    "action_tool": "log_meal_e2e_tool",  # Explicit tool name for agent
+                    "suggested_action": "explain_and_end",
+                    "next_step": "Go to explain branch to summarize the plan using cited_summarize, then END the conversation.",
+                    "action_tool": "cited_summarize",  # Use this to explain the plan
                     "action_params": {
                         "plan_id": plan_output.get("plan_id"),
                         "user_id": user_id,
                     },
-                    "reason": "Plan ready; log meal history to MealLogEntry after user accepts",
+                    "reason": "Plan ready. Next: explain/summarize the plan, then END. DO NOT automatically log to MealLogEntry.",
                     "plan_id": plan_output.get("plan_id"),
                     "user_id": user_id,
-                    "requires_user_acceptance": True,  # Flag to prevent auto-logging to MealLogEntry
-                    "note": "This plan is saved to MealPlan/MealPlanItem. When user accepts, call log_meal_e2e_tool with this plan_id to create MealLogEntry.",
+                    "requires_user_acceptance": True,  # CRITICAL: Flag to prevent auto-logging to MealLogEntry
+                    "note": "CRITICAL: This plan is saved to MealPlan/MealPlanItem. "
+                            "After explaining, END the conversation. "
+                            "MealLogEntry is created ONLY when: "
+                            "1) User accepts via UI (use accept_plan_tool), "
+                            "2) User says they accept in chat (call log_meal_e2e_tool with user_accepted=True), "
+                            "3) User says they ate something (call log_meal_e2e_tool with meal_description). "
+                            "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after creating plan.",
                 }
             ],
             metadata={
-                "suggested_action": "log_meal",
-                "action_tool": "log_meal_e2e_tool",
-                "task_complete": False,
+                "suggested_action": "explain_and_end",
+                "next_step": "Go to explain branch, use cited_summarize to summarize the plan, then END",
+                "task_complete": False,  # Will be complete after explain
                 "plan_id": plan_output.get("plan_id"),
-                "requires_user_acceptance": True,  # Agent should wait for user to accept before logging to MealLogEntry
+                "requires_user_acceptance": True,  # CRITICAL: Agent MUST wait for user to accept before logging to MealLogEntry
                 "storage_type": "MealPlan",  # Current storage type (suggested plan, not consumed meal)
                 "plan_available_in_env": True,  # Plan is available in environment as "plan_day_e2e_tool.plan"
+                "do_not_auto_log": True,  # Explicit flag: DO NOT automatically log to MealLogEntry
             },
             payload_type="generic",
             display=False,

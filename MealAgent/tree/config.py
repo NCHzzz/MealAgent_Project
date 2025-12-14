@@ -24,6 +24,7 @@ from MealAgent.tools.plan_day.plan_day_e2e import plan_day_e2e_tool
 # Meal Logging tools
 from MealAgent.tools.meal_logging.meal_history import meal_history_tool
 from MealAgent.tools.meal_logging.log_meal_e2e import log_meal_e2e_tool
+from MealAgent.tools.meal_logging.accept_plan import accept_plan_tool
 
 # Plan Week tools
 from MealAgent.tools.plan_week.plan_week_e2e import plan_week_e2e_tool
@@ -71,6 +72,7 @@ MEAL_AGENT_TOOLS = {
     "plan_week_e2e_tool": plan_week_e2e_tool,  # E2E weekly planning with variety (replaces plan_assemble_weekly, variety_guard)
     # Meal Logging tools
     "log_meal_e2e_tool": log_meal_e2e_tool,  # E2E meal logging (replaces meal_parser, nutrition_calc, profile_update)
+    "accept_plan_tool": accept_plan_tool,  # Accept a plan and log to MealLogEntry (preferred method)
     "meal_history_tool": meal_history_tool,
     # Pantry tools
     "pantry_crud_tool": pantry_crud_tool,

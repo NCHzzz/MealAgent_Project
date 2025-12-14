@@ -32,6 +32,19 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
     return `${value.toFixed(0)} kcal`;
   };
 
+  // Parse calculated_macros if it's a JSON string
+  const parseMacros = (macros: any): { kcal?: number; protein_g?: number; fat_g?: number; carb_g?: number } => {
+    if (!macros) return {};
+    if (typeof macros === 'string') {
+      try {
+        return JSON.parse(macros);
+      } catch {
+        return {};
+      }
+    }
+    return macros;
+  };
+
   const formatDateTime = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString("vi-VN", {
@@ -276,14 +289,21 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
                                     </p>
                                   </div>
                                 <div className="flex flex-col items-start sm:items-end gap-1 text-[10px] sm:text-[11px] text-primary shrink-0">
-                                  <Badge className="text-xs border border-secondary/20">
-                                    {formatKcal(entry.calculated_macros?.kcal || 0)}
-                                  </Badge>
-                                  <div className="flex gap-2 text-secondary">
-                                    <span>P {formatMacro(parseNum(entry.calculated_macros?.protein_g))}</span>
-                                    <span>F {formatMacro(parseNum(entry.calculated_macros?.fat_g))}</span>
-                                    <span>C {formatMacro(parseNum(entry.calculated_macros?.carb_g))}</span>
-                                  </div>
+                                  {(() => {
+                                    const macros = parseMacros(entry.calculated_macros);
+                                    return (
+                                      <>
+                                        <Badge className="text-xs border border-secondary/20">
+                                          {formatKcal(macros.kcal || 0)}
+                                        </Badge>
+                                        <div className="flex gap-2 text-secondary">
+                                          <span>P {formatMacro(macros.protein_g || 0)}</span>
+                                          <span>F {formatMacro(macros.fat_g || 0)}</span>
+                                          <span>C {formatMacro(macros.carb_g || 0)}</span>
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                                 </div>
                               </div>
@@ -334,30 +354,37 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
               <div>
                 <p className="text-xs text-secondary mb-1">Nutrition</p>
                 <div className="grid grid-cols-4 gap-2 text-sm">
-                  <div>
-                    <p className="text-secondary text-xs">Calories</p>
-                    <p className="font-semibold text-primary">
-                      {formatKcal(entry.calculated_macros.kcal)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-secondary text-xs">Protein</p>
-                    <p className="font-semibold text-primary">
-                      {formatMacro(entry.calculated_macros.protein_g)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-secondary text-xs">Fat</p>
-                    <p className="font-semibold text-primary">
-                      {formatMacro(entry.calculated_macros.fat_g)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-secondary text-xs">Carbs</p>
-                    <p className="font-semibold text-primary">
-                      {formatMacro(entry.calculated_macros.carb_g)}
-                    </p>
-                  </div>
+                  {(() => {
+                    const macros = parseMacros(entry.calculated_macros);
+                    return (
+                      <>
+                        <div>
+                          <p className="text-secondary text-xs">Calories</p>
+                          <p className="font-semibold text-primary">
+                            {formatKcal(macros.kcal || 0)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-secondary text-xs">Protein</p>
+                          <p className="font-semibold text-primary">
+                            {formatMacro(macros.protein_g || 0)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-secondary text-xs">Fat</p>
+                          <p className="font-semibold text-primary">
+                            {formatMacro(macros.fat_g || 0)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-secondary text-xs">Carbs</p>
+                          <p className="font-semibold text-primary">
+                            {formatMacro(macros.carb_g || 0)}
+                          </p>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 

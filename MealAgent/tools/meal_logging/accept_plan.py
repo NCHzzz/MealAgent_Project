@@ -47,27 +47,117 @@ def _ensure_date_only(date_str: str | None) -> str | None:
 
 
 def _delete_logs_for_date(log_collection, user_id: str, date_only: str):
-    """Delete MealLogEntry for a specific UTC date for this user."""
+    """Delete ALL MealLogEntry for a specific UTC date for this user. Returns count of deleted entries."""
+    deleted_count = 0
+    if not date_only:
+        logger.warning(f"accept_plan_tool: Cannot delete logs - date_only is empty")
+        return 0
+    
     try:
-        start_dt = datetime.fromisoformat(f"{date_only}T00:00:00").replace(tzinfo=timezone.utc)
+        # Parse date and create UTC datetime range for the entire day
+        try:
+            # Ensure date_only is in YYYY-MM-DD format
+            if len(date_only) == 10 and date_only.count("-") == 2:
+                date_obj = datetime.fromisoformat(f"{date_only}T00:00:00").date()
+            else:
+                # Try to normalize
+                date_obj = datetime.fromisoformat(date_only.replace("Z", "+00:00")).date()
+        except Exception as e:
+            logger.warning(f"accept_plan_tool: Invalid date format '{date_only}': {str(e)}")
+            return 0
+        
+        # Create UTC datetime range: start of day (00:00:00) to start of next day
+        start_dt = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
         end_dt = start_dt + timedelta(days=1)
+        
+        # Format for Weaviate (ISO format with Z suffix)
+        start_iso = start_dt.isoformat().replace("+00:00", "Z")
+        end_iso = end_dt.isoformat().replace("+00:00", "Z")
+        
+        logger.debug(f"accept_plan_tool: Deleting logs for date {date_only} (range: {start_iso} to {end_iso})")
+        
         where_clause = {
             "operator": "And",
             "operands": [
                 {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                {"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": start_dt.isoformat().replace("+00:00", "Z")},
-                {"path": ["logged_at"], "operator": "LessThan", "valueDate": end_dt.isoformat().replace("+00:00", "Z")},
+                {"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": start_iso},
+                {"path": ["logged_at"], "operator": "LessThan", "valueDate": end_iso},
             ],
         }
         filters = build_filters_from_where(where_clause)
-        existing = log_collection.query.fetch_objects(filters=filters, limit=256)
+        
+        # Fetch all matching entries (increase limit if needed)
+        existing = log_collection.query.fetch_objects(filters=filters, limit=500)
+        
+        logger.debug(f"accept_plan_tool: Found {len(existing.objects)} existing MealLogEntry entries for date {date_only} using date range query")
+        
+        # If no entries found with date range query, try a fallback: query all user entries and filter by date
+        if len(existing.objects) == 0:
+            logger.debug(f"accept_plan_tool: No entries found with date range query, trying fallback: query all user entries and filter by date")
+            try:
+                # Query all entries for this user (limit 1000 to handle edge cases)
+                user_filter = build_filters_from_where(
+                    {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
+                )
+                all_user_entries = log_collection.query.fetch_objects(filters=user_filter, limit=1000)
+                
+                # Filter by date in Python (more flexible with date formats)
+                for obj in all_user_entries.objects:
+                    logged_at_str = obj.properties.get("logged_at", "")
+                    if not logged_at_str:
+                        continue
+                    
+                    try:
+                        # Try to parse logged_at and extract date
+                        logged_at_parsed = None
+                        if isinstance(logged_at_str, str):
+                            # Try various formats
+                            for fmt in ["%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+                                try:
+                                    if "Z" in logged_at_str or "+" in logged_at_str or "-" in logged_at_str[-6:]:
+                                        logged_at_parsed = datetime.fromisoformat(logged_at_str.replace("Z", "+00:00"))
+                                    else:
+                                        logged_at_parsed = datetime.fromisoformat(logged_at_str)
+                                    break
+                                except:
+                                    continue
+                        
+                        if logged_at_parsed:
+                            # Normalize to UTC and extract date
+                            if logged_at_parsed.tzinfo is None:
+                                logged_at_parsed = logged_at_parsed.replace(tzinfo=timezone.utc)
+                            else:
+                                logged_at_parsed = logged_at_parsed.astimezone(timezone.utc)
+                            
+                            entry_date = logged_at_parsed.date().isoformat()
+                            if entry_date == date_only:
+                                log_collection.data.delete_by_id(obj.uuid)
+                                deleted_count += 1
+                                logger.debug(f"accept_plan_tool: Deleted log entry {obj.uuid} via fallback (logged_at: {logged_at_str}, date: {entry_date})")
+                    except Exception as e:
+                        logger.debug(f"accept_plan_tool: Failed to parse logged_at '{logged_at_str}' for entry {obj.uuid}: {str(e)}")
+                        continue
+            except Exception as e:
+                logger.warning(f"accept_plan_tool: Fallback query failed: {str(e)}")
+        
+        # Delete entries found via date range query
         for obj in existing.objects:
             try:
+                logged_at_value = obj.properties.get("logged_at", "")
                 log_collection.data.delete_by_id(obj.uuid)
-            except Exception:
-                logger.debug(f"accept_plan_tool: failed deleting old log {obj.uuid}")
+                deleted_count += 1
+                logger.debug(f"accept_plan_tool: Deleted log entry {obj.uuid} (logged_at: {logged_at_value})")
+            except Exception as e:
+                logger.warning(f"accept_plan_tool: failed deleting old log {obj.uuid}: {str(e)}")
+        
+        if deleted_count > 0:
+            logger.info(f"accept_plan_tool: Deleted {deleted_count} old MealLogEntry entries for date {date_only}")
+        else:
+            logger.debug(f"accept_plan_tool: No old MealLogEntry entries found for date {date_only} to delete")
+            
     except Exception as e:
-        logger.warning(f"accept_plan_tool: unable to purge logs for {date_only}: {str(e)}")
+        logger.exception(f"accept_plan_tool: unable to purge logs for {date_only}: {str(e)}")
+    return deleted_count
 
 
 def _log_plan_meal(
@@ -94,6 +184,53 @@ def _log_plan_meal(
     log_collection.data.insert(log_entry)
 
 
+def _delete_old_plans_for_date(plan_collection, item_collection, user_id: str, date_only: str, exclude_plan_id: str = None):
+    """Delete old MealPlan and MealPlanItem records for a specific date (except the one being accepted)."""
+    try:
+        duplicate_filter = build_filters_from_where(
+            {
+                "operator": "And",
+                "operands": [
+                    {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                    {"path": ["plan_type"], "operator": "Equal", "valueString": "day"},
+                    {"path": ["start_date"], "operator": "Equal", "valueDate": date_only},
+                ],
+            }
+        )
+        existing_plans = plan_collection.query.fetch_objects(filters=duplicate_filter, limit=10)
+        
+        deleted_count = 0
+        for obj in existing_plans.objects:
+            old_plan_id = obj.properties.get("plan_id")
+            # Skip the plan being accepted
+            if exclude_plan_id and old_plan_id == exclude_plan_id:
+                continue
+            
+            # Delete old MealPlanItem records tied to the old plan
+            if old_plan_id:
+                old_plan_filter = build_filters_from_where(
+                    {"path": ["plan_id"], "operator": "Equal", "valueString": old_plan_id}
+                )
+                old_items = item_collection.query.fetch_objects(filters=old_plan_filter, limit=256)
+                for itm in old_items.objects:
+                    try:
+                        item_collection.data.delete_by_id(itm.uuid)
+                    except Exception as e:
+                        logger.debug(f"accept_plan_tool: failed deleting old item {itm.uuid}: {str(e)}")
+            
+            # Delete the old MealPlan record
+            try:
+                plan_collection.data.delete_by_id(obj.uuid)
+                deleted_count += 1
+            except Exception as e:
+                logger.debug(f"accept_plan_tool: failed deleting old plan {obj.uuid}: {str(e)}")
+        
+        if deleted_count > 0:
+            logger.info(f"accept_plan_tool: deleted {deleted_count} old MealPlan(s) for date {date_only}")
+    except Exception as e:
+        logger.warning(f"accept_plan_tool: unable to purge old plans for {date_only}: {str(e)}")
+
+
 def log_plan_to_meal_log(
     plan: Dict[str, Any],
     user_id: str,
@@ -101,17 +238,25 @@ def log_plan_to_meal_log(
 ) -> list[Dict[str, Any]]:
     """
     Persist a plan into MealLogEntry and return logged meal metadata.
+    Also deletes old MealPlan records for the same date to prevent duplicates.
     Raises exceptions on failure for the caller to handle (tool or API layer).
     """
     client = client_manager.get_client()
     try:
         log_collection = client.collections.get("MealLogEntry")
+        plan_collection = client.collections.get("MealPlan")
+        item_collection = client.collections.get("MealPlanItem")
     except Exception as e:
-        raise RuntimeError(f"MealLogEntry collection not found: {str(e)}")
+        raise RuntimeError(f"Collections not found: {str(e)}")
 
     logged: list[Dict[str, Any]] = []
     plan_type = plan.get("plan_type", "day")
     plan_start_date = _ensure_date_only(plan.get("start_date"))
+    plan_id = plan.get("plan_id")
+    
+    # CRITICAL: Delete old MealPlan records for the same date (to prevent multiple plans per day)
+    if plan_type == "day" and plan_start_date and plan_id:
+        _delete_old_plans_for_date(plan_collection, item_collection, user_id, plan_start_date, exclude_plan_id=plan_id)
 
     def _day_logged_at(day_offset: int | None = None, explicit_date: str | None = None) -> str:
         """Return logged_at ISO anchored to plan date or today."""
@@ -128,9 +273,15 @@ def log_plan_to_meal_log(
         return f"{base_date}T12:00:00Z"
 
     def _log_meal(meal_obj: Dict[str, Any], meal_label: str, logged_at: str):
+        """Log a meal including main dish and all accompaniments."""
         recipe = meal_obj.get("recipe", {}) if isinstance(meal_obj, dict) else {}
         dish_name = recipe.get("dish_name") or meal_label
         servings = meal_obj.get("servings", 1.0) if isinstance(meal_obj, dict) else 1.0
+        
+        # Get accompaniments (side dishes, extra dishes)
+        accompaniments = meal_obj.get("accompaniments", []) if isinstance(meal_obj, dict) else []
+        
+        # Calculate total macros including accompaniments
         macros = (
             meal_obj.get("macros_total")
             or meal_obj.get("macros")
@@ -141,26 +292,66 @@ def log_plan_to_meal_log(
         scaled_macros = {}
         for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
             scaled_macros[k] = float(macros.get(k, 0.0)) * float(servings or 1.0)
+        
+        # Add accompaniments macros
+        for acc in accompaniments:
+            acc_recipe = acc.get("recipe", {}) if isinstance(acc, dict) else {}
+            acc_servings = float(acc.get("servings", 1.0))
+            acc_macros = acc.get("macros", {}) or acc_recipe.get("macros_per_serving", {})
+            for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
+                scaled_macros[k] += float(acc_macros.get(k, 0.0)) * acc_servings
 
-        ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []
+        # Collect all ingredients from main dish and accompaniments
+        all_ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []
+        for acc in accompaniments:
+            acc_recipe = acc.get("recipe", {}) if isinstance(acc, dict) else {}
+            acc_ingredients = acc_recipe.get("ingredients_with_qty") or acc_recipe.get("ingredients") or []
+            if isinstance(acc_ingredients, list):
+                all_ingredients.extend(acc_ingredients)
+        
+        # Build meal description including accompaniments
+        meal_items = [dish_name]
+        for acc in accompaniments:
+            acc_recipe = acc.get("recipe", {}) if isinstance(acc, dict) else {}
+            acc_name = acc_recipe.get("dish_name", "Unknown")
+            meal_items.append(acc_name)
+        meal_desc = f"{meal_label}: {', '.join(meal_items)}"
+        
         _log_plan_meal(
             log_collection,
             user_id=user_id,
-            meal_desc=f"{meal_label}: {dish_name}",
+            meal_desc=meal_desc,
             macros=scaled_macros,
-            ingredients=ingredients if isinstance(ingredients, list) else [],
+            ingredients=all_ingredients if isinstance(all_ingredients, list) else [],
             logged_at=logged_at,
         )
-        logged.append({"meal": meal_label, "dish": dish_name, "macros": scaled_macros})
+        logged.append({"meal": meal_label, "dish": meal_desc, "macros": scaled_macros})
 
     if plan_type == "day":
-        # Remove existing logs for the plan date
+        # CRITICAL: Delete ALL old MealLogEntry for the same date BEFORE logging new plan
+        # This ensures only ONE accepted plan per day (the latest one)
+        deleted_count = 0
         if plan_start_date:
-            _delete_logs_for_date(log_collection, user_id, plan_start_date)
+            logger.info(f"accept_plan_tool: Attempting to delete old MealLogEntry entries for date {plan_start_date} before logging new plan")
+            deleted_count = _delete_logs_for_date(log_collection, user_id, plan_start_date)
+            if deleted_count > 0:
+                logger.info(f"accept_plan_tool: Deleted {deleted_count} old MealLogEntry entries for date {plan_start_date} before logging new plan")
+            else:
+                logger.debug(f"accept_plan_tool: No old MealLogEntry entries found for date {plan_start_date} (this is OK if it's the first plan for this date)")
+        else:
+            logger.warning(f"accept_plan_tool: plan_start_date is None, cannot delete old entries. Plan start_date: {plan.get('start_date')}")
+        
+        # Log only the meals from the accepted plan (breakfast, lunch, dinner)
+        # Each meal includes main dish + all accompaniments in a single entry
+        meals_logged = 0
         for meal_key in ["breakfast", "lunch", "dinner"]:
             meal_obj = plan.get("meals", {}).get(meal_key) if plan.get("meals") else plan.get(meal_key)
             if meal_obj:
                 _log_meal(meal_obj, meal_key, _day_logged_at())
+                meals_logged += 1
+                logger.debug(f"accept_plan_tool: Logged {meal_key} (main + {len(meal_obj.get('accompaniments', []))} accompaniments)")
+        
+        logger.info(f"accept_plan_tool: Successfully logged {meals_logged} meals for plan {plan_id} (replaced {deleted_count} old entries)")
     elif plan_type == "week":
         for day in plan.get("days", {}).values():
             meals = day.get("meals", {})
@@ -187,13 +378,24 @@ async def accept_plan_tool(
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Accept a prepared meal plan and persist it into MealLogEntry.
+    
+    CRITICAL: This tool should ONLY be called when:
+    1. User explicitly accepts a plan via UI (button click)
+    2. User chats with agent accepting the proposed plan (user message indicates acceptance)
+    
+    DO NOT call this tool automatically after creating a plan. Wait for user acceptance.
 
     Flow:
     1) Load plan from Weaviate (source of truth)
     2) For each meal, log into MealLogEntry with macros and metadata
     3) Return summary of logged meals
+    4) Delete old MealLogEntry for the same date (if any) before logging new plan
 
-    Only logs when user explicitly accepts the final plan.
+    This is the preferred method for accepting plans. Alternative: use log_meal_e2e_tool with user_accepted=True.
+    
+    COMPLETION HINT: After successfully logging the plan, the task is COMPLETE. 
+    DO NOT call any additional tools (profile_crud_tool, macro_calc_tool, explain, etc.).
+    Simply confirm to the user that the plan has been saved and END the conversation.
     """
     if not plan_id:
         yield Error("plan_id is required to accept plan")
@@ -237,4 +439,3 @@ async def accept_plan_tool(
         logger.exception("accept_plan_tool failure")
         yield Error(f"Failed to accept plan {plan_id}: {str(e)}")
         return
-

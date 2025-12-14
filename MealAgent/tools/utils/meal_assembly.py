@@ -1300,6 +1300,8 @@ def select_accompaniments(
                 logger.warning(f"LLM suggested vegetable '{vegetable.get('dish_name', 'Unknown')}' is not a vegetable dish, rejecting...")
                 vegetable = None
             if not vegetable:
+                # CRITICAL: Increase max_kcal for vegetables to allow more variety
+                # Some vegetable dishes (like stir-fried vegetables with sauce) can have 150-250 kcal
                 vegetable = select_meal_by_strategy(
                     recipes, "balanced",
                     exclude=filtered_excluded,
@@ -1309,13 +1311,13 @@ def select_accompaniments(
                     target_macros=targets,
                     require_macros=True,
                     min_kcal=30.0,
-                    max_kcal=150.0,
+                    max_kcal=250.0,  # Increased from 150.0 to 250.0 to allow more vegetable dishes
                 )
             if vegetable:
                 veg_macros = _get_meal_macros(vegetable)
                 veg_kcal = veg_macros.get("kcal", 0)
-                if veg_kcal > 150.0:
-                    logger.warning(f"Vegetable '{vegetable.get('dish_name', 'Unknown')}' kcal ({veg_kcal:.1f}) exceeds limit (150.0), rejecting...")
+                if veg_kcal > 250.0:  # Increased from 150.0 to 250.0
+                    logger.warning(f"Vegetable '{vegetable.get('dish_name', 'Unknown')}' kcal ({veg_kcal:.1f}) exceeds limit (250.0), rejecting...")
                     vegetable = None
                 elif not _is_vegetable_dish(vegetable):
                     logger.warning(f"Selected vegetable '{vegetable.get('dish_name', 'Unknown')}' is not a vegetable dish, rejecting...")

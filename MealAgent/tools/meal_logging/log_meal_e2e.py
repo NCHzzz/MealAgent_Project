@@ -291,14 +291,26 @@ async def log_meal_e2e_tool(
     user_id: str,
     meal_description: str = "",
     plan_id: str = "",
+    user_accepted: bool = False,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Meal logging E2E flow: LLM parsing → FDC validation → nutrition calc → profile + log persistence.
     
+    CRITICAL: This tool should ONLY be called in these 3 cases:
+    1. User explicitly accepts a plan via UI (user_accepted=True or plan_id provided with explicit acceptance)
+    2. User says they actually ate something (meal_description provided by user)
+    3. User chats with agent accepting the proposed plan (user message indicates acceptance)
+    
+    DO NOT call this tool automatically after creating a plan. Wait for user acceptance.
+    
     Can log either:
-    - Single meal: Provide meal_description (e.g., "Phở bò")
-    - Entire plan: Provide plan_id to log all meals from a saved plan
+    - Single meal: Provide meal_description (e.g., "Phở bò") - when user says they ate something
+    - Entire plan: Provide plan_id to log all meals from a saved plan - when user accepts plan
+    
+    Parameters:
+        user_accepted: Set to True when user explicitly accepts a plan. If False and plan_id is provided,
+                      this indicates automatic call which should be prevented.
 
     Environment contract:
       Reads
@@ -316,6 +328,26 @@ async def log_meal_e2e_tool(
     if not user_id:
         yield Error("user_id is required")
         return
+    
+    # CRITICAL VALIDATION: Prevent automatic logging without user acceptance
+    # Only allow logging if:
+    # 1. User provided meal_description (user says they ate something) - OK to proceed
+    # 2. User explicitly accepted plan (user_accepted=True) - OK to proceed
+    # 3. plan_id provided without user_accepted - This might be automatic call, log warning
+    if plan_id and not user_accepted and not meal_description:
+        # This is likely an automatic call after plan creation (should be prevented)
+        # Log strong warning but still allow (in case it's from accept_plan_tool or user acceptance via chat)
+        import logging
+        logging.warning(
+            f"log_meal_e2e_tool: POTENTIAL AUTOMATIC CALL DETECTED - plan_id={plan_id} but user_accepted=False and meal_description empty. "
+            f"This tool should ONLY be called when: "
+            f"1) User accepts plan via UI (use accept_plan_tool instead), "
+            f"2) User says they accept in chat (set user_accepted=True), "
+            f"3) User says they ate something (provide meal_description). "
+            f"Proceeding with caution - ensure this is from user acceptance."
+        )
+        # Note: We still proceed because accept_plan_tool might call this internally,
+        # or agent might have detected user acceptance from chat context
     
     # Option 1: Log entire plan if plan_id provided
     # IMPORTANT: Always load from Weaviate (database is source of truth)
