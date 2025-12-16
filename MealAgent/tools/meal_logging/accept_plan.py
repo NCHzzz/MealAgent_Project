@@ -252,6 +252,10 @@ def log_plan_to_meal_log(
     logged: list[Dict[str, Any]] = []
     plan_type = plan.get("plan_type", "day")
     plan_start_date = _ensure_date_only(plan.get("start_date"))
+    if not plan_start_date:
+        # Fallback: use today's date (UTC) if plan is missing start_date
+        plan_start_date = datetime.now(timezone.utc).date().isoformat()
+        plan["start_date"] = plan_start_date
     plan_id = plan.get("plan_id")
     
     # CRITICAL: Delete old MealPlan records for the same date (to prevent multiple plans per day)
@@ -282,24 +286,59 @@ def log_plan_to_meal_log(
         accompaniments = meal_obj.get("accompaniments", []) if isinstance(meal_obj, dict) else []
         
         # Calculate total macros including accompaniments
-        macros = (
+        # Prefer precomputed totals if present to avoid double-scaling.
+        # Prefer precomputed totals from plan_day_e2e to avoid double-counting.
+        # plan_day_e2e sets:
+        #  - lunch/dinner: macros_total (already includes accompaniments & servings)
+        #  - breakfast: macros (total for the meal)
+        preferred_macros = (
             meal_obj.get("macros_total")
             or meal_obj.get("macros")
-            or recipe.get("macros_per_serving")
+            or meal_obj.get("macros_with_sides")
+            or meal_obj.get("macros_total_with_sides")
+        )
+
+        # Always recompute as a safety check (main + accompaniments with servings)
+        recomputed_macros = {}
+        # Recompute based on primary recipe macros_per_serving (avoid reusing meal_obj.macros which may already include sides)
+        base_macros = (
+            recipe.get("macros_per_serving")
+            or meal_obj.get("macros")
             or {}
         )
-        # Multiply macros by servings if they look like per-serving
-        scaled_macros = {}
         for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
-            scaled_macros[k] = float(macros.get(k, 0.0)) * float(servings or 1.0)
-        
-        # Add accompaniments macros
+            recomputed_macros[k] = float(base_macros.get(k, 0.0)) * float(servings or 1.0)
         for acc in accompaniments:
             acc_recipe = acc.get("recipe", {}) if isinstance(acc, dict) else {}
             acc_servings = float(acc.get("servings", 1.0))
             acc_macros = acc.get("macros", {}) or acc_recipe.get("macros_per_serving", {})
             for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
-                scaled_macros[k] += float(acc_macros.get(k, 0.0)) * acc_servings
+                recomputed_macros[k] += float(acc_macros.get(k, 0.0)) * acc_servings
+
+        scaled_macros = {}
+        if preferred_macros and isinstance(preferred_macros, dict) and any(preferred_macros.values()):
+            for k in ["kcal", "protein_g", "fat_g", "carb_g"]:
+                scaled_macros[k] = float(preferred_macros.get(k, 0.0))
+            # preferred macros present; use as-is
+        else:
+            logger.warning(
+                "accept_plan_tool: no preferred macros present for %s; using recomputed from main + accompaniments",
+                meal_label,
+            )
+            scaled_macros = recomputed_macros
+
+        # If preferred looks too low versus recomputed (likely missing accompaniments), switch to recomputed.
+        preferred_kcal = scaled_macros.get("kcal", 0.0)
+        recomputed_kcal = recomputed_macros.get("kcal", 0.0)
+        if len(accompaniments) > 0 and recomputed_kcal > preferred_kcal * 1.1:
+            logger.warning(
+                "accept_plan_tool: preferred macros for %s appear low (preferred_kcal=%.1f vs recomputed_kcal=%.1f), "
+                "using recomputed totals to include accompaniments",
+                meal_label,
+                preferred_kcal,
+                recomputed_kcal,
+            )
+            scaled_macros = recomputed_macros
 
         # Collect all ingredients from main dish and accompaniments
         all_ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []

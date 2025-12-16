@@ -318,6 +318,10 @@ export type CookingStepsPayload = DefaultResultPayload & {
     estimated_seconds: number;
   }[];
   total_time_seconds?: number;
+  total_time_minutes?: number;
+  serving_size?: number;
+   image_link?: string;
+   cooking_time?: number;
 };
 
 export type MealHistoryPayload = DefaultResultPayload & {

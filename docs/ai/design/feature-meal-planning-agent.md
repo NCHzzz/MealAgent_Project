@@ -45,6 +45,229 @@ graph TD
     style LLM fill:#f3e5f5
 ```
 
+### Data Storing Pipeline
+
+```mermaid
+graph LR
+    subgraph Raw["Raw Dataset Sources"]
+        FDC["FoodData Central<br/>CSV"]
+        RecipeCSV["Recipe Dataset<br/>CSV"]
+    end
+    
+    subgraph ETL["ETL Process"]
+        CleanFDC["ingest_fdc.py<br/>Data Cleaning"]
+        CleanRecipe["ingest_recipes.py<br/>Data Cleaning"]
+    end
+    
+    subgraph Weaviate["Vector Database (Weaviate)"]
+        WCore["Weaviate Core"]
+        
+        subgraph KB["📚 Knowledge Base Collections<br/>(Static - ETL populated)"]
+            CollRecipe["Recipe<br/>~2000 recipes"]
+            CollFdcFood["FdcFood<br/>~200k foods"]
+            CollFdcNutrient["FdcNutrient<br/>Nutrient details"]
+            CollFdcPortion["FdcPortion<br/>Portion sizes"]
+        end
+        
+        subgraph UserData["👤 User Data Collections<br/>(Dynamic - Runtime created)"]
+            CollUser["UserProfile"]
+            CollPlan["MealPlan"]
+            CollLog["MealLogEntry"]
+            CollPantry["Pantry"]
+            CollShop["ShoppingList"]
+        end
+        
+        CollMeta["ELYSIA_METADATA__<br/>📊 KB Metadata<br/>(Summaries, Stats, Return Types)"]
+    end
+    
+    subgraph Preprocessing["Preprocessing Layer"]
+        PreProc["preprocessor.py<br/>Elysia preprocess API<br/>🔍 Analyzes KB only"]
+    end
+    
+    subgraph Runtime["Runtime (Tools)"]
+        Tools["MealAgent Tools<br/>Search KB + Manage User Data"]
+    end
+    
+    FDC --> CleanFDC
+    RecipeCSV --> CleanRecipe
+    
+    CleanFDC -->|Store| CollFdcFood
+    CleanFDC -->|Store| CollFdcNutrient
+    CleanFDC -->|Store| CollFdcPortion
+    CleanRecipe -->|Store| CollRecipe
+    
+    WCore -->|Create| KB
+    WCore -->|Create| UserData
+    
+    KB -->|Read Schema & Data| PreProc
+    PreProc -->|Generate & Store| CollMeta
+    
+    Tools -->|Query| KB
+    Tools -->|Read/Write| UserData
+    Tools -->|Read Metadata| CollMeta
+    
+    style Raw fill:#fff4e1
+    style ETL fill:#e3f2fd
+    style Weaviate fill:#e8f5e9
+    style KB fill:#bbdefb
+    style UserData fill:#f8bbd0
+    style Preprocessing fill:#f3e5f5
+    style Runtime fill:#fce4ec
+    style CollMeta fill:#fff9c4
+```
+
+### Query Execution Pipeline
+
+```mermaid
+graph TB
+    subgraph Frontend["🖥️ Frontend Layer"]
+        User["User Query<br/>'Plan meals for 1800 kcal/day'"]
+    end
+    
+    subgraph TreeLayer["🌲 Decision Tree Layer"]
+        Tree["Tree.process_tree<br/>Elysia Decision Agent"]
+        ToolSelect["Tool Selection<br/>LLM chooses appropriate tools"]
+    end
+    
+    subgraph ToolsLayer["🔧 MealAgent Tools"]
+        direction TB
+        
+        subgraph ProfileTools["Profile Tools"]
+            ProfileCRUD["profile_crud<br/>CRUD operations"]
+            MacroCalc["macro_calc<br/>Calculate targets"]
+        end
+        
+        subgraph SearchTools["Search Tools"]
+            SearchRank["search_and_rank<br/>Semantic + BM25"]
+            Constraints["constraints_guard<br/>Filter by diet/allergens"]
+        end
+        
+        subgraph PlanningTools["Planning Tools"]
+            PlanDay["plan_day_e2e<br/>Daily planning"]
+            PlanWeek["plan_week_e2e<br/>Weekly planning"]
+            SwapMeal["swap_meal_item<br/>Recipe substitution"]
+        end
+        
+        subgraph NutritionTools["Nutrition Tools"]
+            CalcMacros["calculate_recipe_macros<br/>VN→EN + FDC lookup"]
+            AutoCalc["auto_calculate_macros<br/>Batch processing"]
+        end
+        
+        subgraph OptimTools["Optimization Tools"]
+            GapFill["gap_fill<br/>Fill macro gaps"]
+            Substitute["substitute<br/>Ingredient swap"]
+            Micros["micros<br/>Micronutrient analysis"]
+        end
+        
+        subgraph LoggingTools["Logging Tools"]
+            LogMeal["log_meal_e2e<br/>Parse & log meals"]
+            History["meal_history<br/>View history"]
+            Accept["accept_plan<br/>Finalize plan"]
+        end
+        
+        subgraph PantryTools["Pantry & Shopping"]
+            PantryCRUD["pantry_crud<br/>Manage pantry"]
+            PantryDiff["pantry_diff<br/>Generate shopping list"]
+        end
+        
+        subgraph CookTools["Cooking Tools"]
+            CookMode["cook_mode<br/>Step-by-step guide"]
+        end
+    end
+    
+    subgraph DataLayer["💾 Data Access Layer"]
+        ClientMgr["ClientManager<br/>Weaviate client per user"]
+        
+        subgraph QueryExec["Query Execution"]
+            HybridSearch["Hybrid Search<br/>BM25 + Vector"]
+            PreFilter["Pre-filtering<br/>Constraints + User prefs"]
+            Vector["Vectorization<br/>text2vec-transformers"]
+        end
+        
+        MetaAccess["Metadata Access<br/>ELYSIA_METADATA__"]
+    end
+    
+    subgraph Storage["🗄️ Weaviate Storage"]
+        direction LR
+        
+        subgraph KB["📚 Knowledge Base"]
+            KBRecipe["Recipe<br/>~2000"]
+            KBFdc["FdcFood<br/>~200k"]
+            KBNutr["FdcNutrient"]
+            KBPort["FdcPortion"]
+        end
+        
+        subgraph UserData["👤 User Data"]
+            UDProfile["UserProfile"]
+            UDPlan["MealPlan"]
+            UDLog["MealLogEntry"]
+            UDPantry["Pantry"]
+            UDShop["ShoppingList"]
+        end
+    end
+    
+    User -->|WebSocket/HTTP| Tree
+    Tree --> ToolSelect
+    
+    ToolSelect -.->|"Profile mgmt"| ProfileTools
+    ToolSelect -.->|"Search recipes"| SearchTools
+    ToolSelect -.->|"Plan meals"| PlanningTools
+    ToolSelect -.->|"Calculate nutrition"| NutritionTools
+    ToolSelect -.->|"Optimize plans"| OptimTools
+    ToolSelect -.->|"Log meals"| LoggingTools
+    ToolSelect -.->|"Manage inventory"| PantryTools
+    ToolSelect -.->|"Cook mode"| CookTools
+    
+    ProfileTools --> ClientMgr
+    SearchTools --> ClientMgr
+    PlanningTools --> ClientMgr
+    NutritionTools --> ClientMgr
+    OptimTools --> ClientMgr
+    LoggingTools --> ClientMgr
+    PantryTools --> ClientMgr
+    CookTools --> ClientMgr
+    
+    ClientMgr --> QueryExec
+    ClientMgr --> MetaAccess
+    
+    QueryExec -->|"Query"| KB
+    QueryExec -->|"Read/Write"| UserData
+    
+    HybridSearch -.-> Vector
+    PreFilter -.-> Constraints
+    
+    MetaAccess -.->|"Summaries, Stats,<br/>Return Types"| SearchTools
+    MetaAccess -.->|"Field mappings"| NutritionTools
+    
+    style Frontend fill:#e3f2fd
+    style TreeLayer fill:#e1f5ff
+    style ToolsLayer fill:#f3e5f5
+    style DataLayer fill:#fff4e1
+    style Storage fill:#e8f5e9
+    style KB fill:#bbdefb
+    style UserData fill:#f8bbd0
+    style QueryExec fill:#fff9c4
+```
+
+**Pipeline Flow:**
+1. **User Query** → Tree receives natural language query via WebSocket
+2. **Decision Agent** → LLM analyzes query and selects appropriate tool(s)
+3. **Tool Execution** → Selected tool(s) request data via ClientManager
+4. **Query Processing** → Weaviate executes hybrid search with pre-filtering
+5. **Data Retrieval** → Returns from Knowledge Base (read-only) or User Data (read/write)
+6. **Metadata Enhancement** → Tools use preprocessing metadata for optimized queries
+7. **Response Streaming** → Results streamed back to frontend via WebSocket
+
+**Key Tool Categories:**
+- **Profile**: User profile CRUD + macro target calculation
+- **Search**: Semantic search with constraint filtering (diet, allergens, devices)
+- **Planning**: Day/week meal planning with swapping capability
+- - **Nutrition**: VN→EN translation, FDC lookup, macro calculation with caching
+- **Optimization**: Gap filling, ingredient substitution, micronutrient analysis
+- **Logging**: Meal logging with parsing, history viewing, plan acceptance
+- **Pantry**: Inventory management + shopping list generation
+- **Cooking**: Interactive cooking mode with step-by-step guidance
+
 ### Component Responsibilities
 
 - **elysia-frontend (Next.js)**: User interface for profile management, meal browsing, plan viewing, cooking mode

@@ -116,8 +116,24 @@ async def substitute_tool(
     """
     logging.info("substitute_tool: start (recipe-level only)")
     yield Response("🔄 Đang tìm món thay thế chứa nguyên liệu bạn yêu cầu...")
-    
+
     try:
+        # Normalise user_id early and try to recover from hidden environment if missing/invalid
+        normalized_user_id: str | None = None
+        if user_id is not None:
+            uid_str = str(user_id).strip()
+            if uid_str and uid_str.lower() not in {"none", "null"}:
+                normalized_user_id = uid_str
+        if normalized_user_id is None:
+            # Try to read from hidden environment where build_meal_agent_tree stores it
+            try:
+                hidden_uid = tree_data.environment.hidden_environment.get("user_id")
+                if hidden_uid:
+                    normalized_user_id = str(hidden_uid).strip()
+            except Exception:
+                normalized_user_id = None
+        user_id = normalized_user_id
+
         # Desired ingredient for the NEW dish (e.g., "thịt bò")
         desired_ingredient = kwargs.get("desired_ingredient") or kwargs.get("substitute_ingredient") or ingredient_name
         if not desired_ingredient:
@@ -144,20 +160,33 @@ async def substitute_tool(
         base_lm = base_lm or kwargs.get("base_lm")
 
         # Helpers
-        def _iter_plan_recipes(plan_obj: Dict[str, Any]) -> List[tuple[Dict[str, Any], Dict[str, Any]]]:
-            """Yield (recipe, meal_data) pairs from a plan (meals + accompaniments)."""
-            recipes: List[tuple[Dict[str, Any], Dict[str, Any]]] = []
+        def _iter_plan_recipes(
+            plan_obj: Dict[str, Any]
+        ) -> List[tuple[Dict[str, Any], Dict[str, Any], str, int | None]]:
+            """
+            Yield (recipe, meal_data, role, acc_index) tuples from a plan.
+
+            - role: "main" or "accompaniment"
+            - acc_index: index in accompaniments list when role == "accompaniment", else None
+            """
+            recipes: List[tuple[Dict[str, Any], Dict[str, Any], str, int | None]] = []
             if not plan_obj:
                 return recipes
             if plan_obj.get("plan_type") == "day":
                 for meal_data in plan_obj.get("meals", {}).values():
                     if meal_data.get("recipe"):
-                        recipes.append((meal_data["recipe"], meal_data))
+                        recipes.append((meal_data["recipe"], meal_data, "main", None))
+                    for idx, acc in enumerate(meal_data.get("accompaniments", []) or []):
+                        if isinstance(acc, dict) and acc.get("recipe"):
+                            recipes.append((acc["recipe"], meal_data, "accompaniment", idx))
             elif plan_obj.get("plan_type") == "week":
                 for day_data in plan_obj.get("days", {}).values():
                     for meal_data in day_data.get("meals", {}).values():
                         if meal_data.get("recipe"):
-                            recipes.append((meal_data["recipe"], meal_data))
+                            recipes.append((meal_data["recipe"], meal_data, "main", None))
+                        for idx, acc in enumerate(meal_data.get("accompaniments", []) or []):
+                            if isinstance(acc, dict) and acc.get("recipe"):
+                                recipes.append((acc["recipe"], meal_data, "accompaniment", idx))
             return recipes
 
         def _meal_type_hint(meal_data: Dict[str, Any]) -> str:
@@ -289,50 +318,92 @@ async def substitute_tool(
             filters_metadata = filters_results[0].get("metadata") or {}
             exclude_allergens = filters_metadata.get("exclude_allergens", [])
 
-        # Build list of recipes to replace
+        # Build list of recipes to replace (score, recipe, meal_data, role, acc_idx)
         original_fdc_id_int = _to_int_or_none(original_fdc_id)
-        recipes_to_replace: List[tuple[Dict[str, Any], Dict[str, Any]]] = []
-        for recipe, meal_data in _iter_plan_recipes(plan):
-            dish_name = str(recipe.get("dish_name", "")).lower()
-            ingredient_hit = _recipe_contains_fdc(recipe, original_fdc_id_int, replace_kw) if (original_fdc_id_int or replace_kw) else False
-            # Clear precedence: detect seafood either by name or by ingredient map when no specific fdc_id/keyword
-            seafood_hit = _is_seafood_word(dish_name)
-            if not seafood_hit:
-                ing_map = recipe.get("ingredient_fdc_map", []) or []
-                for ing in ing_map:
-                    if not isinstance(ing, dict):
-                        continue
-                    for field in [
-                        ing.get("ingredient_vn"),
-                        ing.get("ingredient_en"),
-                        ing.get("ingredient"),
-                        ing.get("name"),
-                        ing.get("description"),
-                    ]:
-                        if field and _is_seafood_word(str(field).lower()):
-                            seafood_hit = True
-                            break
-                    if seafood_hit:
-                        break
-            if ingredient_hit or seafood_hit or original_fdc_id_int is None:
-                # Heuristic: if no fdc_id provided
-                if original_fdc_id_int is None:
-                    if replace_kw:
-                        # keyword provided: match by name substring OR seafood auto-detect
-                        if replace_kw in dish_name or seafood_hit:
-                            recipes_to_replace.append((recipe, meal_data))
-                    else:
-                        # no keyword: when fdc_id is None, include seafood hits; otherwise skip
-                        if seafood_hit:
-                            recipes_to_replace.append((recipe, meal_data))
-                else:
-                    # fdc_id given: any ingredient_hit or seafood_hit qualifies
-                    if ingredient_hit or seafood_hit:
-                        recipes_to_replace.append((recipe, meal_data))
+        recipes_to_replace: List[Dict[str, Any]] = []
 
-        # If nothing found, try fallback from environment cache even when plan was loaded
+        def _name_match_score(dish_name: str, keyword: str) -> float:
+            dn = dish_name.lower()
+            kw = keyword.lower()
+            if not kw:
+                return 0.0
+            if dn == kw:
+                return 3.0
+            if kw in dn:
+                return 2.0
+            return 0.0
+
+        def _collect_candidates(target_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+            matches: List[Dict[str, Any]] = []
+            for recipe, meal_data, role, acc_idx in _iter_plan_recipes(target_plan):
+                dish_name = str(recipe.get("dish_name", "")).lower()
+                ingredient_hit = _recipe_contains_fdc(recipe, original_fdc_id_int, replace_kw) if (original_fdc_id_int or replace_kw) else False
+                seafood_hit = _is_seafood_word(dish_name)
+                if not seafood_hit:
+                    ing_map = recipe.get("ingredient_fdc_map", []) or []
+                    for ing in ing_map:
+                        if not isinstance(ing, dict):
+                            continue
+                        for field in [
+                            ing.get("ingredient_vn"),
+                            ing.get("ingredient_en"),
+                            ing.get("ingredient"),
+                            ing.get("name"),
+                            ing.get("description"),
+                        ]:
+                            if field and _is_seafood_word(str(field).lower()):
+                                seafood_hit = True
+                                break
+                        if seafood_hit:
+                            break
+
+                name_score = _name_match_score(dish_name, replace_kw) if replace_kw else 0.0
+
+                select = False
+                if original_fdc_id_int is not None:
+                    select = ingredient_hit or seafood_hit
+                else:
+                    if replace_kw:
+                        select = ingredient_hit or seafood_hit or name_score > 0
+                    else:
+                        select = seafood_hit
+
+                if select:
+                    if role == "accompaniment":
+                        name_score += 0.2
+                    matches.append(
+                        {
+                            "score": max(1e-6, name_score if replace_kw else 1.0),
+                            "recipe": recipe,
+                            "meal_data": meal_data,
+                            "role": role,
+                            "acc_idx": acc_idx,
+                        }
+                    )
+            return matches
+
+        recipes_to_replace = _collect_candidates(plan)
+
+        if replace_kw and recipes_to_replace:
+            best_score = max(m["score"] for m in recipes_to_replace)
+            recipes_to_replace = [m for m in recipes_to_replace if m["score"] == best_score]
+            logger.debug(
+                "substitute_tool: selected replacements by name | count=%d | best_score=%.3f | dishes=%s",
+                len(recipes_to_replace),
+                best_score,
+                [m["recipe"].get("dish_name") for m in recipes_to_replace],
+            )
+        else:
+            logger.debug(
+                "substitute_tool: replacements built | count=%d | replace_kw=%s | fdc_id=%s | dishes=%s",
+                len(recipes_to_replace),
+                replace_kw,
+                original_fdc_id_int,
+                [m["recipe"].get("dish_name") for m in recipes_to_replace],
+            )
+
         if not recipes_to_replace:
-            scanned = [str(r.get("dish_name", "")) for r, _ in _iter_plan_recipes(plan)]
+            scanned = [str(r.get("dish_name", "")) for _, r, _, _, _ in _iter_plan_recipes(plan)]
             logger.debug(
                 "substitute_tool: no recipes_to_replace from plan_id=%s | scanned=%s",
                 plan.get("plan_id"),
@@ -351,31 +422,16 @@ async def substitute_tool(
 
             if fallback_plan:
                 plan = fallback_plan
-                recipes_to_replace = []
-                for recipe, meal_data in _iter_plan_recipes(plan):
-                    dish_name = str(recipe.get("dish_name", "")).lower()
-                    ingredient_hit = _recipe_contains_fdc(recipe, original_fdc_id_int, replace_kw) if (original_fdc_id_int or replace_kw) else False
-                    seafood_hit = _is_seafood_word(dish_name)
-                    if not seafood_hit:
-                        ing_map = recipe.get("ingredient_fdc_map", []) or []
-                        for ing in ing_map:
-                            if not isinstance(ing, dict):
-                                continue
-                            for field in [
-                                ing.get("ingredient_vn"),
-                                ing.get("ingredient_en"),
-                                ing.get("ingredient"),
-                                ing.get("name"),
-                                ing.get("description"),
-                            ]:
-                                if field and _is_seafood_word(str(field).lower()):
-                                    seafood_hit = True
-                                    break
-                            if seafood_hit:
-                                break
-                    name_hit = replace_kw and replace_kw in dish_name
-                    if ingredient_hit or seafood_hit or name_hit or original_fdc_id_int is None and replace_kw:
-                        recipes_to_replace.append((recipe, meal_data))
+                recipes_to_replace = _collect_candidates(plan)
+                if replace_kw and recipes_to_replace:
+                    best_score_fb = max(m["score"] for m in recipes_to_replace)
+                    recipes_to_replace = [m for m in recipes_to_replace if m["score"] == best_score_fb]
+                    logger.debug(
+                        "substitute_tool: env-fallback replacements by name | count=%d | best_score=%.3f | dishes=%s",
+                        len(recipes_to_replace),
+                        best_score_fb,
+                        [m["recipe"].get("dish_name") for m in recipes_to_replace],
+                    )
                 if recipes_to_replace:
                     logger.debug(
                         "substitute_tool: recovered recipes_to_replace via env fallback | count=%d | source=%s",
@@ -396,7 +452,7 @@ async def substitute_tool(
             return
 
         search_query = f"{desired_ingredient}"
-        candidate_results = recipe_collection.query.bm25(query=search_query, limit=60)
+        candidate_results = recipe_collection.query.bm25(query=search_query, limit=30)
         logger.debug(
             "substitute_tool: recipe-level bm25 | query=%s | results=%s",
             search_query,
@@ -419,6 +475,28 @@ async def substitute_tool(
             yield Error(f"Không tìm thấy món nào chứa '{desired_ingredient}'.")
             return
 
+        # Pre-compute textual relevance of each candidate to the user's requested ingredient/dish
+        desired_lower = desired_ingredient.lower()
+        desired_tokens = [t for t in desired_lower.split() if len(t) > 1]
+
+        def _text_relevance(candidate: Dict[str, Any]) -> float:
+            dish = str(candidate.get("dish_name") or candidate.get("description") or "").lower()
+            if not dish:
+                return 0.0
+
+            # Strong boost when all meaningful tokens from the user phrase appear in the dish name
+            if desired_tokens and all(tok in dish for tok in desired_tokens):
+                return 100.0
+
+            # Fallback: fuzzy similarity between requested phrase and dish name
+            try:
+                return SequenceMatcher(None, desired_lower, dish).ratio() * 100.0
+            except Exception:
+                return 0.0
+
+        for cand in candidates:
+            cand["_sub_text_score"] = _text_relevance(cand)
+
         # Scoring
         def _recipe_match_score(original_recipe: Dict[str, Any], candidate: Dict[str, Any]) -> float:
             orig_macros = _get_meal_macros(original_recipe)
@@ -429,12 +507,24 @@ async def substitute_tool(
 
         updated_recipes: List[str] = []
         used_candidate_ids: set[str] = set()
+        recipes_needing_macro_recalc: List[str] = []
 
-        for recipe, meal_data in recipes_to_replace:
+        for entry in recipes_to_replace:
+            recipe = entry["recipe"]
+            meal_data = entry["meal_data"]
+            role = entry["role"]
+            acc_idx = entry["acc_idx"]
+            logger.debug(
+                "substitute_tool: replacing candidate | dish=%s | role=%s | acc_idx=%s | score=%.3f",
+                recipe.get("dish_name"),
+                role,
+                acc_idx,
+                entry.get("score", 0.0),
+            )
             food_id = recipe.get("food_id")
             meal_hint = _meal_type_hint(meal_data)
 
-            scored = []
+            scored: List[tuple[float, Dict[str, Any]]] = []
             for cand in candidates:
                 cand_id = cand.get("food_id") or cand.get("recipe_id") or cand.get("id")
                 if cand_id in used_candidate_ids:
@@ -443,9 +533,12 @@ async def substitute_tool(
                 # Rough meal-type alignment (soft)
                 if meal_hint and meal_hint in ["main", "protein"] and "salad" in desc:
                     pass
-                score = _recipe_match_score(recipe, cand)
-                if score > 0:
-                    scored.append((score, cand))
+                macro_score = _recipe_match_score(recipe, cand)
+                text_score = float(cand.get("_sub_text_score", 0.0))
+                # Combine macro similarity (keep nutrition close) with textual relevance
+                combined_score = macro_score * 0.7 + text_score * 0.3
+                if combined_score > 0:
+                    scored.append((combined_score, cand))
 
             # Fallback when macros are missing (score=0): use name similarity so we still swap
             if not scored and candidates:
@@ -485,8 +578,25 @@ async def substitute_tool(
                 selected[0],
             )
 
-            meal_data["recipe"] = selected_cand
+            if role == "main":
+                meal_data["recipe"] = selected_cand
+            else:
+                # Replace within accompaniments by index when possible
+                acc_list = meal_data.get("accompaniments") or []
+                if isinstance(acc_idx, int) and 0 <= acc_idx < len(acc_list):
+                    if isinstance(acc_list[acc_idx], dict):
+                        acc_list[acc_idx]["recipe"] = selected_cand
+                else:
+                    # Fallback: append as new accompaniment to avoid losing the selection
+                    acc_list = list(acc_list)
+                    acc_list.append({"recipe": selected_cand, "servings": 1.0, "type": "main"})
+                    meal_data["accompaniments"] = acc_list
             updated_recipes.append(str(food_id))
+
+            # Only trigger expensive macro recalculation later if the selected candidate lacks macros
+            cand_macros = _get_meal_macros(selected_cand)
+            if (not cand_macros) and sel_id:
+                recipes_needing_macro_recalc.append(str(sel_id))
 
         # Recalculate per-meal macros (including accompaniments) and plan totals
         def _recompute_meal_macros(meal_obj: Dict[str, Any]) -> Dict[str, float]:
@@ -533,10 +643,10 @@ async def substitute_tool(
         plan["total_macros"] = total_macros
 
         macros_recalculated = False
-        if updated_recipes:
+        if recipes_needing_macro_recalc:
             if recalculate_macros and base_lm:
                 yield Response("Recalculating recipe macros after substitution...")
-                for food_id in updated_recipes:
+                for food_id in recipes_needing_macro_recalc:
                     try:
                         async for result in calculate_recipe_macros_tool(
                             inputs={"recipe_id": str(food_id)},
@@ -577,6 +687,20 @@ async def substitute_tool(
             },
             payload_type="meal_plan",  # Use meal_plan for frontend detection
             display=True,
+        )
+
+        # Hint to decision agent: optimization task is done, avoid further tool calls unless user asks.
+        yield Result(
+            name="optimization_done",
+            objects=[{"message": "optimization_complete"}],
+            metadata={
+                "stop_calling_tool": True,
+                "end_conversation": False,  # allow summarize if user asks
+                "task_complete": True,
+                "plan_id": plan.get("plan_id"),
+            },
+            payload_type="generic",
+            display=False,
         )
 
         if macros_recalculated:

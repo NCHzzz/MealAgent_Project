@@ -534,8 +534,25 @@ def build_meal_agent_tree(
             "status": "Logging meal...",
         },
         "cooking": {
-            "instruction": "Provide step-by-step cooking instructions for selected recipes.",
-            "description": "Works with recipes from search or plan outputs.",
+            "instruction": (
+                "Provide step-by-step cooking instructions for selected recipes. "
+                "CRITICAL: Before calling cook_mode_tool, check if cook_mode_tool.completed "
+                "already exists for ALL recipes in the plan (or the requested food_id). "
+                "If ALL recipes are already completed, the task is ALREADY DONE - do NOT call "
+                "cook_mode_tool again. Instead, go to 'explain' branch to provide a final "
+                "summary, or END the conversation if no summary is needed. "
+                "After cook_mode_tool emits Result(name='task_complete') with "
+                "metadata.task_complete=True, stop_calling_tool=True, and end_conversation=True, "
+                "the user's cooking request is FULLY SATISFIED. "
+                "You MUST choose either: (1) go to 'explain' branch for final summary, or "
+                "(2) END the conversation. DO NOT return None or call cook_mode_tool again. "
+                "If cook_mode_tool has batch_processed=True or all_completed=True in metadata, "
+                "ALL dishes have been processed - immediately go to 'explain' branch or END. "
+                "Do NOT call cook_mode_tool multiple times for the same food_id. "
+                "Do NOT automatically call the explain branch after cooking unless task_complete "
+                "indicates completion; only do so if the user explicitly asks for a summary."
+            ),
+            "description": "Works with recipes from search or plan outputs. Cooking alone is usually enough to satisfy the request. Respect task_complete signals to avoid redundant calls. After completion, choose 'explain' branch or END conversation.",
             "status": "Cooking...",
         },
         "explain": {
@@ -543,6 +560,9 @@ def build_meal_agent_tree(
                 "Summarize decisions and provide rationale to the user. "
                 "After plan_day_e2e_tool completes, use cited_summarize to summarize the plan, then END the conversation. "
                 "Also use when user explicitly requests explanation, summary, or rationale. "
+                "Do NOT use this branch to re-list cooking steps when the user only asked "
+                "for 'công thức nấu ăn' or 'hướng dẫn nấu' – cook_mode_tool already "
+                "returns detailed instructions and a short summary. "
                 "CRITICAL: After summarizing a plan, END the conversation. "
                 "DO NOT call accept_plan_tool or log_meal_e2e_tool unless user explicitly accepts the plan."
             ),

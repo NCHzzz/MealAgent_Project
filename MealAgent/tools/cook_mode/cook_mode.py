@@ -9,14 +9,17 @@ Environment interface (per docs/ai/design/environment_keys.md):
 - Writes:
   - cook_mode_tool.steps: [{ food_id, dish_name, steps: [...] }]
   - cook_mode_tool.completed: [{ food_id, timestamp }]
+  - cook_mode_tool.final_summary: [{ title, text }]
 
 Decision hints:
-- If cook_mode_tool.steps is present, consider cooking guidance provided.
-- If cook_mode_tool.completed exists, treat request as fulfilled unless the user asks for follow-ups.
+- If `cook_mode_tool.steps` is present, consider cooking guidance provided.
+- If `cook_mode_tool.completed` exists for a given `food_id`, treat that dish
+  as fulfilled unless the user explicitly asks for follow-ups.
 """
 from typing import AsyncGenerator, Dict, Any, List
 import re
 import logging
+from datetime import datetime, timezone
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -192,29 +195,47 @@ def _find_recipe_from_environment(
             if food_id is None or str(r.get("food_id")) == str(food_id):
                 return _normalise_recipe_object(r) or r
 
+    # 4) Final fallback: handle special pseudo-recipes that don't exist in Recipe collection
+    #    e.g., default white rice that user added manually outside Recipe collection.
+    if food_id and str(food_id) in {"default_white_rice", "white_rice", "plain_white_rice"}:
+        # Minimal synthetic recipe so cooking steps are deterministic and reusable
+        return {
+            "food_id": str(food_id),
+            "dish_name": "Cơm Trắng",
+            "ingredients_with_qty": ["Gạo tẻ", "Nước"],
+        }
+
     return None
 
 
-@tool(end=False)
+@tool(end=True)
 async def cook_mode_tool(
     tree_data: TreeData,
     client_manager: ClientManager,
     food_id: str | None = None,
     base_lm=None,
     polish: bool = False,
+    stream_steps: bool = False,
     **kwargs,
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Produce step-by-step cooking guidance for a recipe and stream steps.
 
-    This tool delivers the full cooking workflow (steps + optional tips).
-    After it finishes, the explain branch (cited_summarize) should be invoked
-    to provide a natural-language recap with citations before ending.
+    This tool delivers the full cooking workflow (steps + optional tips) and is
+    self-contained for most user requests. The `steps` Result plus the
+    `final_summary` object are enough to satisfy "cho tôi công thức nấu ăn"
+    without needing any additional tools.
 
-    If cooking guidance has already been provided (cook_mode_tool.completed exists), this tool will skip execution.
+    Only call the `explain` branch (cited_summarize) if the user explicitly
+    asks for a higher-level recap or explanation after seeing the steps.
+
+    If cooking guidance has already been provided for a particular `food_id`
+    (recorded in `cook_mode_tool.completed`), this tool will skip execution for
+    that dish and re-emit the cached steps.
 
     Inputs:
-      - food_id: optional; if not provided, will use first available recipe from plan or search results.
+      - food_id: optional; if not provided, will use first available recipe from
+        plan or search results.
 
     Environment reads:
       - cook_mode_tool.completed (checks if already completed to avoid re-execution)
@@ -223,46 +244,100 @@ async def cook_mode_tool(
     Environment writes:
       - cook_mode_tool.steps: [{ food_id, dish_name, steps: [...] }]
       - cook_mode_tool.completed: [{ food_id, timestamp }] - **SIGNALS TASK COMPLETION**
-      - cook_mode_tool.final_summary: [{ title, text }] - signals cooking guidance is complete
-      - cook_mode_tool.next_action_hint: [{ suggested_action: "explain", reason: "summarize cooking result" }] - tells agent to run explain branch
+      - cook_mode_tool.final_summary: [{ title, text }] - human-readable recap of the dish
 
     Decision hints for LLM:
-      - If cook_mode_tool.completed exists, the cooking request is ALREADY FULFILLED.
-      - If cook_mode_tool.final_summary is present, cooking guidance is done; run explain branch for recap.
-      - If cook_mode_tool.next_action_hint suggests "explain", call the explain branch (cited_summarize) before ending.
-      - If cook_mode_tool.steps is present, cooking guidance has been provided successfully.
+      - **CRITICAL**: If `cook_mode_tool.completed` exists for ALL recipes in the plan 
+        (or the requested `food_id`), the cooking request is ALREADY FULFILLED. 
+        Do NOT call this tool again. The tool will emit `task_complete` with 
+        `stop_calling_tool=True` and `end_conversation=True` - RESPECT THIS SIGNAL 
+        and END the conversation immediately. Do NOT restart the tree or call any 
+        other tools. If you see `task_complete` with `batch_processed=True` or 
+        `all_completed=True`, ALL dishes have been processed - END immediately.
+      - If `cook_mode_tool.final_summary` is present, the user's cooking request has 
+        been fully satisfied. Do NOT call `explain` unless the user explicitly asks 
+        for a higher-level recap (e.g., "tóm tắt lại", "giải thích thêm").
+      - If `cook_mode_tool.steps` is present, step-by-step guidance has been provided 
+        and is visible in the UI. This is sufficient to satisfy "hướng dẫn nấu" requests.
+      - When this tool emits `Result(name="task_complete")` with `task_complete=True`, 
+        `stop_calling_tool=True`, and `end_conversation=True`, the task is COMPLETE. 
+        END the conversation branch immediately. Do NOT call any other tools or restart 
+        the tree. The user's request has been fully satisfied. If you see this signal,
+        you MUST choose the "explain" branch to provide a final summary, or END the 
+        conversation if no summary is needed.
     """
     logging.info("cook_mode_tool: start (food_id=%s)", food_id)
-    
-    # Early return if cooking has already been completed
-    completed_check = tree_data.environment.find("cook_mode_tool", "completed")
-    if completed_check and completed_check[0].get("objects"):
-        logging.info("cook_mode_tool: already completed; skipping re-execution")
-        yield Response("✅ Cooking instructions are already available. Task completed.")
-        # Re-emit steps if available for frontend display
+
+    # Early return if cooking for this specific food_id has already been completed.
+    # This helps avoid repeating guidance when the same dish (e.g., Cơm Trắng)
+    # appears multiple times in a plan.
+    try:
+        completed_check = tree_data.environment.find("cook_mode_tool", "completed")
+        completed_food_ids: set[str] = set()
+        if completed_check and completed_check[0].get("objects"):
+            for obj in completed_check[0]["objects"]:
+                fid = str(obj.get("food_id") or "").strip()
+                if fid:
+                    completed_food_ids.add(fid)
+    except Exception:
+        completed_food_ids = set()
+
+    if food_id is not None and str(food_id) in completed_food_ids:
+        logging.info(
+            "cook_mode_tool: food_id %s already completed; re-emitting cached steps",
+            food_id,
+        )
+        yield Response(
+            "✅ Cooking instructions are already available for this dish. Reusing existing steps."
+        )
+        # Re-emit cached steps for this specific food_id (or all if not found)
         try:
             steps_results = tree_data.environment.find("cook_mode_tool", "steps")
             if steps_results and steps_results[0].get("objects"):
-                steps_data = steps_results[0]["objects"][0]
-                steps = steps_data.get("steps", [])
-                # Re-emit steps for frontend display
-                yield Result(
-                    name="steps",
-                    objects=[steps_data],
-                    metadata={"steps_count": len(steps) if isinstance(steps, list) else 0, "tool": "cook_mode_tool"},
-                    payload_type="cooking_steps",
-                    display=True,
-                )
-        except Exception:
-            pass
-        # Emit clear completion signal to prevent further calls
+                all_steps_data = steps_results[0]["objects"]
+                matched = [
+                    s
+                    for s in all_steps_data
+                    if str(s.get("food_id") or "") == str(food_id)
+                ]
+                if not matched:
+                    matched = all_steps_data
+                for steps_data in matched:
+                    steps_list = steps_data.get("steps", [])
+                    yield Result(
+                        name="steps",
+                        objects=[steps_data],
+                        metadata={
+                            "steps_count": len(steps_list)
+                            if isinstance(steps_list, list)
+                            else 0,
+                            "tool": "cook_mode_tool",
+                        },
+                        payload_type="cooking_steps",
+                        display=True,
+                    )
+        except Exception as e:
+            logging.debug(
+                f"cook_mode_tool: failed to re-emit cached steps from environment: {e}"
+            )
+
+        # Add a clear Response message to signal completion
+        yield Response("✅ Hướng dẫn nấu ăn đã có sẵn. Đang hiển thị lại các bước đã lưu.")
+        
         yield Result(
             name="task_complete",
-            objects=[{"status": "completed", "message": "Cooking instructions have been provided."}],
+            objects=[
+                {
+                    "status": "completed",
+                    "message": "Cooking instructions have already been provided for this dish.",
+                }
+            ],
             metadata={
                 "task_complete": True,
                 "stop_calling_tool": True,
-                "suggested_action": "explain",
+                "should_explain": False,  # Explicitly signal NOT to call explain
+                "task_fully_complete": True,  # Strong signal that nothing more is needed
+                "end_conversation": True,  # Signal to end the conversation branch
             },
             payload_type="generic",
             display=False,
@@ -272,7 +347,248 @@ async def cook_mode_tool(
     # Stream initial message first for immediate feedback
     yield Response("🔪 Preparing step-by-step cooking instructions...")
 
-    recipe = _find_recipe_from_environment(tree_data, food_id, client_manager)
+    # BATCH PROCESSING: If food_id is None, check if we should process all recipes from plan
+    recipes_to_process: List[Dict[str, Any]] = []
+    
+    if food_id is None:
+        # Check if there's a plan with multiple recipes
+        plan_res = tree_data.environment.find("plan_day_e2e_tool", "plan")
+        if not plan_res:
+            plan_res = tree_data.environment.find("plan_week_e2e_tool", "plan")
+        
+        if plan_res and plan_res[0]["objects"]:
+            plan = plan_res[0]["objects"][0]
+            all_recipes = []
+            
+            # Collect all unique recipes from plan
+            if plan.get("plan_type") == "day":
+                for meal_data in plan.get("meals", {}).values():
+                    main_recipe = meal_data.get("recipe")
+                    if main_recipe:
+                        all_recipes.append(main_recipe)
+                    for acc in meal_data.get("accompaniments", []):
+                        acc_recipe = acc.get("recipe")
+                        if acc_recipe:
+                            all_recipes.append(acc_recipe)
+            elif plan.get("plan_type") == "week":
+                for day in plan.get("days", {}).values():
+                    for meal_data in day.get("meals", {}).values():
+                        main_recipe = meal_data.get("recipe")
+                        if main_recipe:
+                            all_recipes.append(main_recipe)
+                        for acc in meal_data.get("accompaniments", []):
+                            acc_recipe = acc.get("recipe")
+                            if acc_recipe:
+                                all_recipes.append(acc_recipe)
+            
+            # Filter out already completed recipes
+            for recipe_obj in all_recipes:
+                recipe_norm = _normalise_recipe_object(recipe_obj) or recipe_obj
+                if not isinstance(recipe_norm, dict):
+                    continue
+                
+                recipe_fid = str(recipe_norm.get("food_id") or "")
+                if recipe_fid and recipe_fid not in completed_food_ids:
+                    recipes_to_process.append(recipe_norm)
+            
+            # Early return: If all recipes in plan are already completed
+            if len(all_recipes) > 0 and len(recipes_to_process) == 0:
+                logging.info("cook_mode_tool: all recipes in plan already completed")
+                yield Response("✅ Tất cả các món trong kế hoạch đã được xử lý. Bạn có thể xem các bước chi tiết ở trên.")
+                yield Result(
+                    name="task_complete",
+                    objects=[{"status": "completed", "message": "All recipes in plan have already been processed."}],
+                    metadata={
+                        "task_complete": True,
+                        "stop_calling_tool": True,
+                        "should_explain": False,
+                        "task_fully_complete": True,
+                        "end_conversation": True,
+                        "all_completed": True,
+                    },
+                    payload_type="generic",
+                    display=False,
+                )
+                return
+    
+    # If we have multiple recipes to process, handle them all in batch
+    if len(recipes_to_process) > 1:
+        logging.info(f"cook_mode_tool: batch processing {len(recipes_to_process)} recipes from plan")
+        yield Response(f"📋 Đang xử lý {len(recipes_to_process)} món từ kế hoạch của bạn...")
+        
+        all_steps_payloads = []
+        processed_count = 0
+        
+        for recipe in recipes_to_process:
+            try:
+                recipe_fid = str(recipe.get("food_id") or "")
+                dish_name = str(recipe.get("dish_name") or "món ăn")
+                
+                # Extract steps
+                steps = _extract_steps_from_recipe(recipe)
+                if not steps:
+                    logging.warning(f"cook_mode_tool: no steps for {dish_name} (food_id={recipe_fid})")
+                    continue
+                
+                # Calculate times
+                total_time_seconds = sum(s.get("estimated_seconds", 0) for s in steps)
+                total_time_minutes = total_time_seconds // 60
+                
+                steps_payload = {
+                    "food_id": recipe_fid,
+                    "dish_name": dish_name,
+                    "steps": steps,
+                    "total_time_seconds": total_time_seconds,
+                    "total_time_minutes": total_time_minutes,
+                    "serving_size": recipe.get("serving_size", 1),
+                    "image_link": recipe.get("image_link"),
+                    "cooking_time": recipe.get("cooking_time"),
+                }
+                
+                # Emit Result for this dish immediately
+                yield Result(
+                    name="steps",
+                    objects=[steps_payload],
+                    metadata={
+                        "steps_count": len(steps),
+                        "tool": "cook_mode_tool",
+                        "total_time_seconds": total_time_seconds,
+                        "total_time_minutes": total_time_minutes,
+                        "dish_name": dish_name,
+                    },
+                    payload_type="cooking_steps",
+                    display=True,
+                )
+                
+                all_steps_payloads.append(steps_payload)
+                processed_count += 1
+                
+            except Exception as e:
+                logging.error(f"cook_mode_tool: error processing recipe {recipe.get('food_id')}: {e}")
+                continue
+        
+        # Persist all steps at once
+        if all_steps_payloads:
+            try:
+                tree_data.environment.add_objects(
+                    "cook_mode_tool",
+                    "steps",
+                    all_steps_payloads,
+                    metadata={
+                        "tool": "cook_mode_tool",
+                        "stored_at": datetime.now(timezone.utc).isoformat(),
+                        "batch_processed": True,
+                    },
+                )
+            except Exception as e:
+                logging.debug(f"cook_mode_tool: unable to persist batch steps: {e}")
+            
+            # Mark all as completed
+            completed_entries = [
+                {
+                    "food_id": str(payload.get("food_id") or ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                for payload in all_steps_payloads
+            ]
+            try:
+                tree_data.environment.add_objects(
+                    "cook_mode_tool",
+                    "completed",
+                    completed_entries,
+                    metadata={"status": "done", "batch_processed": True},
+                )
+            except Exception as e:
+                logging.debug(f"cook_mode_tool: unable to persist batch completed flags: {e}")
+        
+        # Final completion message
+        if processed_count > 0:
+            yield Response(f"✅ Đã hoàn tất hướng dẫn nấu ăn cho {processed_count} món. Bạn có thể xem các bước chi tiết ở trên.")
+            
+            yield Result(
+                name="task_complete",
+                objects=[{"status": "completed", "message": f"Cooking instructions for {processed_count} dishes have been provided."}],
+                metadata={
+                    "task_complete": True,
+                    "stop_calling_tool": True,
+                    "should_explain": False,
+                    "task_fully_complete": True,
+                    "end_conversation": True,
+                    "dishes_count": processed_count,
+                    "batch_processed": True,
+                },
+                payload_type="generic",
+                display=False,
+            )
+            
+            logging.info(f"cook_mode_tool: batch complete ({processed_count} dishes)")
+        else:
+            # No recipes were processed (all failed or empty)
+            yield Error("No recipes could be processed from the plan.")
+        
+        return
+    
+    # SINGLE RECIPE PROCESSING: Handle single recipe (either from food_id or first from plan)
+    recipe = None
+    if food_id:
+        # Try to find specific recipe
+        recipe = _find_recipe_from_environment(tree_data, food_id, client_manager)
+    elif recipes_to_process:
+        # Use first unprocessed recipe from plan
+        recipe = recipes_to_process[0]
+    else:
+        # Try to find recipe from environment
+        recipe = _find_recipe_from_environment(tree_data, food_id, client_manager)
+    
+    # If no recipe found and food_id is None, try to search from user_prompt
+    if not recipe and food_id is None:
+        user_prompt = getattr(tree_data, "user_prompt", "") or kwargs.get("query_text", "")
+        if user_prompt:
+            # Extract dish name from common Vietnamese cooking request patterns
+            patterns = [
+                r"hướng dẫn.*?nấu\s+(.+?)(?:\s|$)",
+                r"cách.*?nấu\s+(.+?)(?:\s|$)",
+                r"công thức.*?nấu\s+(.+?)(?:\s|$)",
+                r"nấu\s+(.+?)(?:\s|$)",
+            ]
+            dish_name = None
+            for pattern in patterns:
+                match = re.search(pattern, user_prompt, re.IGNORECASE)
+                if match:
+                    dish_name = match.group(1).strip()
+                    break
+            
+            if not dish_name:
+                # Fallback: remove common words
+                dish_name = re.sub(r"(hướng dẫn|cách|công thức|nấu|tôi|bạn|cho|giúp)", "", user_prompt, flags=re.IGNORECASE).strip()
+            
+            if dish_name and len(dish_name) > 2:
+                logging.info(f"cook_mode_tool: auto-searching for dish '{dish_name}' from user prompt")
+                yield Response(f"🔍 Đang tìm kiếm công thức '{dish_name}'...")
+                
+                # Search directly in Recipe collection using Weaviate
+                try:
+                    client = client_manager.get_client()
+                    recipe_collection = client.collections.get("Recipe")
+                    
+                    # Use BM25 search on dish_name field
+                    search_results = recipe_collection.query.bm25(
+                        query=dish_name,
+                        limit=5,
+                        return_metadata=["score"]
+                    )
+                    
+                    if search_results.objects and len(search_results.objects) > 0:
+                        # Use the first (best) result
+                        recipe = search_results.objects[0].properties
+                        food_id = str(recipe.get("food_id") or "")
+                        logging.info(f"cook_mode_tool: found recipe {food_id} for '{dish_name}'")
+                        yield Response(f"✅ Đã tìm thấy công thức '{recipe.get('dish_name', dish_name)}'")
+                    else:
+                        logging.warning(f"cook_mode_tool: no recipes found for '{dish_name}'")
+                except Exception as e:
+                    logging.error(f"cook_mode_tool: error during auto-search: {e}")
+    
     if not recipe:
         msg = "No recipe found. Please select a recipe from your meal plan or search results first."
         logging.warning("cook_mode_tool: %s", msg)
@@ -292,20 +608,20 @@ async def cook_mode_tool(
         return
     dish_name = str(recipe.get("dish_name") or "the dish")
 
-    # Stream steps FIRST for immediate user feedback, then emit Result objects
-    # This ensures frontend receives streaming text immediately
+    # Stream brief progress; per-step streaming is optional to avoid duplicate UI with cards
     total_time = sum(s.get("estimated_seconds", 0) for s in steps)
     total_minutes = total_time // 60
     yield Response(f"📋 Found {len(steps)} steps for {dish_name} (est. {total_minutes} min total)")
-    
-    for step in steps:
-        idx = step.get("index")
-        txt = step.get("instruction")
-        dur = step.get("estimated_seconds")
-        dur_min = dur // 60 if dur >= 60 else dur
-        dur_unit = "min" if dur >= 60 else "sec"
-        logging.debug("cook_mode_tool: step %s (%ss): %s", idx, dur, txt)
-        yield Response(f"Step {idx}: {txt} (~{dur_min} {dur_unit})")
+
+    if stream_steps:
+        for step in steps:
+            idx = step.get("index")
+            txt = step.get("instruction")
+            dur = step.get("estimated_seconds")
+            dur_min = dur // 60 if dur >= 60 else dur
+            dur_unit = "min" if dur >= 60 else "sec"
+            logging.debug("cook_mode_tool: step %s (%ss): %s", idx, dur, txt)
+            yield Response(f"Step {idx}: {txt} (~{dur_min} {dur_unit})")
     
     # Stream completion message
     yield Response(f"✅ Cooking instructions ready for {dish_name}!")
@@ -315,17 +631,22 @@ async def cook_mode_tool(
     # Calculate total cooking time for metadata
     total_time_seconds = sum(s.get("estimated_seconds", 0) for s in steps)
     total_time_minutes = total_time_seconds // 60
-    
+
+    steps_payload = {
+        "food_id": str(recipe.get("food_id") or ""),
+        "dish_name": str(recipe.get("dish_name") or ""),
+        "steps": steps,
+        "total_time_seconds": total_time_seconds,
+        "total_time_minutes": total_time_minutes,
+        "serving_size": recipe.get("serving_size", 1),
+        # Pass through useful recipe metadata for frontend (image, time)
+        "image_link": recipe.get("image_link"),
+        "cooking_time": recipe.get("cooking_time"),
+    }
+
     yield Result(
         name="steps",
-        objects=[{
-            "food_id": str(recipe.get("food_id") or ""), 
-            "dish_name": str(recipe.get("dish_name") or ""), 
-            "steps": steps,
-            "total_time_seconds": total_time_seconds,
-            "total_time_minutes": total_time_minutes,
-            "serving_size": recipe.get("serving_size", 1),
-        }],
+        objects=[steps_payload],
         metadata={
             "steps_count": len(steps),
             "tool": "cook_mode_tool",
@@ -336,78 +657,44 @@ async def cook_mode_tool(
         payload_type="cooking_steps",
         display=True,
     )
-    
-    # Optional polish with ElysiaChainOfThought for a brief intro/tips
-    # These are supplementary tips shown AFTER the main recipe component
-    if base_lm and polish:
-        try:
-            class CookIntroPrompt(dspy.Signature):
-                """
-                Create a short, friendly cooking intro and 3 quick tips based on the dish name and number of steps.
-                Keep it concise and practical, do not repeat step content.
-                """
-                dish_name = dspy.InputField(description="Dish name.")
-                num_steps = dspy.InputField(description="Number of steps.")
-                message_update = dspy.OutputField(description="One-sentence update about polishing the guidance.")
-                intro = dspy.OutputField(description="A 1-2 sentence intro with a positive tone.")
-                tips = dspy.OutputField(description="A short bulleted list (max 3 bullets).")
 
-            cot = ElysiaChainOfThought(
-                CookIntroPrompt,
-                tree_data=tree_data,
-                reasoning=False,
-                impossible=False,
-                message_update=True,
-                environment=False,
-                tasks_completed=False,
-            )
-            pred = await cot.aforward(
-                lm=base_lm,
-                dish_name=str(recipe.get("dish_name") or "your dish"),
-                num_steps=len(steps),
-            )
-            if getattr(pred, "message_update", None):
-                yield Response(str(pred.message_update))
-            intro_text = str(getattr(pred, "intro", "")).strip()
-            tips_text = str(getattr(pred, "tips", "")).strip()
-            if intro_text:
-                yield Response(intro_text)
-            if tips_text:
-                yield Response(tips_text)
-        except Exception as e:
-            logging.debug(f"cook_mode_tool: CoT polish skipped due to error: {str(e)}")
-    # Provide a concise document-style summary to help the decision agent conclude
-    # CRITICAL: These signals tell the decision agent that the task is COMPLETE
+    # Persist steps so they can be reused if the same dish is requested again.
+    try:
+        tree_data.environment.add_objects(
+            "cook_mode_tool",
+            "steps",
+            [steps_payload],
+            metadata={
+                "tool": "cook_mode_tool",
+                "stored_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as e:
+        logging.debug(f"cook_mode_tool: unable to persist steps payload: {e}")
+    
+    # Note: CoT-based "polish" (intro + tips) was disabled to reduce latency and token usage.
+    # If you want to re-enable it, wrap the ElysiaChainOfThought block here and gate it
+    # behind an explicit configuration flag instead of relying on `polish=True` from the LLM.
+    # Provide a concise document-style summary to help the decision agent conclude.
+    # This is intended to be the final recap for this dish; `explain` is optional.
     try:
         dish = dish_name
         steps_count = len(steps)
         yield Result(
             name="final_summary",
             objects=[{
-                "title": f"Cooking instructions for {dish}",
-                "text": f"Provided {steps_count} step-by-step instructions for {dish}. Run the explain branch for a brief recap before closing.",
+                "title": f"Cách nấu {dish}",
+                "text": (
+                    f"Đã cung cấp {steps_count} bước hướng dẫn nấu món {dish}. "
+                    "Thường không cần thêm tóm tắt; chỉ gọi nhánh 'explain' nếu "
+                    "người dùng yêu cầu giải thích hoặc mẹo bổ sung."
+                ),
             }],
             metadata={
-                "dish_name": dish, 
+                "dish_name": dish,
                 "steps_count": steps_count,
                 "task_complete": True,
-                "should_explain": True,
-            },
-            payload_type="generic",
-            display=False,  # Internal signal for decision agent only, not for user display
-        )
-        # Hint to decision agent: run explanation before ending
-        yield Result(
-            name="next_action_hint",
-            objects=[{
-                "suggested_action": "explain", 
-                "reason": "primary goal completed - provide a cited summary of the cooking steps",
-                "instruction": "Call the explain branch (cited_summarize) to summarize the dish, then decide whether to end.",
-            }],
-            metadata={
-                "suggested_action": "explain",
-                "task_complete": True,
-                "should_explain": True,
+                "should_explain": False,
             },
             payload_type="generic",
             display=False,  # Internal signal for decision agent only, not for user display
@@ -416,24 +703,33 @@ async def cook_mode_tool(
         pass
     # Mark cooking session complete for decision agent awareness
     try:
-        from datetime import datetime
         tree_data.environment.add_objects(
             "cook_mode_tool",
             "completed",
-            [{"food_id": str(recipe.get("food_id") or ""), "timestamp": datetime.now(datetime.timezone.utc).isoformat()}],
+            [
+                {
+                    "food_id": str(recipe.get("food_id") or ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
             metadata={"status": "done"},
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"cook_mode_tool: unable to persist completed flag: {e}")
     
     # Emit final completion signal to prevent further tool calls
+    # Add a clear Response message first to signal completion
+    yield Response(f"✅ Hướng dẫn nấu {dish_name} đã hoàn tất. Bạn có thể xem các bước chi tiết ở trên.")
+    
     yield Result(
         name="task_complete",
         objects=[{"status": "completed", "message": f"Cooking instructions for {dish_name} have been provided."}],
         metadata={
             "task_complete": True,
             "stop_calling_tool": True,
-            "suggested_action": "explain",
+            "should_explain": False,  # Explicitly signal NOT to call explain
+            "task_fully_complete": True,  # Strong signal that nothing more is needed
+            "end_conversation": True,  # Signal to end the conversation branch
             "dish_name": dish_name,
             "steps_count": len(steps),
         },
