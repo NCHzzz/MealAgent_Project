@@ -1005,7 +1005,7 @@ async def plan_day_e2e_tool(
                 constraint_msg += f" (excluding: {', '.join(allergens)})"
             yield Response(constraint_msg)
         else:
-            yield Response("ℹ️ No dietary constraints specified")
+            pass
 
         # Prepare constraints for LLM draft
         constraints_dict = {
@@ -1082,7 +1082,7 @@ async def plan_day_e2e_tool(
                 if llm_draft:
                     yield Response("✅ AI suggestions ready. Mapping to recipes...")
                 else:
-                    yield Response("ℹ️ Using rule-based selection (AI suggestions unavailable)")
+                    logging.debug("plan_day_e2e_tool: using rule-based selection (AI suggestions unavailable)")
             except Exception as e:
                 logging.warning(f"plan_day_e2e_tool: LLM draft failed: {e}")
                 llm_draft = None
@@ -1130,8 +1130,8 @@ async def plan_day_e2e_tool(
                 client_manager=client_manager,
                 query_text=search_query,
                 collection_name=collection_name,
-                limit=1000,  # Maximum allowed by search_and_rank_tool (increased from 100 to 1000 for maximum variety)
-                top_k=1000,  # Top 1000 for planning (increased from 50 to 1000, max allowed by Weaviate)
+                limit=300,
+                top_k=300,
                 **kwargs,
             ):
                 if isinstance(result, Error):
@@ -1696,6 +1696,7 @@ async def plan_day_e2e_tool(
             breakfast = select_meal_by_strategy(
                 recipes, breakfast_strategy, 
                 used_recipe_ids=recent_recipe_ids_set | used_today_ids,
+                used_recipe_names=used_today_names,
                 preferred_meal_type="breakfast",
                 dish_category="breakfast",
                 target_macros=breakfast_targets,
@@ -1736,6 +1737,7 @@ async def plan_day_e2e_tool(
             breakfast = select_meal_by_strategy(
                 recipes, breakfast_strategy, 
                 used_recipe_ids=recent_recipe_ids_set | used_today_ids,
+                used_recipe_names=used_today_names,
                 preferred_meal_type="breakfast",
                 dish_category="breakfast",  # CRITICAL: Ensure only breakfast dishes are selected
                 target_macros=breakfast_targets,
@@ -2289,6 +2291,7 @@ async def plan_day_e2e_tool(
                             effective_meal_max_kcal,  # Allow more kcal to meet nutrition targets
                             macro_tolerance_percent,
                             total_consumed_so_far=total_consumed_so_far,  # CRITICAL: Pass total consumed for accurate excess detection
+                            used_recipe_names=used_today_names,
                         )
                         # Filter out invalid/empty supplementary entries (avoid 'Unknown' zero-macro dishes)
                         # CRITICAL: accept both formats: direct recipe objects OR {"recipe": ...} format
@@ -2581,6 +2584,7 @@ async def plan_day_e2e_tool(
                 recipes, "highest_protein", 
                 exclude=excluded, 
                 used_recipe_ids=recent_recipe_ids_set | used_today_ids,
+                used_recipe_names=used_today_names,
                 preferred_meal_type="lunch", 
                 dish_category="main",  # CRITICAL: Specify category to ensure correct selection
                 target_macros=targets,
@@ -2967,6 +2971,7 @@ async def plan_day_e2e_tool(
                                 effective_meal_max_kcal,
                                 macro_tolerance_percent,
                                 total_consumed_so_far=total_consumed_so_far,
+                                used_recipe_names=used_today_names,
                             )
                             # Filter out invalid/empty supplementary entries (avoid 'Unknown' zero-macro dishes)
                             # CRITICAL: accept both formats: direct recipe objects OR {"recipe": ...} format
@@ -3298,6 +3303,7 @@ async def plan_day_e2e_tool(
                 recipes, "highest_protein", 
                 exclude=excluded, 
                 used_recipe_ids=recent_recipe_ids_set | used_today_ids,
+                used_recipe_names=used_today_names,
                 preferred_meal_type="dinner", 
                 dish_category="main",  # CRITICAL: Specify category to ensure correct selection
                 target_macros=targets,
@@ -4375,6 +4381,22 @@ async def plan_day_e2e_tool(
         # Environment may store plan_id for support, but tools must load from Weaviate
         # The plan will be displayed on UI immediately (display=True) so user can review before accepting
         # CRITICAL: Result is automatically saved to environment as "plan_day_e2e_tool.plan" for variety filter
+        # Short summary for user (replace separate cited_summarize step)
+        bf_name = breakfast.get("dish_name", "Unknown") if breakfast else "None"
+        lunch_items = [lunch_rice.get("dish_name", "Unknown") if lunch_rice else "None"]
+        for acc in plan.get("lunch", {}).get("accompaniments", []):
+            acc_name = acc.get("recipe", {}).get("dish_name", "Unknown")
+            if acc_name not in lunch_items:
+                lunch_items.append(acc_name)
+        dinner_items = [dinner_rice.get("dish_name", "Unknown") if dinner_rice else "None"]
+        for acc in plan.get("dinner", {}).get("accompaniments", []):
+            acc_name = acc.get("recipe", {}).get("dish_name", "Unknown")
+            if acc_name not in dinner_items:
+                dinner_items.append(acc_name)
+        yield Response(
+            f"📋 Tóm tắt nhanh: 🌅 {bf_name} | 🍽️ {', '.join(lunch_items)} | 🌙 {', '.join(dinner_items)}"
+        )
+
         yield Result(
             name="plan",
             objects=[plan_output],
@@ -4386,63 +4408,19 @@ async def plan_day_e2e_tool(
                 "constraint_violations": len(validation.get("constraint_validation", {}).get("violations", [])),
                 "plan_id": plan_output.get("plan_id"),
                 "user_id": user_id,
-                "can_accept": True,  # Flag to indicate plan can be accepted
+                "can_accept": True,
+                "stop_calling_tool": True,
+                "end_conversation": True,
             },
             payload_type="meal_plan",
-            display=True,  # Display on UI immediately for user review
+            display=True,
         )
-        
-        # Plan is ready - suggest agent to explain/summarize and then END
-        # NOTE: This does NOT automatically log to MealLogEntry - user must accept first
-        yield Response("👍 Kế hoạch đã sẵn sàng.")
+
+        yield Response("👍 Kế hoạch đã sẵn sàng. Bạn có thể bấm Accept hoặc điều chỉnh.")
         
         logging.info(
-            "plan_day_e2e_tool: PLAN_READY | plan_id=%s | "
-            "NOTE: Plan saved to MealPlan/MealPlanItem. Next: explain/summarize then END. MealLogEntry created only after user accepts.",
+            "plan_day_e2e_tool: PLAN_READY | plan_id=%s | plan summarised inline (no cited_summarize).",
             plan_output.get("plan_id"),
-        )
-        
-        # Hint for agent: After creating plan, go to explain branch to summarize, then END
-        # DO NOT automatically call accept_plan_tool or log_meal_e2e_tool. Only call when:
-        # 1. User explicitly accepts via UI (use accept_plan_tool)
-        # 2. User says they accept in chat (call log_meal_e2e_tool with user_accepted=True)
-        # 3. User says they ate something (call log_meal_e2e_tool with meal_description)
-        yield Result(
-            name="next_action_hint",
-            objects=[
-                {
-                    "suggested_action": "explain_and_end",
-                    "next_step": "Go to explain branch to summarize the plan using cited_summarize, then END the conversation.",
-                    "action_tool": "cited_summarize",  # Use this to explain the plan
-                    "action_params": {
-                        "plan_id": plan_output.get("plan_id"),
-                        "user_id": user_id,
-                    },
-                    "reason": "Plan ready. Next: explain/summarize the plan, then END. DO NOT automatically log to MealLogEntry.",
-                    "plan_id": plan_output.get("plan_id"),
-                    "user_id": user_id,
-                    "requires_user_acceptance": True,  # CRITICAL: Flag to prevent auto-logging to MealLogEntry
-                    "note": "CRITICAL: This plan is saved to MealPlan/MealPlanItem. "
-                            "After explaining, END the conversation. "
-                            "MealLogEntry is created ONLY when: "
-                            "1) User accepts via UI (use accept_plan_tool), "
-                            "2) User says they accept in chat (call log_meal_e2e_tool with user_accepted=True), "
-                            "3) User says they ate something (call log_meal_e2e_tool with meal_description). "
-                            "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after creating plan.",
-                }
-            ],
-            metadata={
-                "suggested_action": "explain_and_end",
-                "next_step": "Go to explain branch, use cited_summarize to summarize the plan, then END",
-                "task_complete": False,  # Will be complete after explain
-                "plan_id": plan_output.get("plan_id"),
-                "requires_user_acceptance": True,  # CRITICAL: Agent MUST wait for user to accept before logging to MealLogEntry
-                "storage_type": "MealPlan",  # Current storage type (suggested plan, not consumed meal)
-                "plan_available_in_env": True,  # Plan is available in environment as "plan_day_e2e_tool.plan"
-                "do_not_auto_log": True,  # Explicit flag: DO NOT automatically log to MealLogEntry
-            },
-            payload_type="generic",
-            display=False,
         )
         
         # Store plan_id in environment for support (quick reference, not source of truth)

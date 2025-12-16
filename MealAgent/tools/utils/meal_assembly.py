@@ -57,6 +57,7 @@ def add_supplementary_dishes(
     meal_max_kcal: float,
     macro_tolerance: float = 0.15,
     total_consumed_so_far: Optional[Dict[str, float]] = None,
+    used_recipe_names: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Add supplementary dishes to meet nutrition targets if still deficient.
@@ -126,6 +127,9 @@ def add_supplementary_dishes(
         has_kcal_excess = False
         fat_excess_amount = abs(fat_needed) if has_fat_excess else 0.0
         carb_excess_amount = abs(carb_needed) if has_carb_excess else 0.0
+
+    # Normalize used_recipe_names for variety checks
+    used_recipe_names = {str(n).lower().strip() for n in (used_recipe_names or set())}
     
     # Calculate deficit ratios - use lower thresholds to add more dishes
     protein_deficit_ratio = protein_needed / daily_protein if daily_protein > 0 else 0.0
@@ -151,6 +155,14 @@ def add_supplementary_dishes(
     max_additional_dishes = 1
     dishes_added = 0
 
+    # Nếu đã dư fat >10% so với mục tiêu ngày, dừng bổ sung cho bữa này
+    if has_fat_excess and fat_excess_ratio > 0.10:
+        logger.warning(
+            f"ADD_SUPP_STOP_FAT: fat_excess={fat_excess_ratio*100:.1f}% >10%, "
+            "skip supplementary for this meal to avoid over-fat"
+        )
+        return additional_dishes
+    
     # CRITICAL: Add dishes if we're below targets - but STRICTLY control excess
     # Priority: protein first, then kcal, but STOP if we exceed targets
     # Tighter cap to avoid runaway additions/repeated mains
@@ -424,6 +436,9 @@ def add_supplementary_dishes(
                         # Penalize if recipe ID was used recently (already excluded, but add extra penalty)
                         if recipe_id in recent_recipe_ids_set:
                             diversity_penalty += 50.0  # Heavy penalty for recently used IDs
+                        # Penalize if dish name was already used today (cross-meal variety)
+                        if dish_name_lower and dish_name_lower in used_recipe_names:
+                            diversity_penalty += 40.0
                         
                         # CRITICAL: Automatically detect similar dish names in current meal/session
                         # Check if any dish in current_dishes or excluded has a similar name

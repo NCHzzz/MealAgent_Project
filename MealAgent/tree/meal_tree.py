@@ -457,9 +457,9 @@ def build_meal_agent_tree(
                 "- Pantry/shopping inventory → pantry branch. "
                 "- Cooking steps/how to make → cooking branch. "
                 "- Meal logging ('vừa ăn', 'log', 'ghi lại bữa') → logging branch. "
-                "- After plan_day_e2e_tool completes → go to explain branch to summarize using cited_summarize, then END. "
+                "- After plan_day_e2e_tool completes it already streams a summary and sets stop_calling_tool/end_conversation. "
+                "DO NOT call explain or cited_summarize unless the user explicitly asks for a recap. "
                 "- Explicit requests for explanations/summary → explain branch. "
-                "CRITICAL: After plan_day_e2e_tool completes, go to explain branch to summarize, then END. "
                 "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after planning. "
                 "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts (via UI button or chat message). "
                 "CRITICAL: After accept_plan_tool completes successfully, the task is COMPLETE. "
@@ -495,14 +495,15 @@ def build_meal_agent_tree(
                 "Only choose this when the user explicitly requests a 'thực đơn/kế hoạch' cho ngày/tuần "
                 "or asks for a comprehensive plan refresh. "
                 "If the user only needs to add calories/snacks or tweak a current plan, DO NOT use this branch—go to optimization. "
-                "CRITICAL: After plan_day_e2e_tool completes successfully, go to explain branch to summarize the plan using cited_summarize, then END the conversation. "
+                "CRITICAL: plan_day_e2e_tool now streams its own short summary and sets stop_calling_tool/end_conversation. "
+                "After it emits Result(name='plan') with stop_calling_tool=True, DO NOT call explain or cited_summarize unless the user explicitly asks for a recap. "
                 "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool. "
                 "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts the plan (via UI button or chat message)."
             ),
             "description": (
                 "Runs plan_day_e2e_tool / plan_week_e2e_tool to build a fresh plan using profile, targets, constraints, and ranked recipes. "
                 "Requires full planning workflow and typically yields `plan_day_e2e_tool.plan` objects. "
-                "After planning completes, go to explain branch to summarize, then END."
+                "Planning tool already summarizes; avoid extra summarize/explain unless user asks."
             ),
             "status": "Planning meals...",
         },
@@ -539,18 +540,16 @@ def build_meal_agent_tree(
                 "CRITICAL: Before calling cook_mode_tool, check if cook_mode_tool.completed "
                 "already exists for ALL recipes in the plan (or the requested food_id). "
                 "If ALL recipes are already completed, the task is ALREADY DONE - do NOT call "
-                "cook_mode_tool again. Instead, go to 'explain' branch to provide a final "
-                "summary, or END the conversation if no summary is needed. "
+                "cook_mode_tool again. If the user asks for a recap, you may go to 'explain'; "
+                "otherwise END the conversation. "
                 "After cook_mode_tool emits Result(name='task_complete') with "
                 "metadata.task_complete=True, stop_calling_tool=True, and end_conversation=True, "
                 "the user's cooking request is FULLY SATISFIED. "
-                "You MUST choose either: (1) go to 'explain' branch for final summary, or "
-                "(2) END the conversation. DO NOT return None or call cook_mode_tool again. "
+                "You MUST either END the conversation or only go to 'explain' if the user explicitly asks. "
                 "If cook_mode_tool has batch_processed=True or all_completed=True in metadata, "
-                "ALL dishes have been processed - immediately go to 'explain' branch or END. "
+                "ALL dishes have been processed - END unless the user requests a summary. "
                 "Do NOT call cook_mode_tool multiple times for the same food_id. "
-                "Do NOT automatically call the explain branch after cooking unless task_complete "
-                "indicates completion; only do so if the user explicitly asks for a summary."
+                "Do NOT automatically call the explain branch after cooking; only do so if the user explicitly asks."
             ),
             "description": "Works with recipes from search or plan outputs. Cooking alone is usually enough to satisfy the request. Respect task_complete signals to avoid redundant calls. After completion, choose 'explain' branch or END conversation.",
             "status": "Cooking...",
@@ -558,15 +557,15 @@ def build_meal_agent_tree(
         "explain": {
             "instruction": (
                 "Summarize decisions and provide rationale to the user. "
-                "After plan_day_e2e_tool completes, use cited_summarize to summarize the plan, then END the conversation. "
-                "Also use when user explicitly requests explanation, summary, or rationale. "
+                "Use only when the user explicitly requests explanation/summary/rationale, or when prior tool metadata lacked stop_calling_tool/end_conversation. "
+                "Do NOT auto-summarize plan_day_e2e_tool outputs; it already streams a summary and sets stop_calling_tool/end_conversation. "
                 "Do NOT use this branch to re-list cooking steps when the user only asked "
                 "for 'công thức nấu ăn' or 'hướng dẫn nấu' – cook_mode_tool already "
                 "returns detailed instructions and a short summary. "
-                "CRITICAL: After summarizing a plan, END the conversation. "
+                "CRITICAL: After summarizing, END the conversation. "
                 "DO NOT call accept_plan_tool or log_meal_e2e_tool unless user explicitly accepts the plan."
             ),
-            "description": "Use cited_summarize to explain plans after planning, or when user requests explanation. After explaining, END.",
+            "description": "Use cited_summarize only when user asks for explanation/summary. Planning tool already summarizes inline.",
             "status": "Summarizing...",
         },
     }

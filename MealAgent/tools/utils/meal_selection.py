@@ -466,6 +466,7 @@ def select_meal_by_strategy(
     strategy: str,
     exclude: List[Dict[str, Any]] | None = None,
     used_recipe_ids: set[str] | None = None,
+    used_recipe_names: set[str] | None = None,
     preferred_meal_type: str | None = None,
     dish_category: str | None = None,
     target_macros: Dict[str, float] | None = None,
@@ -501,8 +502,25 @@ def select_meal_by_strategy(
     if used_recipe_ids:
         exclude_ids.update(str(rid) for rid in used_recipe_ids)
     
+    # Build exclude name set (lowercased) for variety across meals
+    exclude_names = {str(r.get("dish_name", "")).lower().strip() for r in (exclude or []) if r.get("dish_name")}
+    if used_recipe_names:
+        exclude_names.update(str(n).lower().strip() for n in used_recipe_names)
+    # Always allow white rice staples
+    exclude_names.discard("cơm trắng")
+    exclude_names.discard("com trang")
+    exclude_names.discard("white rice")
+    
     # Filter by exclude IDs
-    candidates = [r for r in recipes if str(r.get("food_id", "")) not in exclude_ids]
+    candidates = []
+    for r in recipes:
+        rid = str(r.get("food_id", "") or "")
+        name_lower = str(r.get("dish_name", "")).lower().strip()
+        if rid in exclude_ids:
+            continue
+        if name_lower and name_lower in exclude_names:
+            continue
+        candidates.append(r)
     
     # Filter by macro requirements
     candidates = filter_by_macro_requirements(
