@@ -682,14 +682,17 @@ def build_meal_agent_tree(
     add_tool("cooking", "cook_mode_tool")
     
     # explain branch: Register Elysia's built-in explanation tools
-    # - cited_summarize: explanations with citations, only available when environment is non-empty
-    # - text_response: fallback so the branch always has at least one available tool
+    # NOTE (performance): cited_summarize can be quite slow/expensive for large plans (e.g. weekly plans
+    # with 21 meals). Since MealAgent tools (plan_day_e2e_tool / plan_week_e2e_tool) already stream
+    # their own human‑readable explanations and summaries, we only register the lightweight
+    # FakeTextResponse here to avoid an extra heavy LLM summarize step.
+    #
+    # If you ever want the old behaviour back (full cited_summarize), add CitedSummarizer() again.
     try:
         if "explain" in tree.decision_nodes:
-            tree.add_tool(CitedSummarizer(), branch_id="explain")
             tree.add_tool(FakeTextResponse(), branch_id="explain")
             logging.debug(
-                "MealAgent: successfully added cited_summarize and text_response tools to 'explain' branch"
+                "MealAgent: successfully added lightweight text_response tool to 'explain' branch (cited_summarize disabled for speed)"
             )
         else:
             logging.warning(

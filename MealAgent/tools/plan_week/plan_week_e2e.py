@@ -44,6 +44,13 @@ from MealAgent.tools.utils.llm_draft import generate_llm_draft
 from MealAgent.schemas.llm_draft import LLMDraftResponse
 
 
+logger = logging.getLogger(__name__)
+
+# Toggle for very verbose LLM suggestion mapping logs.
+# Default False to avoid log spam; set to True only when deep-debugging mapping behavior.
+LLM_SUGGESTION_DEBUG_VERBOSE = False
+
+
 def _record_missing_macro_state(tree_data: TreeData, recipe_ids: List[str]) -> None:
     try:
         tree_data.environment.add_objects(
@@ -363,9 +370,38 @@ async def plan_week_e2e_tool(
         targets: Dict[str, Any] | None = None
         
         # Step 2: Read constraints filters (for validation)
+        # Align behaviour with plan_day_e2e_tool:
+        # - Ensure constraints_guard_tool is invoked if no filters exist yet
+        # - Then read and strip device-related filters for validation only
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
         filters_metadata: Dict[str, Any] | None = None
-        if filters_results and filters_results[0]["objects"]:
+
+        try:
+            if not filters_results or not filters_results[0].get("objects"):
+                # Lazily initialize constraints if they have not been set up in this session
+                from MealAgent.tools.constraints.constraints_guard import constraints_guard_tool
+
+                async for result in constraints_guard_tool(
+                    tree_data=tree_data,
+                    inputs={},
+                    base_lm=base_lm,
+                    complex_lm=None,
+                    client_manager=client_manager,
+                    **kwargs,
+                ):
+                    if isinstance(result, Error):
+                        error_msg = str(result) if hasattr(result, "__str__") else "Unknown error"
+                        logging.warning(
+                            "plan_week_e2e_tool: constraints_guard_tool failed: %s",
+                            error_msg,
+                        )
+                        break
+                # Re-read after constraints_guard_tool
+                filters_results = tree_data.environment.find("constraints_guard_tool", "filters")
+        except Exception as cg_exc:
+            logging.debug("plan_week_e2e_tool: constraints_guard_tool invocation failed: %s", cg_exc)
+
+        if filters_results and filters_results[0].get("objects"):
             _strip_device_filters(filters_results)
             filters_metadata = filters_results[0].get("metadata") or {}
             diet_types = filters_metadata.get("diet_types", [])
@@ -513,18 +549,21 @@ async def plan_week_e2e_tool(
                                 if dish_name:
                                     recent_recipe_names.add(str(dish_name).lower().strip())
                 
-                # Also get meal history recipe IDs (last 30 days)
+                # Also get meal history recipe IDs (last 30 days) from MealLogEntry,
+                # consistent with plan_day_e2e_tool (consumed meals, not just suggested plans)
                 meal_history_date = ensure_rfc3339_datetime(
                     datetime.now(timezone.utc) - timedelta(days=30)
                 )
-                meal_filter = build_filters_from_where({
-                    "operator": "And",
-                    "operands": [
-                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                        {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": meal_history_date}
-                    ]
-                })
-                
+                meal_filter = build_filters_from_where(
+                    {
+                        "operator": "And",
+                        "operands": [
+                            {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                            {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": meal_history_date},
+                        ],
+                    }
+                )
+
                 meal_logs = meal_log_collection.query.fetch_objects(filters=meal_filter, limit=100)
                 for log_obj in meal_logs.objects:
                     recipe_id = log_obj.properties.get("recipe_id")
@@ -582,17 +621,38 @@ async def plan_week_e2e_tool(
             # Continue with all recipes if check fails
         
         if len(recipes) < 7:
-            yield Response(f"⚠️ Warning: Only {len(recipes)} recipes available. Some recipes will be reused for 21 meals.")
+            yield Response(
+                f"⚠️ Warning: Only {len(recipes)} recipes available. Some recipes will be reused for 21 meals."
+            )
         
-        # Refresh recipes from Weaviate to ensure we have latest macros
-        # Recipes should already have macros pre-calculated in the database
-        try:
-            client = client_manager.get_client()
-            recipes = refresh_recipes(recipes, client, collection_name="Recipe", hydrate_fields=True)
-            logging.debug(f"Refreshed {len(recipes)} recipes from Weaviate (hydrate macros + fields)")
-        except Exception as refresh_exc:
-            logging.debug(f"Failed to refresh recipes from Weaviate: {refresh_exc}")
-            # Continue with existing recipes if refresh fails
+        # Refresh recipes from Weaviate to ensure we have latest macros.
+        # To avoid excessive logging from refresh_recipes (one log per recipe),
+        # only refresh when there are actually recipes missing macros, similar to plan_day_e2e_tool.
+        def _count_missing_macros(items: list[Dict[str, Any]]) -> int:
+            return sum(
+                1
+                for r in items
+                if not r.get("macros_per_serving")
+                or not isinstance(r.get("macros_per_serving"), dict)
+                or not r.get("macros_per_serving", {}).get("kcal")
+            )
+
+        missing_before_refresh = _count_missing_macros(recipes)
+        if missing_before_refresh > 0:
+            try:
+                client = client_manager.get_client()
+                recipes = refresh_recipes(recipes, client, collection_name="Recipe", hydrate_fields=True)
+                missing_after_refresh = _count_missing_macros(recipes)
+                logging.debug(
+                    "plan_week_e2e_tool: refresh_recipes done | missing_before=%d missing_after=%d",
+                    missing_before_refresh,
+                    missing_after_refresh,
+                )
+            except Exception as refresh_exc:
+                logging.debug(
+                    "plan_week_e2e_tool: refresh_recipes failed, continue without refresh: %s",
+                    refresh_exc,
+                )
 
         # Shuffle a few times to avoid clustered selections and improve variety
         for _ in range(3):
@@ -680,18 +740,21 @@ async def plan_week_e2e_tool(
                 meal_history_dish_names = []
                 try:
                     client = client_manager.get_client()
-                    meal_log_collection = client.collections.get("MealLog")
+                    # Use MealLogEntry for CONSUMED meals, aligned with plan_day_e2e_tool
+                    meal_log_collection = client.collections.get("MealLogEntry")
                     if user_id:
                         meal_history_date = ensure_rfc3339_datetime(
                             datetime.now(timezone.utc) - timedelta(days=30)
                         )
-                        meal_filter = build_filters_from_where({
-                            "operator": "And",
-                            "operands": [
-                                {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                                {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": meal_history_date}
-                            ]
-                        })
+                        meal_filter = build_filters_from_where(
+                            {
+                                "operator": "And",
+                                "operands": [
+                                    {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                                    {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": meal_history_date},
+                                ],
+                            }
+                        )
                         meal_logs = meal_log_collection.query.fetch_objects(filters=meal_filter, limit=50)
                         for log_obj in meal_logs.objects:
                             dish_name = log_obj.properties.get("dish_name")
@@ -818,9 +881,9 @@ async def plan_week_e2e_tool(
             all_recipes: List[Dict[str, Any]] | None,
             used_ids: set[str],
             used_breakfast_ids: set[str] | None,
-            used_names: set[str],
-            min_kcal: float,
-            max_kcal: float,
+            used_names: set[str] | None = None,
+            min_kcal: float = 0.0,
+            max_kcal: float = float("inf"),
             min_protein: float = 0.0,
             prefer_unused: bool = True,
         ) -> Dict[str, Any] | None:
@@ -829,6 +892,9 @@ async def plan_week_e2e_tool(
             Prioritizes unused breakfasts if prefer_unused=True.
             Returns best breakfast found (highest protein) or None.
             """
+            # Fallback to empty set when caller does not provide used_names
+            used_names = used_names or set()
+
             search_pools = [recipes_pool]
             if all_recipes:
                 search_pools.append(all_recipes)
@@ -1162,7 +1228,11 @@ async def plan_week_e2e_tool(
             category = suggestion.get("category", "").lower().strip()
             
             if not dish_name:
-                logging.debug(f"_map_llm_suggestion_to_recipe: Empty dish_name in suggestion: {suggestion}")
+                if LLM_SUGGESTION_DEBUG_VERBOSE:
+                    logging.debug(
+                        "_map_llm_suggestion_to_recipe: Empty dish_name in suggestion: %s",
+                        suggestion,
+                    )
                 return None
             
             # Extract keywords from dish_name (remove common words)
@@ -1273,23 +1343,43 @@ async def plan_week_e2e_tool(
                 # 5. Multiple criteria combined (score >= 60)
                 # This prevents matches based ONLY on role/category (30 points)
                 
-                if (has_exact_match or has_substring_match or 
-                    (has_keyword_match and best_score >= 50.0) or
-                    (has_general_term_match and best_score >= 80.0) or
-                    best_score >= 60.0):
-                    logging.debug(
-                        f"_map_llm_suggestion_to_recipe: Matched '{dish_name}' -> '{best_recipe.get('dish_name', 'Unknown')}' "
-                        f"(score: {best_score:.1f}, role: {role}, exact: {has_exact_match}, "
-                        f"substring: {has_substring_match}, keyword: {has_keyword_match}, general: {has_general_term_match})"
-                    )
+                if (
+                    has_exact_match
+                    or has_substring_match
+                    or (has_keyword_match and best_score >= 50.0)
+                    or (has_general_term_match and best_score >= 80.0)
+                    or best_score >= 60.0
+                ):
+                    if LLM_SUGGESTION_DEBUG_VERBOSE:
+                        logging.debug(
+                            "_map_llm_suggestion_to_recipe: Matched '%s' -> '%s' "
+                            "(score: %.1f, role: %s, exact: %s, substring: %s, "
+                            "keyword: %s, general: %s)",
+                            dish_name,
+                            best_recipe.get("dish_name", "Unknown"),
+                            best_score,
+                            role,
+                            has_exact_match,
+                            has_substring_match,
+                            has_keyword_match,
+                            has_general_term_match,
+                        )
                     return best_recipe
                 else:
-                    logging.debug(
-                        f"_map_llm_suggestion_to_recipe: No good match for '{dish_name}' "
-                        f"(best score: {best_score:.1f} - only role/category match, insufficient)"
-                    )
+                    if LLM_SUGGESTION_DEBUG_VERBOSE:
+                        logging.debug(
+                            "_map_llm_suggestion_to_recipe: No good match for '%s' "
+                            "(best score: %.1f - only role/category match, insufficient)",
+                            dish_name,
+                            best_score,
+                        )
             
-            logging.debug(f"_map_llm_suggestion_to_recipe: No match found for '{dish_name}' (role: {role})")
+            if LLM_SUGGESTION_DEBUG_VERBOSE:
+                logging.debug(
+                    "_map_llm_suggestion_to_recipe: No match found for '%s' (role: %s)",
+                    dish_name,
+                    role,
+                )
             return None
 
         def _select_carb_with_validation(
@@ -1897,6 +1987,67 @@ async def plan_week_e2e_tool(
                     len(accompaniments) - len(trimmed),
                 )
             accompaniments[:] = trimmed
+
+        def _is_rice_recipe(recipe: Dict[str, Any] | None) -> bool:
+            """
+            Lightweight rice detector for weekly planning.
+            Treats both real rice dishes and default white rice as 'rice'.
+            """
+            if not recipe:
+                return False
+            food_id = str(recipe.get("food_id", "") or "")
+            dish_name = str(recipe.get("dish_name", "") or "").lower()
+            if food_id == "default_white_rice":
+                return True
+            if "cơm trắng" in dish_name or "com trang" in dish_name or "white rice" in dish_name:
+                return True
+            # Fallback: use existing classifier if available on recipe
+            return bool(str(recipe.get("dish_type", "")).lower() == "rice")
+
+        def _normalize_servings_day(day_plan: Dict[str, Any]) -> None:
+            """
+            Normalize servings for a single day's meals (aligned with plan_day_e2e):
+              - Noodle/bún/phở (noodle soups): always 1 serving.
+              - Rice dishes (including default white rice): integer 1..4 servings.
+              - Main / vegetable dishes: integer 1 or 2 servings.
+              - Others (soup/fruit/side): fixed 1 serving.
+
+            This keeps weekly plan servings discrete and realistic, while still
+            allowing rice to scale for carb deficits.
+            """
+            def _clamp(servings: float, is_rice: bool) -> float:
+                if is_rice:
+                    return float(min(4, max(1, int(round(servings or 1.0)))))
+                return float(min(2, max(1, int(round(servings or 1.0)))))
+
+            for meal_key, meal_data in day_plan.items():
+                recipe = meal_data.get("recipe")
+                is_rice = _is_rice_recipe(recipe)
+                # Main dish for the meal (carb base)
+                if recipe:
+                    if _is_noodle_soup(recipe):
+                        meal_data["servings"] = 1.0
+                    elif is_rice:
+                        meal_data["servings"] = _clamp(meal_data.get("servings", 1.0), True)
+                    elif _is_main_dish(recipe) or _is_vegetable_dish(recipe):
+                        meal_data["servings"] = _clamp(min(2.0, meal_data.get("servings", 1.0)), False)
+                    else:
+                        meal_data["servings"] = 1.0
+
+                # Accompaniments
+                for acc in meal_data.get("accompaniments", []):
+                    acc_recipe = acc.get("recipe")
+                    if not acc_recipe:
+                        continue
+                    acc_is_rice = _is_rice_recipe(acc_recipe)
+                    if _is_noodle_soup(acc_recipe):
+                        acc["servings"] = 1.0
+                    elif acc_is_rice:
+                        acc["servings"] = _clamp(acc.get("servings", 1.0), True)
+                    elif _is_main_dish(acc_recipe) or _is_vegetable_dish(acc_recipe):
+                        acc["servings"] = _clamp(min(2.0, acc.get("servings", 1.0)), False)
+                    else:
+                        acc["servings"] = 1.0
 
         def _calculate_day_macros(day_plan: Dict[str, Any]) -> Dict[str, float]:
             totals = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
@@ -2572,13 +2723,13 @@ async def plan_week_e2e_tool(
 
             # Fruit: always allowed, even for combined/noodle (keeps meal light)
             dinner_fruit = _select_side_dish(
-            "dinner", day_index, "fruit",
-            available_recipes, excluded, used_recipe_ids, used_dish_names,
+                "dinner", day_index, "fruit",
+                available_recipes, excluded, used_recipe_ids, used_dish_names,
                 dinner_targets,
             )
             if dinner_fruit:
                 excluded.append(dinner_fruit)
-            _track_name(dinner_fruit)
+                _track_name(dinner_fruit)
             
             # Fallback for dinner
             if not dinner_rice or not dinner_main:
@@ -2829,6 +2980,10 @@ async def plan_week_e2e_tool(
                 "total_macros": day_macros,  # Will be recalculated after scaling
             }
         
+        # Normalize servings per day to discrete values (aligned with plan_day)
+        for day_data in weekly_plan.values():
+            _normalize_servings_day(day_data.get("meals", {}))
+
         # Apply per-meal scaling to prevent over-coverage (aligned with plan_day)
         def _scale_meal_if_needed(meal_key: str, day_plan: Dict[str, Any], cap_kcal: float, cap_fat: float) -> None:
             """Scale down meal servings if it exceeds kcal/fat caps (aligned with plan_day)."""
@@ -3053,6 +3208,16 @@ async def plan_week_e2e_tool(
         if plan_id:
             plan_output["plan_id"] = plan_id
 
+        # IMPORTANT: Two types of meal data storage (aligned with plan_day_e2e_tool):
+        # 1. MealPlan + MealPlanItem: stores SUGGESTED plans (weekly plans generated here).
+        #    - Saved immediately after generation via sync_plan_to_weaviate (below).
+        #    - Used for: plan history, variety filtering, plan retrieval.
+        # 2. MealLogEntry: stores ACCEPTED / CONSUMED meals.
+        #    - NEVER created from this tool.
+        #    - Only created when the user presses the "Accept" button (via accept_plan/log_meal tools).
+        #
+        # This means plan_week_e2e_tool only persists the suggested week plan (MealPlan/MealPlanItem).
+        # It does NOT log anything to MealLogEntry; consumption is recorded later when user accepts.
         if user_id:
             plan_output = sync_plan_to_weaviate(
                 plan_output,
@@ -3118,6 +3283,10 @@ async def plan_week_e2e_tool(
                 "macro_violations": len(validation.get("macro_validation", {}).get("violations", [])),
                 "constraint_violations": len(validation.get("constraint_validation", {}).get("violations", [])),
                 "plan_id": plan_output.get("plan_id"),
+                "user_id": user_id,
+                "can_accept": True,
+                "stop_calling_tool": True,
+                "end_conversation": True,
             },
             payload_type="meal_plan",
             display=True,

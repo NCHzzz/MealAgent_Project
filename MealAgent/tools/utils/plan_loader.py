@@ -7,6 +7,7 @@ Environment is only for LLM agent navigation and system operations.
 
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 from MealAgent.tools.utils.planning_helpers import _get_meal_macros
@@ -211,11 +212,150 @@ def load_plan_from_weaviate(
                     plan["total_macros"][macro] += meal_data["macros"][macro]
             
             elif plan_type == "week":
-                # For weekly plans, group by day
-                # This is simplified - full implementation would need day tracking
-                # For now, just collect items
-                pass
-        
+                # Weekly reconstruction is handled after this loop using day_index
+                continue
+
+        # Weekly plan reconstruction from MealPlanItem (aligned with plan_week_e2e_tool)
+        if plan_type == "week":
+            plan["days"] = {}
+
+            # Group raw items by day_index and meal_type
+            day_meals: Dict[int, Dict[str, List[Dict[str, Any]]]] = {}
+            for item_obj in item_results.objects:
+                item_props = item_obj.properties
+                try:
+                    day_index = int(item_props.get("day_index", 0))
+                except (TypeError, ValueError):
+                    day_index = 0
+                meal_type = item_props.get("meal_type")
+                if not meal_type or meal_type not in ["breakfast", "lunch", "dinner"]:
+                    # Skip snacks for now
+                    continue
+                if day_index not in day_meals:
+                    day_meals[day_index] = {}
+                if meal_type not in day_meals[day_index]:
+                    day_meals[day_index][meal_type] = []
+                day_meals[day_index][meal_type].append(item_props)
+
+            # Derive base date from start_date if available
+            base_date = None
+            start_date_str = plan_props.get("start_date")
+            if start_date_str:
+                try:
+                    normalized = start_date_str.replace("Z", "+00:00")
+                    base_date = datetime.fromisoformat(normalized).date()
+                except Exception:
+                    base_date = None
+
+            # Reconstruct per-day meal structure
+            for day_index, meals_by_type in day_meals.items():
+                # Compute calendar date key (YYYY-MM-DD) if possible
+                if base_date is not None:
+                    try:
+                        day_date = (base_date + timedelta(days=day_index)).isoformat()
+                    except Exception:
+                        day_date = f"day_{day_index}"
+                else:
+                    day_date = f"day_{day_index}"
+
+                day_plan = {
+                    "day_index": day_index,
+                    "date": day_date,
+                    "meals": {},
+                }
+
+                for mt, items in meals_by_type.items():
+                    meal_data = {
+                        "meal_type": mt,
+                        "recipe": None,
+                        "servings": 1.0,
+                        "accompaniments": [],
+                        "macros": {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0},
+                    }
+
+                    for item in items:
+                        recipe_id = item.get("recipe_id")
+                        servings = float(item.get("servings", 1.0))
+                        if not recipe_id:
+                            continue
+
+                        # Handle default white rice (not in database)
+                        if recipe_id == "default_white_rice":
+                            from MealAgent.tools.plan_day.plan_day_e2e import _create_default_white_rice_recipe
+                            recipe = _create_default_white_rice_recipe()
+                        else:
+                            recipe_filter = build_filters_from_where(
+                                {"path": ["food_id"], "operator": "Equal", "valueString": recipe_id}
+                            )
+                            recipe_results = recipe_collection.query.fetch_objects(filters=recipe_filter, limit=1)
+                            if not recipe_results.objects:
+                                logger.warning(f"Recipe {recipe_id} not found for weekly plan item")
+                                continue
+                            recipe = recipe_results.objects[0].properties
+
+                        recipe_macros = _get_meal_macros(recipe)
+
+                        # Determine if it's main recipe or accompaniment (aligned with daily loader)
+                        if mt == "breakfast":
+                            # Breakfast: single main dish, others as sides
+                            if meal_data["recipe"] is None:
+                                meal_data["recipe"] = recipe
+                                meal_data["servings"] = servings
+                            else:
+                                meal_data["accompaniments"].append(
+                                    {
+                                        "recipe": recipe,
+                                        "servings": servings,
+                                        "type": "side",
+                                    }
+                                )
+                        elif _is_main_dish(recipe):
+                            if meal_data["recipe"] is None:
+                                meal_data["recipe"] = recipe
+                                meal_data["servings"] = servings
+                            else:
+                                meal_data["accompaniments"].append(
+                                    {
+                                        "recipe": recipe,
+                                        "servings": servings,
+                                        "type": "main",
+                                    }
+                                )
+                        elif _is_carb_dish(recipe):
+                            if meal_data["recipe"] is None:
+                                meal_data["recipe"] = recipe
+                                meal_data["servings"] = servings
+                            else:
+                                meal_data["accompaniments"].append(
+                                    {
+                                        "recipe": recipe,
+                                        "servings": servings,
+                                        "type": "carb",
+                                    }
+                                )
+                        else:
+                            meal_data["accompaniments"].append(
+                                {
+                                    "recipe": recipe,
+                                    "servings": servings,
+                                    "type": "vegetable"
+                                    if "vegetable" in recipe.get("dish_type", "").lower()
+                                    else "fruit",
+                                }
+                            )
+
+                        # Aggregate macros for the meal
+                        for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
+                            meal_data["macros"][macro] += recipe_macros.get(macro, 0.0) * servings
+
+                    day_plan["meals"][mt] = meal_data
+
+                    # Accumulate into plan total_macros
+                    for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
+                        plan["total_macros"][macro] += meal_data["macros"][macro]
+
+                plan["days"][day_date] = day_plan
+
         return plan
         
     except Exception as e:

@@ -277,10 +277,41 @@ def log_plan_to_meal_log(
         return f"{base_date}T12:00:00Z"
 
     def _log_meal(meal_obj: Dict[str, Any], meal_label: str, logged_at: str):
-        """Log a meal including main dish and all accompaniments."""
-        recipe = meal_obj.get("recipe", {}) if isinstance(meal_obj, dict) else {}
+        """Log a meal including main dish and all accompaniments.
+
+        Robust to partially reconstructed meals (e.g. some weekly items without main recipe).
+        """
+        if not isinstance(meal_obj, dict):
+            logger.warning(
+                "accept_plan_tool: _log_meal called with non-dict meal_obj (%s) for label=%s, skipping",
+                type(meal_obj),
+                meal_label,
+            )
+            return
+
+        recipe = meal_obj.get("recipe")
+        if not isinstance(recipe, dict):
+            # If there is no main recipe but there are accompaniments, try to infer from first accompaniment
+            accompaniments = meal_obj.get("accompaniments") or []
+            if accompaniments and isinstance(accompaniments[0], dict):
+                acc_recipe = accompaniments[0].get("recipe")
+                if isinstance(acc_recipe, dict):
+                    recipe = acc_recipe
+                else:
+                    recipe = {}
+            else:
+                recipe = {}
+
+            logger.debug(
+                "accept_plan_tool: _log_meal fallback recipe resolution | label=%s | "
+                "has_accompaniments=%s | resolved_recipe=%s",
+                meal_label,
+                bool(accompaniments),
+                bool(recipe),
+            )
+
         dish_name = recipe.get("dish_name") or meal_label
-        servings = meal_obj.get("servings", 1.0) if isinstance(meal_obj, dict) else 1.0
+        servings = meal_obj.get("servings", 1.0)
         
         # Get accompaniments (side dishes, extra dishes)
         accompaniments = meal_obj.get("accompaniments", []) if isinstance(meal_obj, dict) else []
@@ -392,14 +423,42 @@ def log_plan_to_meal_log(
         
         logger.info(f"accept_plan_tool: Successfully logged {meals_logged} meals for plan {plan_id} (replaced {deleted_count} old entries)")
     elif plan_type == "week":
-        for day in plan.get("days", {}).values():
+        logger.info("accept_plan_tool: Logging weekly plan %s for user %s", plan_id, user_id)
+        days = plan.get("days", {})
+        logger.debug("accept_plan_tool: Weekly plan has %d day(s)", len(days))
+        for day_key, day in days.items():
             meals = day.get("meals", {})
             day_idx = day.get("day_index") or day.get("day") or 0
-            day_date = _ensure_date_only(day.get("date"))
-            logged_at = _day_logged_at(day_offset=int(day_idx), explicit_date=day_date)
+
+            # Prefer explicit date from plan.days; if missing, derive from plan_start_date + day_idx
+            raw_day_date = day.get("date")
+            day_date = _ensure_date_only(raw_day_date)
+            # Fallback: derive date from plan_start_date + day_idx
+            if not day_date:
+                base = plan_start_date or datetime.now(timezone.utc).date().isoformat()
+                try:
+                    dt = datetime.fromisoformat(f"{base}T00:00:00") + timedelta(days=int(day_idx))
+                    day_date = dt.date().isoformat()
+                except Exception:
+                    day_date = base
+
+            # logged_at is always anchored to day_date at noon UTC
+            logged_at = f"{day_date}T12:00:00Z"
+
             if day_date:
                 _delete_logs_for_date(log_collection, user_id, day_date)
+
             for meal_key, meal_obj in meals.items():
+                logger.debug(
+                    "accept_plan_tool: Logging weekly meal | day_idx=%s day_key=%s date=%s "
+                    "meal_key=%s has_recipe=%s has_accompaniments=%s",
+                    day_idx,
+                    day_key,
+                    day_date,
+                    meal_key,
+                    isinstance(meal_obj, dict) and isinstance(meal_obj.get('recipe'), dict),
+                    isinstance(meal_obj, dict) and bool(meal_obj.get('accompaniments')),
+                )
                 _log_meal(meal_obj, f"day_{day_idx}_{meal_key}", logged_at)
     else:
         raise ValueError(f"Unsupported plan_type: {plan_type}")

@@ -35,7 +35,17 @@ export default function MealHistoryPage() {
 
     try {
       setError(null);
-      const data = await getMealHistory(id, 30, 50);
+      // Mặc định: lấy cả log trong quá khứ lẫn tương lai gần (để week plan tương lai vẫn hiển thị)
+      const today = new Date();
+      const past = new Date(today);
+      past.setDate(past.getDate() - 30);
+      const future = new Date(today);
+      future.setDate(future.getDate() + 30);
+
+      const startDate = past.toISOString().slice(0, 10); // YYYY-MM-DD
+      const endDate = future.toISOString().slice(0, 10); // YYYY-MM-DD
+
+      const data = await getMealHistory(id, 30, 50, startDate, endDate);
       
       if (data) {
         setHistoryData(data);
