@@ -72,13 +72,29 @@ async def pantry_crud_tool(
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     CRUD helper for Pantry/PantryItem collections.
+    
+    Use this tool to:
+    - List pantry items: action="read" (user_id is optional - will auto-detect from profile)
+    - Add items: action="create" with pantry_items
+    - Update items: action="update" with pantry_items
+    - Remove items: action="delete" with pantry_items
+    
+    Parameters:
+      - action: "read" (default), "create", "update", or "delete"
+      - user_id: Optional. If not provided, will automatically retrieve from profile_crud_tool.profile
+      - pantry_items: Required for create/update/delete actions. List of items with ingredient_name, quantity, unit, etc.
+    
+    COMPLETION HINT: After action="read" completes successfully, the task is COMPLETE.
+    DO NOT call pantry_diff_tool unless the user explicitly asks for a shopping list from a meal plan.
+    DO NOT call explain node - the task is already complete after reading pantry items.
+    pantry_diff_tool is ONLY for generating shopping lists from plans, NOT for listing pantry items.
 
     Environment contract:
       Writes – `pantry_crud_tool.state` (and `items` table) after successful operations so shopping tools
       can consume inventory without re-querying.
 
     Supported actions:
-      • `read` (initialize pantry if missing) – default for downstream tools.
+      • `read` (initialize pantry if missing) – lists all pantry items. Task completes after this.
       • `create` / `update` / `delete` with validation + timestamp refresh.
     """
     action_icons = {
@@ -90,9 +106,44 @@ async def pantry_crud_tool(
     icon = action_icons.get(action, "📦")
     yield Response(f"{icon} Processing pantry {action}...")
 
+    # Try to infer user_id from cached profile / hidden environment if not explicitly provided
+    user_id_auto_detected = False
+    if not user_id:
+        try:
+            # Follow the same pattern as macro_calc_tool for robustness
+            profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+            profile = None
+            if profile_results:
+                for entry in reversed(profile_results):
+                    objs = entry.get("objects") or []
+                    if objs:
+                        profile = objs[0]
+                        break
+
+            if isinstance(profile, dict):
+                detected_id = profile.get("user_id")
+                if detected_id:
+                    user_id = detected_id
+                    user_id_auto_detected = True
+
+            # Fallback: hidden_environment may store user_id even if profile is missing
+            if not user_id:
+                hidden_env = getattr(tree_data.environment, "hidden_environment", {})
+                detected_id = hidden_env.get("user_id")
+                if detected_id:
+                    user_id = detected_id
+                    user_id_auto_detected = True
+        except Exception:
+            # Best-effort only – fall back to explicit user_id requirement
+            pass
+
     if not user_id:
         yield Error("user_id is required")
         return
+    
+    # Inform agent that user_id was automatically detected (helps agent understand context)
+    if user_id_auto_detected:
+        yield Response(f"ℹ️ Using user_id from profile: {user_id[:8]}...")
 
     allowed_actions = {"create", "read", "update", "delete"}
     if action not in allowed_actions:
@@ -140,7 +191,12 @@ async def pantry_crud_tool(
             yield Result(
                 name="state",
                 objects=[state],
-                metadata={"action": "read", "user_id": user_id, "item_count": len(items)},
+                metadata={
+                    "action": "read", 
+                    "user_id": user_id, 
+                    "item_count": len(items),
+                    "task_complete": True,  # Signal that listing pantry is complete
+                },
                 payload_type="generic",
                 display=True,
             )
@@ -148,11 +204,19 @@ async def pantry_crud_tool(
             yield Result(
                 name="items",
                 objects=items,
-                metadata={"action": "read", "user_id": user_id, "item_count": len(items)},
+                metadata={
+                    "action": "read", 
+                    "user_id": user_id, 
+                    "item_count": len(items),
+                    "task_complete": True,  # Signal that listing pantry is complete
+                },
                 payload_type="table",
                 display=True,
             )
-            yield Response(f"✅ Retrieved {len(items)} pantry item(s)")
+            if len(items) == 0:
+                yield Response(f"✅ Kho của bạn hiện đang rỗng (0 vật phẩm)")
+            else:
+                yield Response(f"✅ Đã tìm thấy {len(items)} vật phẩm trong kho của bạn")
 
         elif action == "create":
             if not pantry_items:

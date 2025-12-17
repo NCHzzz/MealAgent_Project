@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 import json
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -11,6 +12,7 @@ from elysia.util.client import ClientManager
 from weaviate.classes.query import Filter, Sort
 from MealAgent.tools.meal_logging.accept_plan import log_plan_to_meal_log
 from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+from MealAgent.tools.utils.planning_helpers import ensure_rfc3339_datetime
 
 # Logging
 from elysia.api.core.log import logger
@@ -40,6 +42,22 @@ def _date_part(value) -> str:
     if isinstance(value, str):
         return value[:10]
     return ""
+
+
+def _json_safe(value: Any) -> Any:
+    """
+    Convert Weaviate/py objects (notably datetime) into JSON-serialisable values.
+    """
+    if isinstance(value, datetime):
+        # Always return RFC3339-ish string
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 @router.get("/{user_id}/saved_trees")
@@ -405,3 +423,208 @@ async def get_meal_history(
             status_code=500,
             headers=headers,
         )
+
+
+class PantryPayload(BaseModel):
+    pantry_items: list[dict] | None = None
+
+
+@router.get("/{user_id}/pantry")
+@router.post("/{user_id}/pantry")
+async def pantry_crud(
+    user_id: str,
+    action: str = Query("read", description="Action: read, create, update, or delete"),
+    payload: PantryPayload | None = Body(None),
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    """
+    CRUD operations for pantry items.
+    GET: Read pantry items
+    POST: Create, update, or delete pantry items (based on action query param)
+    """
+    headers = {"Cache-Control": "no-cache"}
+    
+    try:
+        user_local = await user_manager.get_user_local(user_id)
+        client_manager: ClientManager = user_local["client_manager"]
+
+        if not client_manager.is_client:
+            return JSONResponse(
+                content={"state": None, "items": [], "error": "Client manager is not connected"},
+                status_code=200,
+                headers=headers,
+            )
+
+        allowed_actions = {"read", "create", "update", "delete"}
+        if action not in allowed_actions:
+            return JSONResponse(
+                content={
+                    "state": None,
+                    "items": [],
+                    "error": f"Unsupported action: {action}. Allowed: {sorted(list(allowed_actions))}",
+                },
+                status_code=400,
+                headers=headers,
+            )
+
+        pantry_items = (payload.pantry_items if payload else None) or []
+
+        async with client_manager.connect_to_async_client() as client:
+            # Ensure collections exist
+            if not await client.collections.exists("Pantry") or not await client.collections.exists("PantryItem"):
+                return JSONResponse(
+                    content={"state": None, "items": [], "error": "Pantry/PantryItem collections do not exist"},
+                    status_code=200,
+                    headers=headers,
+                )
+
+            pantry_collection = client.collections.get("Pantry")
+            item_collection = client.collections.get("PantryItem")
+
+            # Ensure pantry exists (for consistency with tool behavior)
+            pantry_results = await pantry_collection.query.fetch_objects(
+                filters=Filter.by_property("user_id").equal(user_id),
+                limit=1,
+            )
+            if not pantry_results.objects:
+                await pantry_collection.data.insert(
+                    {"user_id": user_id, "updated_at": ensure_rfc3339_datetime(datetime.now(timezone.utc))}
+                )
+
+            if action == "read":
+                item_results = await item_collection.query.fetch_objects(
+                    filters=Filter.by_property("user_id").equal(user_id),
+                    limit=9999,
+                )
+                items = [_json_safe(obj.properties) for obj in item_results.objects]
+                state = _json_safe({"user_id": user_id, "items": items, "item_count": len(items)})
+                return JSONResponse(
+                    content={"state": state, "items": items, "error": ""},
+                    status_code=200,
+                    headers=headers,
+                )
+
+            # create/update/delete require payload items
+            if not pantry_items:
+                return JSONResponse(
+                    content={"state": None, "items": [], "error": "pantry_items is required"},
+                    status_code=400,
+                    headers=headers,
+                )
+
+            # Basic validation + normalization
+            normalized_items: list[dict] = []
+            for i, it in enumerate(pantry_items):
+                if not isinstance(it, dict):
+                    return JSONResponse(
+                        content={"state": None, "items": [], "error": f"pantry_items[{i}] must be an object"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                name = (it.get("ingredient_name") or "").strip()
+                if not name:
+                    return JSONResponse(
+                        content={"state": None, "items": [], "error": f"pantry_items[{i}].ingredient_name is required"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                try:
+                    qty = float(it.get("quantity"))
+                except Exception:
+                    return JSONResponse(
+                        content={"state": None, "items": [], "error": f"pantry_items[{i}].quantity must be a number"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                if qty < 0:
+                    return JSONResponse(
+                        content={"state": None, "items": [], "error": f"pantry_items[{i}].quantity must be non-negative"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                unit = (it.get("unit") or "g").strip() or "g"
+                fdc_id = it.get("fdc_id")
+                expiry_date = it.get("expiry_date")
+                normalized_items.append(
+                    {
+                        "user_id": user_id,
+                        "ingredient_name": name,
+                        "quantity": qty,
+                        "unit": unit,
+                        "fdc_id": fdc_id,
+                        "expiry_date": expiry_date,
+                    }
+                )
+
+            if action == "create":
+                for it in normalized_items:
+                    await item_collection.data.insert(it)
+
+            elif action == "update":
+                for it in normalized_items:
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.all_of(
+                            [
+                                Filter.by_property("user_id").equal(user_id),
+                                Filter.by_property("ingredient_name").equal(it["ingredient_name"]),
+                            ]
+                        ),
+                        limit=1,
+                    )
+                    if item_results.objects:
+                        obj = item_results.objects[0]
+                        props = dict(obj.properties)
+                        props.update(
+                            {
+                                "quantity": it["quantity"],
+                                "unit": it["unit"],
+                                "fdc_id": it.get("fdc_id"),
+                                "expiry_date": it.get("expiry_date"),
+                            }
+                        )
+                        await item_collection.data.update(uuid=obj.uuid, properties=props)
+                    else:
+                        # Upsert behavior: if not found, insert
+                        await item_collection.data.insert(it)
+
+            elif action == "delete":
+                for it in normalized_items:
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.all_of(
+                            [
+                                Filter.by_property("user_id").equal(user_id),
+                                Filter.by_property("ingredient_name").equal(it["ingredient_name"]),
+                            ]
+                        ),
+                        limit=10,
+                    )
+                    for obj in item_results.objects:
+                        await item_collection.data.delete_by_id(obj.uuid)
+
+            # Update pantry updated_at (best-effort)
+            pantry_results = await pantry_collection.query.fetch_objects(
+                filters=Filter.by_property("user_id").equal(user_id),
+                limit=1,
+            )
+            if pantry_results.objects:
+                pantry_obj = pantry_results.objects[0]
+                props = dict(pantry_obj.properties)
+                props["updated_at"] = ensure_rfc3339_datetime(datetime.now(timezone.utc))
+                await pantry_collection.data.update(uuid=pantry_obj.uuid, properties=props)
+
+            # Return latest state/items
+            item_results = await item_collection.query.fetch_objects(
+                filters=Filter.by_property("user_id").equal(user_id),
+                limit=9999,
+            )
+            items = [_json_safe(obj.properties) for obj in item_results.objects]
+            state = _json_safe({"user_id": user_id, "items": items, "item_count": len(items)})
+            return JSONResponse(
+                content={"state": state, "items": items, "error": ""},
+                status_code=200,
+                headers=headers,
+            )
+
+    except Exception as e:
+        logger.exception(f"Error in /pantry API: {str(e)}")
+        return JSONResponse(content={"state": None, "items": [], "error": str(e)}, status_code=500, headers=headers)

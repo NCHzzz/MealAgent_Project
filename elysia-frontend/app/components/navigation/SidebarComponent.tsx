@@ -98,6 +98,12 @@ const SidebarComponent: React.FC = () => {
         onClick: () => changePage("mealHistory", {}, true, unsavedChanges),
       },
       {
+        title: "Pantry",
+        mode: ["pantry"],
+        icon: <GiMeal />,
+        onClick: () => changePage("pantry", {}, true, unsavedChanges),
+      },
+      {
         title: "Data",
         mode: ["data", "collection"],
         icon: !collections?.some((c) => c.processed === true) ? (

@@ -713,22 +713,31 @@ async def search_and_rank_tool(
         # Use recipe_card payload_type if collection is Recipe for better frontend detection
         payload_type = "recipe_card" if collection_name == "Recipe" else "generic"
 
-        # To keep LLM context/token usage small, only show a lightweight preview to the model/UI
+        # Preview items for UI display: include all fields needed by RecipeCard component
+        # but limit count to reduce token usage in LLM context
         preview_limit = min(50, len(top_items))
         preview_items = []
         for item in top_items[:preview_limit]:
-            preview_items.append(
-                {
-                    "food_id": item.get("food_id") or item.get("recipe_id") or item.get("id"),
-                    "dish_name": item.get("dish_name"),
-                    "fit_score": item.get("fit_score"),
-                    "kcal": (item.get("macros_per_serving") or {}).get("kcal"),
-                    "_score_breakdown": item.get("_score_breakdown", {}),
-                }
-            )
+            # Include all fields needed by RecipeCard/RecipeDetail components
+            preview_item = {
+                "food_id": item.get("food_id") or item.get("recipe_id") or item.get("id"),
+                "dish_name": item.get("dish_name"),
+                "dish_type": item.get("dish_type"),
+                "serving_size": item.get("serving_size"),
+                "cooking_time": item.get("cooking_time"),
+                "macros_per_serving": item.get("macros_per_serving"),  # Full macro object for UI
+                "allergens": item.get("allergens"),
+                "diet_type": item.get("diet_type"),
+                "image_link": item.get("image_link"),  # Image URL for UI display
+                "ingredients": item.get("ingredients"),
+                "ingredients_with_qty": item.get("ingredients_with_qty"),
+                # Keep scoring info for debugging/transparency (optional)
+                "fit_score": item.get("fit_score"),
+                "_score_breakdown": item.get("_score_breakdown", {}),
+            }
+            preview_items.append(preview_item)
 
-        # Full results remain available for downstream tools, but are hidden from chat to avoid
-        # ballooning the decision prompt with 100 recipe objects.
+        # Full results remain available for downstream tools, but preview is shown in UI
         yield Result(
             name="topk_preview",
             objects=preview_items,

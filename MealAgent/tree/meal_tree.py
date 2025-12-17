@@ -694,9 +694,10 @@ def build_meal_agent_tree(
     add_tool("logging", "meal_history_tool")
 
     # pantry branch (merged from pantry + shopping)
-    # pantry_diff_tool requires pantry_crud_tool.state, so chain it
+    # Note: pantry_diff_tool is NOT chained because it should only be called when user
+    # explicitly wants a shopping list from a meal plan, not when just listing pantry items.
     add_tool("pantry", "pantry_crud_tool")
-    add_tool("pantry", "pantry_diff_tool", chain=["pantry_crud_tool"])
+    add_tool("pantry", "pantry_diff_tool")  # Agent decides when to call based on user intent
 
     # optimization branch (merged from gap_fill + substitution + micros)
     add_tool("optimization", "gap_fill_tool")

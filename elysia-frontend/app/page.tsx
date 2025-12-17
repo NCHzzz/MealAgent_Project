@@ -13,6 +13,7 @@ import ElysiaPage from "./pages/ElysiaPage";
 import DisplayPage from "./pages/DisplayPage";
 import MealHistoryPage from "./pages/MealHistoryPage";
 import ProfilePage from "./pages/ProfilePage";
+import PantryPage from "./pages/PantryPage";
 import { ToastContext } from "./components/contexts/ToastContext";
 import ConfirmationModal from "./components/dialog/ConfirmationModal";
 
@@ -32,6 +33,7 @@ export default function Home() {
       {currentPage === "display" && <DisplayPage />}
       {currentPage === "mealHistory" && <MealHistoryPage />}
       {currentPage === "profile" && <ProfilePage />}
+      {currentPage === "pantry" && <PantryPage />}
     </div>
   );
 }

@@ -19,6 +19,10 @@ class DecisionPrompt(dspy.Signature):
     - Always select from available_tasks list only
     - Prefer tasks that directly progress toward answering the input prompt
     - Consider tree_count to avoid repetitive decisions
+    - IMPORTANT (freshness): If the user asks about pantry/inventory (e.g., "kho", "pantry", "tồn kho", "inventory"),
+      you MUST route to the pantry branch/tool to re-read current pantry state from the database,
+      even if the conversation history/environment previously said the pantry was empty.
+      Pantry can change outside the chat (e.g., via Pantry page), so do not assume prior pantry results are still valid.
 
     Judge the task's possibility based on the user's prompt, the available actions, the previous errors and future possible actions (successive_actions).
     You are not designed with completing the prompt now, just choosing actions and later further actions from successive_actions which will complete the request.

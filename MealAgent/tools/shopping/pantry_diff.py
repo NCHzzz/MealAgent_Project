@@ -193,6 +193,21 @@ async def pantry_diff_tool(
 ) -> AsyncGenerator[Result | Response | Error, None]:
     """
     Generate pantry-aware shopping lists by subtracting on-hand inventory from plan ingredients.
+    
+    ⚠️ CRITICAL: This tool is ONLY for generating shopping lists from meal plans.
+    
+    DO NOT call this tool when:
+    - User asks "what's in my pantry?" → Use pantry_crud_tool(action="read") instead
+    - User asks "list my pantry items" → Use pantry_crud_tool(action="read") instead
+    - User asks "show me my inventory" → Use pantry_crud_tool(action="read") instead
+    
+    ONLY call this tool when:
+    - User explicitly asks for a shopping list from a meal plan
+    - User wants to know what to buy for a specific plan
+    - User asks "what do I need to buy?" in context of a meal plan
+    
+    If pantry_crud_tool(action="read") was just called and completed successfully,
+    the task is COMPLETE. Do NOT automatically call pantry_diff_tool.
 
     Environment contract:
       Reads
@@ -202,14 +217,51 @@ async def pantry_diff_tool(
         • `pantry_diff_tool.diff` (diagnostics) and `pantry_diff_tool.shopping_list` (UI payload).
 
     Decision hints:
+      • ONLY call this tool when user explicitly wants a shopping list from a meal plan.
+      • To list pantry items, use pantry_crud_tool(action="read") instead.
       • `shopping_list` result with `final_items=[]` implies pantry already covers the plan.
       • Errors typically indicate missing pantry state—prompt the user to run pantry CRUD first.
     """
     yield Response("🛒 Generating shopping list (checking pantry inventory)...")
 
+    # Try to infer user_id from cached profile / hidden environment if not explicitly provided
+    user_id_auto_detected = False
+    if not user_id:
+        try:
+            # Follow the same pattern as macro_calc_tool for robustness
+            profile_results = tree_data.environment.find("profile_crud_tool", "profile")
+            profile = None
+            if profile_results:
+                for entry in reversed(profile_results):
+                    objs = entry.get("objects") or []
+                    if objs:
+                        profile = objs[0]
+                        break
+
+            if isinstance(profile, dict):
+                detected_id = profile.get("user_id")
+                if detected_id:
+                    user_id = detected_id
+                    user_id_auto_detected = True
+
+            # Fallback: hidden_environment may store user_id even if profile is missing
+            if not user_id:
+                hidden_env = getattr(tree_data.environment, "hidden_environment", {})
+                detected_id = hidden_env.get("user_id")
+                if detected_id:
+                    user_id = detected_id
+                    user_id_auto_detected = True
+        except Exception:
+            # Best-effort only – fall back to explicit user_id requirement
+            pass
+
     if not user_id:
         yield Error("user_id is required")
         return
+    
+    # Inform agent that user_id was automatically detected (helps agent understand context)
+    if user_id_auto_detected:
+        yield Response(f"ℹ️ Using user_id from profile: {user_id[:8]}...")
 
     # Load plan from Weaviate database (source of truth)
     plan = None
