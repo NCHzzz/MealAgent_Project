@@ -428,25 +428,29 @@ def add_supplementary_dishes(
                         elif has_carb_excess and carb <= 25.0:
                             score += 3.0  # Bonus for low-carb dishes
                         
-                        # CRITICAL: Add diversity penalty for dishes that might be overused
+                        # CRITICAL: Block similar dishes completely (not just penalty) to prevent repetition
                         # Automatically detect similarity with already selected dishes in current meal/session
                         dish_name_lower = str(recipe.get("dish_name", "")).lower()
-                        diversity_penalty = 0.0
                         
-                        # Penalize if recipe ID was used recently (already excluded, but add extra penalty)
+                        # Skip if recipe ID was used recently (already excluded, but double-check)
                         if recipe_id in recent_recipe_ids_set:
-                            diversity_penalty += 50.0  # Heavy penalty for recently used IDs
-                        # Penalize if dish name was already used today (cross-meal variety)
+                            continue
+                        # Skip if dish name was already used today (cross-meal variety)
                         if dish_name_lower and dish_name_lower in used_recipe_names:
-                            diversity_penalty += 40.0
+                            continue
                         
-                        # CRITICAL: Automatically detect similar dish names in current meal/session
-                        # Check if any dish in current_dishes or excluded has a similar name
-                        # This prevents selecting dishes with very similar names (e.g., "cá kho riềng" vs "cá kho tộ")
+                        # CRITICAL: Block dishes with similar names completely (similarity > 0.7)
+                        # This prevents selecting dishes like "thịt kho mắm ruốc" when "thịt kho ruốc" was already used
+                        is_similar = False
                         for existing_dish in current_dishes + excluded:
                             if not existing_dish:
                                 continue
                             existing_name_lower = str(existing_dish.get("dish_name", "")).lower()
+                            
+                            # Skip if exact match (already handled above)
+                            if dish_name_lower == existing_name_lower:
+                                is_similar = True
+                                break
                             
                             # Calculate simple similarity: count common words
                             # Split dish names into words and check overlap
@@ -466,16 +470,20 @@ def add_supplementary_dishes(
                             if len(common_words) >= 2:  # If 2+ meaningful words overlap
                                 # Calculate similarity ratio
                                 similarity_ratio = len(common_words) / max(len(recipe_words), len(existing_words))
-                                if similarity_ratio > 0.5:  # More than 50% word overlap
-                                    diversity_penalty += 20.0 * similarity_ratio  # Penalty proportional to similarity
+                                # CRITICAL: Block completely if similarity > 0.7 (70% similar)
+                                # This prevents "thịt kho mắm ruốc" vs "thịt kho ruốc" (ratio ~0.75)
+                                if similarity_ratio > 0.7:
+                                    is_similar = True
                                     logger.debug(
-                                        f"ADD_SUPP_DIVERSITY_PENALTY: '{dish_name_lower}' similar to "
+                                        f"ADD_SUPP_BLOCK_SIMILAR: '{dish_name_lower}' too similar to "
                                         f"'{existing_name_lower}' (overlap: {len(common_words)} words, "
-                                        f"ratio: {similarity_ratio:.2f}, penalty: {diversity_penalty:.1f})"
+                                        f"ratio: {similarity_ratio:.2f}), BLOCKING completely"
                                     )
+                                    break
                         
-                        # Apply diversity penalty
-                        score -= diversity_penalty
+                        # Skip this recipe if it's too similar to existing dishes
+                        if is_similar:
+                            continue
                         
                         # CRITICAL: Add randomness to score (±15%) to increase variety
                         # This prevents the same high-protein dishes from always being selected

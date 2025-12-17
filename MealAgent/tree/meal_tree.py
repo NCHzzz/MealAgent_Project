@@ -457,11 +457,15 @@ def build_meal_agent_tree(
                 "- Pantry/shopping inventory → pantry branch. "
                 "- Cooking steps/how to make → cooking branch. "
                 "- Meal logging ('vừa ăn', 'log', 'ghi lại bữa') → logging branch. "
-                "- After plan_day_e2e_tool completes it already streams a summary and sets stop_calling_tool/end_conversation. "
-                "DO NOT call explain or cited_summarize unless the user explicitly asks for a recap. "
+                "CRITICAL: After plan_day_e2e_tool OR plan_week_e2e_tool completes, they already stream a summary and set stop_calling_tool=True/end_conversation=True in Result metadata. "
+                "When you see plan_week_e2e_tool.plan or plan_day_e2e_tool.plan in environment with metadata containing stop_calling_tool=True or end_conversation=True, "
+                "the planning task is COMPLETE. DO NOT call explain, cited_summarize, or any other tools. "
+                "DO NOT restart the tree. Simply END the conversation by choosing 'text_response' with end_actions=True. "
+                "The planning tool already provides a complete summary - no additional explanation is needed unless the user explicitly asks. "
                 "- Explicit requests for explanations/summary → explain branch. "
-                "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after planning. "
-                "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts (via UI button or chat message). "
+                "CRITICAL: DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after plan_day_e2e_tool or plan_week_e2e_tool completes. "
+                "plan_week_e2e_tool only saves to MealPlan/MealPlanItem (suggested plan), NOT to MealLogEntry. "
+                "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts (via UI button, chat message like 'chấp nhận', 'accept', or when user logs actual consumed meals). "
                 "CRITICAL: After accept_plan_tool completes successfully, the task is COMPLETE. "
                 "DO NOT call profile_crud_tool, macro_calc_tool, or any other tools. "
                 "Simply confirm to the user that the plan has been saved and END the conversation."
@@ -495,10 +499,12 @@ def build_meal_agent_tree(
                 "Only choose this when the user explicitly requests a 'thực đơn/kế hoạch' cho ngày/tuần "
                 "or asks for a comprehensive plan refresh. "
                 "If the user only needs to add calories/snacks or tweak a current plan, DO NOT use this branch—go to optimization. "
-                "CRITICAL: plan_day_e2e_tool now streams its own short summary and sets stop_calling_tool/end_conversation. "
-                "After it emits Result(name='plan') with stop_calling_tool=True, DO NOT call explain or cited_summarize unless the user explicitly asks for a recap. "
-                "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool. "
-                "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts the plan (via UI button or chat message)."
+                "CRITICAL: Both plan_day_e2e_tool and plan_week_e2e_tool stream their own summary and set stop_calling_tool=True/end_conversation=True. "
+                "After they emit Result(name='plan') with stop_calling_tool=True, DO NOT call explain or cited_summarize unless the user explicitly asks for a recap. "
+                "CRITICAL: plan_week_e2e_tool ONLY saves to MealPlan/MealPlanItem (suggested plan storage), NOT to MealLogEntry. "
+                "DO NOT automatically call accept_plan_tool or log_meal_e2e_tool after planning completes. "
+                "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts the plan (via UI button, chat message like 'chấp nhận'/'accept', or when user logs actual consumed meals). "
+                "After planning completes with stop_calling_tool=True, END the conversation and wait for user acceptance."
             ),
             "description": (
                 "Runs plan_day_e2e_tool / plan_week_e2e_tool to build a fresh plan using profile, targets, constraints, and ranked recipes. "
@@ -527,7 +533,12 @@ def build_meal_agent_tree(
         "logging": {
             "instruction": (
                 "Log consumed meals and inspect meal history. "
-                "Use accept_plan_tool ONLY when user explicitly accepts a plan (via UI button or chat message). "
+                "CRITICAL: Use accept_plan_tool ONLY when: "
+                "1. User explicitly accepts a plan via UI button (accept plan button), OR "
+                "2. User chat message indicates acceptance ('chấp nhận', 'accept', 'đồng ý', 'ok'), OR "
+                "3. User logs actual consumed meals ('vừa ăn', 'đã ăn', 'log meal'). "
+                "DO NOT call accept_plan_tool automatically after plan_week_e2e_tool or plan_day_e2e_tool completes. "
+                "plan_week_e2e_tool already saves to MealPlan/MealPlanItem; accept_plan_tool is only for logging to MealLogEntry when user accepts. "
                 "After accept_plan_tool completes successfully, the task is COMPLETE - DO NOT call any additional tools. "
                 "Simply confirm to the user and END the conversation."
             ),
@@ -557,12 +568,14 @@ def build_meal_agent_tree(
         "explain": {
             "instruction": (
                 "Summarize decisions and provide rationale to the user. "
-                "Use only when the user explicitly requests explanation/summary/rationale, or when prior tool metadata lacked stop_calling_tool/end_conversation. "
-                "Do NOT auto-summarize plan_day_e2e_tool outputs; it already streams a summary and sets stop_calling_tool/end_conversation. "
+                "Use ONLY when the user explicitly requests explanation/summary/rationale. "
+                "CRITICAL: Do NOT use this branch if plan_week_e2e_tool or plan_day_e2e_tool just completed. "
+                "These tools already stream a complete summary and set stop_calling_tool=True/end_conversation=True in Result metadata. "
+                "If you see plan_week_e2e_tool.plan or plan_day_e2e_tool.plan in environment, the planning is COMPLETE - END conversation instead of calling explain. "
                 "Do NOT use this branch to re-list cooking steps when the user only asked "
                 "for 'công thức nấu ăn' or 'hướng dẫn nấu' – cook_mode_tool already "
                 "returns detailed instructions and a short summary. "
-                "CRITICAL: After summarizing, END the conversation. "
+                "CRITICAL: After summarizing, END the conversation by choosing 'text_response' with end_actions=True. "
                 "DO NOT call accept_plan_tool or log_meal_e2e_tool unless user explicitly accepts the plan."
             ),
             "description": "Use cited_summarize only when user asks for explanation/summary. Planning tool already summarizes inline.",

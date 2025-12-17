@@ -462,6 +462,7 @@ def _select_carb_with_validation(
     targets: Optional[Dict[str, float]],
     meal_max_kcal: float,
     existing_carb_in_meal: Optional[Dict[str, Any]] = None,
+    used_today_names_set: Optional[set[str]] = None,
 ) -> tuple[Dict[str, Any], bool, bool]:
     """
     Select carb (rice/noodle) for a meal slot with LLM fallback and validation.
@@ -521,9 +522,16 @@ def _select_carb_with_validation(
                         "carb"
                     )
                     if mapped_recipe and mapped_recipe not in excluded:
-                        if str(mapped_recipe.get("food_id", "")) not in (recent_recipe_ids_set | used_today_ids_set):
+                        mapped_recipe_id = str(mapped_recipe.get("food_id", ""))
+                        mapped_recipe_name = str(mapped_recipe.get('dish_name', '')).lower().strip()
+                        
+                        # CRITICAL: Check both ID and name to prevent duplicate dishes across meals
+                        is_id_used = mapped_recipe_id in (recent_recipe_ids_set | used_today_ids_set)
+                        is_name_used = used_today_names_set and mapped_recipe_name in used_today_names_set
+                        
+                        if not is_id_used and not is_name_used:
                             # RELAXED VALIDATION: Accept LLM suggestions more leniently
-                            dish_name_lower = str(mapped_recipe.get('dish_name', '')).lower()
+                            dish_name_lower = mapped_recipe_name
                             has_rice_noodle_in_name = any(term in dish_name_lower for term in ['cơm', 'com', 'rice', 'bún', 'bun', 'phở', 'pho', 'mì', 'mi', 'noodle'])
                             
                             is_rice_or_noodle = _is_rice_dish(mapped_recipe) or _is_noodle_soup(mapped_recipe)
@@ -558,6 +566,13 @@ def _select_carb_with_validation(
                                     if 100.0 <= kcal <= meal_max_kcal:
                                         carb_recipe = mapped_recipe
                                         logging.info(f"Accepted LLM suggestion for {meal_slot} carb: {carb_recipe.get('dish_name', 'Unknown')}")
+                                        # CRITICAL: Mark as used immediately to prevent reuse in same plan
+                                        # This ensures that even if validation later rejects it, we still track it
+                                        if used_today_names_set is not None:
+                                            used_today_names_set.add(mapped_recipe_name)
+                                        mapped_recipe_id = str(mapped_recipe.get("food_id", ""))
+                                        if mapped_recipe_id and mapped_recipe_id != "default_white_rice":
+                                            used_today_ids_set.add(mapped_recipe_id)
                                         break
     
     # Fallback to rule-based selection
@@ -1295,6 +1310,38 @@ async def plan_day_e2e_tool(
                     if plan_obj.uuid not in seen_uuids:
                         recent_plans.objects.append(plan_obj)
                         seen_uuids.add(plan_obj.uuid)
+                # CRITICAL: Track frequency of dishes across all recent plans FIRST
+                # Then add to blocklist - this helps identify frequently appearing dishes
+                # Block dishes that appear >= 2 times in 30 days, OR >= 1 time in same day (today_plans)
+                # This helps block frequently appearing dishes like "bún cá rô", "gà xé phay", "cá kho riềng"
+                dish_frequency: dict[str, int] = {}
+                recipe_id_frequency: dict[str, int] = {}
+                today_dish_frequency: dict[str, int] = {}  # Track frequency in today's plans only
+                today_recipe_id_frequency: dict[str, int] = {}  # Track frequency in today's plans only
+                
+                # First, track frequency in today's plans (same day) - block if >= 1
+                if 'all_today_plans' in locals() and all_today_plans:
+                    for plan_obj in all_today_plans:
+                        pid = plan_obj.properties.get("plan_id")
+                        if not pid:
+                            continue
+                        item_filter = build_filters_from_where(
+                            {"path": ["plan_id"], "operator": "Equal", "valueString": pid}
+                        )
+                        items = item_collection.query.fetch_objects(filters=item_filter, limit=200)
+                        for item_obj in items.objects:
+                            rid = item_obj.properties.get("recipe_id")
+                            dname = item_obj.properties.get("dish_name")
+                            
+                            if rid and rid != "default_white_rice":
+                                today_recipe_id_frequency[str(rid)] = today_recipe_id_frequency.get(str(rid), 0) + 1
+                            
+                            if dname:
+                                dname_lower = str(dname).lower().strip()
+                                if dname_lower not in ["cơm trắng", "com trang", "white rice"]:
+                                    today_dish_frequency[dname_lower] = today_dish_frequency.get(dname_lower, 0) + 1
+                
+                # Then, track frequency across all recent plans (30 days)
                 if recent_plans.objects:
                     for plan_obj in recent_plans.objects:
                         pid = plan_obj.properties.get("plan_id")
@@ -1307,13 +1354,58 @@ async def plan_day_e2e_tool(
                         items = item_collection.query.fetch_objects(filters=item_filter, limit=200)
                         for item_obj in items.objects:
                             rid = item_obj.properties.get("recipe_id")
+                            dname = item_obj.properties.get("dish_name")
+                            
+                            # Track frequency (excluding white rice)
                             if rid:
+                                recipe_id_frequency[str(rid)] = recipe_id_frequency.get(str(rid), 0) + 1
                                 recent_recipe_ids.add(str(rid))
                                 ids_from_mealplan += 1
-                            dname = item_obj.properties.get("dish_name")
+                            
                             if dname:
-                                recent_recipe_names.add(str(dname).lower().strip())
+                                dname_lower = str(dname).lower().strip()
+                                if dname_lower not in ["cơm trắng", "com trang", "white rice"]:
+                                    dish_frequency[dname_lower] = dish_frequency.get(dname_lower, 0) + 1
+                                recent_recipe_names.add(dname_lower)
                                 names_from_mealplan += 1
+                
+                # CRITICAL: Block dishes that appear >= 1 time in today's plans (same day)
+                # This prevents repetition when user creates multiple plans in the same day
+                for dish_name, freq in today_dish_frequency.items():
+                    if freq >= 1:
+                        recent_recipe_names.add(dish_name)
+                        logging.info(
+                            f"plan_day_e2e_tool: Dish '{dish_name}' appeared {freq} time(s) in today's plans - "
+                            f"BLOCKED to prevent same-day repetition"
+                        )
+                
+                for recipe_id, freq in today_recipe_id_frequency.items():
+                    if freq >= 1:
+                        recent_recipe_ids.add(recipe_id)
+                        logging.info(
+                            f"plan_day_e2e_tool: Recipe ID '{recipe_id}' appeared {freq} time(s) in today's plans - "
+                            f"BLOCKED to prevent same-day repetition"
+                        )
+                
+                # CRITICAL: Block dishes that appear >= 2 times in 30 days to prevent repetition
+                # This helps block frequently appearing dishes like "bún cá rô", "gà xé phay", "cá kho riềng"
+                for dish_name, freq in dish_frequency.items():
+                    if freq >= 2:
+                        # Add to blocklist to ensure they are blocked
+                        recent_recipe_names.add(dish_name)
+                        logging.info(
+                            f"plan_day_e2e_tool: Frequently appearing dish '{dish_name}' "
+                            f"(appeared {freq} times in last 30 days) - BLOCKED to prevent repetition"
+                        )
+                
+                # Also block recipe IDs that appear >= 2 times
+                for recipe_id, freq in recipe_id_frequency.items():
+                    if freq >= 2 and recipe_id != "default_white_rice":
+                        recent_recipe_ids.add(recipe_id)
+                        logging.info(
+                            f"plan_day_e2e_tool: Frequently appearing recipe ID '{recipe_id}' "
+                            f"(appeared {freq} times in last 30 days) - BLOCKED to prevent repetition"
+                        )
 
             # SOURCE 2: Add CONSUMED meals from MealLogEntry (meal history)
             # These are meals that user has accepted or actually eaten (logged via log_meal_e2e_tool)
@@ -1416,6 +1508,54 @@ async def plan_day_e2e_tool(
                 total_today_plans,
             )
 
+            def _dish_name_similar(name1: str, name2: str, threshold: float = 0.6) -> bool:
+                """
+                Check if two dish names are similar (fuzzy match).
+                Returns True if similarity >= threshold (0.6 = 60% similar, stricter to prevent repetition).
+                """
+                name1 = name1.lower().strip()
+                name2 = name2.lower().strip()
+                
+                # Exact match
+                if name1 == name2:
+                    return True
+                
+                # Check if one contains the other (common case: "Thịt Kho Mắm Ruốc" vs "Thịt Heo Kho Mắm Ruốc")
+                # CRITICAL: If one name is a substring of another, block it (e.g., "bún cá" in "bún cá rô")
+                if name1 in name2 or name2 in name1:
+                    # Calculate similarity ratio
+                    shorter = min(len(name1), len(name2))
+                    longer = max(len(name1), len(name2))
+                    if shorter > 0:
+                        similarity = shorter / longer
+                        # CRITICAL: Lower threshold (0.6) to catch more similar dishes
+                        # Also block if shorter name is at least 60% of longer name
+                        if similarity >= threshold:
+                            return True
+                        # Special case: if shorter name is >= 3 characters and >= 50% of longer, still block
+                        # This catches cases like "bún cá" (6 chars) in "bún cá rô" (9 chars) = 67%
+                        if shorter >= 3 and similarity >= 0.5:
+                            return True
+                
+                # Check word overlap (at least 60% of words match, stricter)
+                words1 = set(name1.split())
+                words2 = set(name2.split())
+                if words1 and words2:
+                    common_words = words1 & words2
+                    total_words = words1 | words2
+                    if total_words:
+                        word_similarity = len(common_words) / len(total_words)
+                        if word_similarity >= threshold:
+                            return True
+                        # CRITICAL: Also check if one set is a subset of another
+                        # This catches cases like {"bún", "cá"} in {"bún", "cá", "rô"}
+                        if words1.issubset(words2) or words2.issubset(words1):
+                            # If one is subset of another and has at least 2 words, block it
+                            if len(common_words) >= 2:
+                                return True
+                
+                return False
+            
             def _apply_exclusion(pool: list[Dict[str, Any]], ids: set[str], names: set[str]) -> list[Dict[str, Any]]:
                 if not pool:
                     return pool
@@ -1423,16 +1563,67 @@ async def plan_day_e2e_tool(
                 name_block = names or set()
                 # CRITICAL: Always apply strong exclusion first (both ID and name block)
                 # This prevents meal repetition even if it reduces the pool significantly
-                filtered = [r for r in pool if str(r.get("food_id", "")) not in id_block and str(r.get("dish_name", "")).lower().strip() not in name_block]
+                # IMPROVED: Also use fuzzy matching to block similar dish names (not just exact match)
+                filtered = []
+                for r in pool:
+                    rid = str(r.get("food_id", ""))
+                    rname = str(r.get("dish_name", "")).lower().strip()
+                    
+                    # Block by exact ID match
+                    if rid in id_block:
+                        continue
+                    
+                    # Block by exact name match
+                    if rname in name_block:
+                        continue
+                    
+                    # CRITICAL: Block by fuzzy name match (similar dishes)
+                    # This prevents selecting "Thịt Kho Mắm Ruốc" when "Thịt Heo Kho Mắm Ruốc" was already used
+                    # IMPROVED: Lower threshold to 0.6 (60%) to catch more similar dishes like "bún cá" vs "bún cá rô"
+                    is_similar = False
+                    for blocked_name in name_block:
+                        if _dish_name_similar(rname, blocked_name, threshold=0.6):
+                            is_similar = True
+                            break
+                    
+                    if is_similar:
+                        continue
+                    
+                    filtered.append(r)
                 
                 # Only relax if we have very few recipes left (less than 20)
                 # This ensures we still block most duplicates even with small recipe pool
                 if len(filtered) >= 20:
                     return filtered
                 
-                # If too few remain, relax name block but ALWAYS keep ID block (stronger exclusion)
+                # If too few remain, relax fuzzy name block but ALWAYS keep ID block and exact name block
                 # ID block is more reliable than name block (exact match vs fuzzy match)
-                filtered = [r for r in pool if str(r.get("food_id", "")) not in id_block]
+                filtered = []
+                for r in pool:
+                    rid = str(r.get("food_id", ""))
+                    rname = str(r.get("dish_name", "")).lower().strip()
+                    
+                    # Always block by exact ID match
+                    if rid in id_block:
+                        continue
+                    
+                    # Always block by exact name match
+                    if rname in name_block:
+                        continue
+                    
+                    # Relax fuzzy matching - only block if very similar (threshold 0.75 instead of 0.6)
+                    # Still stricter than before (0.7) to prevent repetition
+                    is_very_similar = False
+                    for blocked_name in name_block:
+                        if _dish_name_similar(rname, blocked_name, threshold=0.75):
+                            is_very_similar = True
+                            break
+                    
+                    if is_very_similar:
+                        continue
+                    
+                    filtered.append(r)
+                
                 if len(filtered) >= 10:
                     return filtered
                 
@@ -1584,6 +1775,9 @@ async def plan_day_e2e_tool(
             recent_recipe_ids_set.update(meal_history_recipe_ids)
         # Ensure default white rice is never blocked by recency filters
         recent_recipe_ids_set.discard("default_white_rice")
+        
+        # Also create a set from recent_recipe_names for dish name checking
+        recent_recipe_names_set = recent_recipe_names if 'recent_recipe_names' in locals() else set()
 
         # Track recipes used inside this planning session to avoid intra-plan repetition
         used_today_ids: set[str] = set()
@@ -1852,7 +2046,11 @@ async def plan_day_e2e_tool(
             for recipe in recipes:
                 if recipe == breakfast:
                     continue
-                if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                recipe_id = str(recipe.get("food_id", ""))
+                recipe_name = str(recipe.get("dish_name", "")).lower().strip()
+                # CRITICAL: Check both recipe_id and dish_name to prevent repetition
+                if (recipe_id not in recent_recipe_ids_set and 
+                    recipe_name not in recent_recipe_names_set):
                     macros = recipe.get("macros_per_serving", {})
                     if isinstance(macros, dict):
                         kcal = macros.get("kcal", 0)
@@ -1883,7 +2081,11 @@ async def plan_day_e2e_tool(
             for recipe in recipes:
                 if recipe == breakfast:
                     continue
-                if str(recipe.get("food_id", "")) not in recent_recipe_ids_set:
+                recipe_id = str(recipe.get("food_id", ""))
+                recipe_name = str(recipe.get("dish_name", "")).lower().strip()
+                # CRITICAL: Check both recipe_id and dish_name to prevent repetition
+                if (recipe_id not in recent_recipe_ids_set and 
+                    recipe_name not in recent_recipe_names_set):
                     macros = recipe.get("macros_per_serving", {})
                     if isinstance(macros, dict):
                         kcal = macros.get("kcal", 0)
@@ -1974,7 +2176,8 @@ async def plan_day_e2e_tool(
         lunch_carb, is_lunch_combined, is_lunch_noodle = _select_carb_with_validation(
             llm_draft, "lunch",
             recipes, excluded, recent_recipe_ids_set, used_today_ids,
-            selection_strategy, lunch_targets, lunch_max_kcal
+            selection_strategy, lunch_targets, lunch_max_kcal,
+            used_today_names_set=used_today_names
         )
         
         if lunch_carb:
@@ -2647,7 +2850,8 @@ async def plan_day_e2e_tool(
         dinner_carb, is_dinner_combined, is_dinner_noodle = _select_carb_with_validation(
             llm_draft, "dinner",
             recipes, excluded, recent_recipe_ids_set, used_today_ids,
-            selection_strategy, dinner_targets, dinner_max_kcal
+            selection_strategy, dinner_targets, dinner_max_kcal,
+            used_today_names_set=used_today_names
         )
         
         if dinner_carb:

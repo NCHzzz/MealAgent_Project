@@ -463,26 +463,49 @@ class DecisionNode:
                 )
 
             # Guard against missing/None function_name (LLM sometimes returns empty)
-            if not output.function_name:
+            if not output.function_name or output.function_name is None:
                 # Default to the first available tool to avoid hard failure
-                output.function_name = available_tools[0]
-                logging.warning(
-                    "Decision node returned empty action; defaulting to '%s'",
-                    output.function_name,
-                )
+                if available_tools:
+                    output.function_name = available_tools[0]
+                    logging.warning(
+                        "Decision node returned empty/None action; defaulting to '%s'",
+                        output.function_name,
+                    )
+                else:
+                    raise Exception(
+                        "Decision node returned empty/None action and no available tools found"
+                    )
 
-            if output.function_name.startswith("'") and output.function_name.endswith(
-                "'"
-            ):
-                output.function_name = output.function_name[1:-1]
-            elif output.function_name.startswith('"') and output.function_name.endswith(
-                '"'
-            ):
-                output.function_name = output.function_name[1:-1]
-            elif output.function_name.startswith("`") and output.function_name.endswith(
-                "`"
-            ):
-                output.function_name = output.function_name[1:-1]
+            # Strip quotes from function_name
+            if output.function_name and isinstance(output.function_name, str):
+                if output.function_name.startswith("'") and output.function_name.endswith(
+                    "'"
+                ):
+                    output.function_name = output.function_name[1:-1]
+                elif output.function_name.startswith('"') and output.function_name.endswith(
+                    '"'
+                ):
+                    output.function_name = output.function_name[1:-1]
+                elif output.function_name.startswith("`") and output.function_name.endswith(
+                    "`"
+                ):
+                    output.function_name = output.function_name[1:-1]
+                
+                # Strip whitespace
+                output.function_name = output.function_name.strip()
+            
+            # Check again after stripping (might have become empty)
+            if not output.function_name or output.function_name is None:
+                if available_tools:
+                    output.function_name = available_tools[0]
+                    logging.warning(
+                        "Decision node action became empty after stripping; defaulting to '%s'",
+                        output.function_name,
+                    )
+                else:
+                    raise Exception(
+                        "Decision node action became empty after stripping and no available tools found"
+                    )
 
             if output.function_name not in available_tools:
                 raise Exception(

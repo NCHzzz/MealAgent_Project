@@ -271,7 +271,15 @@ def apply_selection_strategy(
     if strategy == "highest_carb":
         candidates.sort(key=lambda r: _get_meal_macros(r).get("carb_g", 0.0), reverse=True)
     elif strategy == "highest_protein":
-        candidates.sort(key=lambda r: _get_meal_macros(r).get("protein_g", 0.0), reverse=True)
+        # IMPROVED: Balance protein priority with variety
+        # Instead of pure protein sort, use a combined score: protein * 0.7 + fit_score * 0.3
+        # This prevents always selecting the same high-protein dishes
+        for r in candidates:
+            protein = _get_meal_macros(r).get("protein_g", 0.0)
+            fit_score = r.get("fit_score", 50.0)
+            # Combined score: prioritize protein but also consider fit_score for variety
+            r["_protein_priority_score"] = (protein * 0.7) + (fit_score * 0.3)
+        candidates.sort(key=lambda r: r.get("_protein_priority_score", 0.0), reverse=True)
     elif strategy == "macro_fit" and target_macros:
         # Extract remaining_targets from target_macros if present
         remaining_targets = target_macros.get("_remaining_targets")
@@ -314,12 +322,14 @@ def add_variety_factor(
         return candidates
     
     if target_macros:
-        # IMPROVED: For macro_fit strategy, add much larger random variation to scores (±20% instead of ±10%)
-        # This creates significantly more variety in selection
+        # CRITICAL: Add much larger random variation (±40% instead of ±20%) to significantly increase variety
+        # This prevents the same high-protein dishes from being selected repeatedly
+        # The larger variation allows lower-ranked candidates to be selected more often
         for r in candidates:
             base_score = r.get("_macro_fit_score", r.get("fit_score", 0.0))
-            # Add much larger random variation (±20%) to break ties and maximize variety
-            r["_variety_score"] = base_score * (1.0 + random.uniform(-0.20, 0.20))
+            # Add much larger random variation (±40%) to break ties and maximize variety
+            # This ensures we don't always pick the same top protein dishes
+            r["_variety_score"] = base_score * (1.0 + random.uniform(-0.40, 0.40))
         candidates.sort(key=lambda r: r.get("_variety_score", 0.0), reverse=True)
     else:
         # IMPROVED: For other strategies, use much larger score groups (50 instead of 20) and shuffle more aggressively
@@ -364,14 +374,16 @@ def select_with_weighted_random(
     if len(candidates) == 1:
         return candidates[0]
     
-    # IMPROVED: Use much larger pool for better variety (top 50% or at least pool_size, max 100)
-    # This ensures we explore many more candidates and significantly reduce repetition
-    actual_pool_size = max(pool_size, min(100, int(len(candidates) * 0.5)))
+    # CRITICAL: Use much larger pool (top 70% instead of 50%) to explore more candidates and reduce repetition
+    # This ensures we consider many more dishes, not just the top protein ones
+    # Increased from 50% to 70% to significantly improve variety
+    actual_pool_size = max(pool_size, min(150, int(len(candidates) * 0.70)))
     top_candidates = candidates[:actual_pool_size]
     
-    # IMPROVED: More balanced weights - use cube root to make weights even less steep
-    # This gives much more chance to lower-ranked candidates, increasing variety
-    weights = [1.0 / ((i + 1) ** 0.33) for i in range(len(top_candidates))]  # Even less steep weights
+    # CRITICAL: More balanced weights - use square root instead of cube root to make weights even less steep
+    # This gives much more chance to lower-ranked candidates, significantly increasing variety
+    # Square root (0.5) is less steep than cube root (0.33), giving more equal chances
+    weights = [1.0 / ((i + 1) ** 0.5) for i in range(len(top_candidates))]  # Less steep weights for more variety
     total_weight = sum(weights)
     weights = [w / total_weight for w in weights]  # Normalize
     

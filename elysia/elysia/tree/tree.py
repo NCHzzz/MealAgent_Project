@@ -1665,6 +1665,8 @@ class Tree:
                 self.tracker.start_tracking(self.current_decision.function_name)
                 self.tree_data.set_current_task(self.current_decision.function_name)
                 successful_action = True
+                # Track if tool requested to stop calling tools or end conversation
+                tool_requested_stop = False
                 with ElysiaKeyManager(self.settings):
                     async for result in action_fn(
                         tree_data=self.tree_data,
@@ -1680,6 +1682,14 @@ class Tree:
 
                         if action_result is not None:
                             yield action_result
+
+                        # Check if Result has metadata requesting to stop or end conversation
+                        if isinstance(result, Result):
+                            metadata = result.metadata or {}
+                            if metadata.get("stop_calling_tool", False) or metadata.get("end_conversation", False):
+                                tool_requested_stop = True
+                                # Set completed immediately to prevent tree restart
+                                completed = True
 
                         successful_action = not error and successful_action
 
