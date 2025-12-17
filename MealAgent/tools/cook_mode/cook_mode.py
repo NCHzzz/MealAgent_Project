@@ -530,6 +530,7 @@ async def cook_mode_tool(
     
     # SINGLE RECIPE PROCESSING: Handle single recipe (either from food_id or first from plan)
     recipe = None
+    dish_name: str | None = None  # track for logging even if auto-search fails
     if food_id:
         # Try to find specific recipe
         recipe = _find_recipe_from_environment(tree_data, food_id, client_manager)
@@ -542,57 +543,194 @@ async def cook_mode_tool(
     
     # If no recipe found and food_id is None, try to search from user_prompt
     if not recipe and food_id is None:
-        user_prompt = getattr(tree_data, "user_prompt", "") or kwargs.get("query_text", "")
+        logging.info("cook_mode_tool: entering auto-search path (no recipe, no food_id)")
+
+        # Primary source: tree_data.user_prompt or explicit query_text
+        user_prompt = getattr(tree_data, "user_prompt", "") or kwargs.get(
+            "query_text", ""
+        )
+        logging.info(
+            "cook_mode_tool: initial user_prompt from tree_data/kwargs='%s'",
+            str(user_prompt)[:200],
+        )
+
+        # Fallback: last user message in conversation_history (more robust across recursions)
+        if not user_prompt:
+            try:
+                history = getattr(tree_data, "conversation_history", []) or []
+                for msg in reversed(history):
+                    if (
+                        isinstance(msg, dict)
+                        and msg.get("role") == "user"
+                        and msg.get("content")
+                    ):
+                        user_prompt = str(msg["content"])
+                        logging.info(
+                            "cook_mode_tool: using last user message from conversation_history as prompt='%s'",
+                            user_prompt[:200],
+                        )
+                        break
+            except Exception as e:
+                # Best-effort only; log the issue but continue
+                logging.warning(
+                    "cook_mode_tool: failed to read conversation_history for auto-search fallback: %s",
+                    e,
+                )
+                user_prompt = user_prompt or ""
+
         if user_prompt:
-            # Extract dish name from common Vietnamese cooking request patterns
+            logging.info(
+                "cook_mode_tool: auto-search activated with user_prompt='%s'",
+                user_prompt[:200],
+            )
+
+            # Extract dish name from common Vietnamese cooking request patterns.
+            # NOTE: We intentionally capture everything after "nấu " so multi-word
+            # dish names like "phở bò" or "cơm tấm sườn bì chả" are preserved.
             patterns = [
-                r"hướng dẫn.*?nấu\s+(.+?)(?:\s|$)",
-                r"cách.*?nấu\s+(.+?)(?:\s|$)",
-                r"công thức.*?nấu\s+(.+?)(?:\s|$)",
-                r"nấu\s+(.+?)(?:\s|$)",
+                r"hướng dẫn.*?nấu\s+(.+)$",
+                r"cách.*?nấu\s+(.+)$",
+                r"công thức.*?nấu\s+(.+)$",
+                r"nấu\s+(.+)$",
             ]
-            dish_name = None
             for pattern in patterns:
                 match = re.search(pattern, user_prompt, re.IGNORECASE)
                 if match:
                     dish_name = match.group(1).strip()
+                    logging.info(
+                        "cook_mode_tool: extracted dish_name='%s' using pattern='%s'",
+                        dish_name,
+                        pattern,
+                    )
                     break
-            
+
             if not dish_name:
-                # Fallback: remove common words
-                dish_name = re.sub(r"(hướng dẫn|cách|công thức|nấu|tôi|bạn|cho|giúp)", "", user_prompt, flags=re.IGNORECASE).strip()
-            
+                # Fallback: remove common filler words then normalise whitespace
+                dish_name = re.sub(
+                    r"(hướng dẫn|cách|công thức|nấu|tôi|bạn|cho|giúp)",
+                    "",
+                    user_prompt,
+                    flags=re.IGNORECASE,
+                )
+                dish_name = re.sub(r"\s+", " ", dish_name).strip()
+                logging.info(
+                    "cook_mode_tool: fallback dish_name extraction → '%s'", dish_name
+                )
+
             if dish_name and len(dish_name) > 2:
-                logging.info(f"cook_mode_tool: auto-searching for dish '{dish_name}' from user prompt")
+                logging.info(
+                    "cook_mode_tool: auto-searching for dish '%s' from user prompt",
+                    dish_name,
+                )
                 yield Response(f"🔍 Đang tìm kiếm công thức '{dish_name}'...")
-                
+
                 # Search directly in Recipe collection using Weaviate
                 try:
                     client = client_manager.get_client()
                     recipe_collection = client.collections.get("Recipe")
-                    
-                    # Use BM25 search on dish_name field
-                    search_results = recipe_collection.query.bm25(
-                        query=dish_name,
-                        limit=5,
-                        return_metadata=["score"]
-                    )
-                    
-                    if search_results.objects and len(search_results.objects) > 0:
-                        # Use the first (best) result
-                        recipe = search_results.objects[0].properties
-                        food_id = str(recipe.get("food_id") or "")
-                        logging.info(f"cook_mode_tool: found recipe {food_id} for '{dish_name}'")
-                        yield Response(f"✅ Đã tìm thấy công thức '{recipe.get('dish_name', dish_name)}'")
-                    else:
-                        logging.warning(f"cook_mode_tool: no recipes found for '{dish_name}'")
+
+                    # Build a small set of candidate queries to improve recall:
+                    #  - full dish_name (e.g. 'phở bò viên')
+                    #  - relaxed first 1–2 tokens (e.g. 'phở bò')
+                    #  - full user_prompt as last resort
+                    search_queries: List[str] = []
+                    primary = dish_name
+                    search_queries.append(primary)
+
+                    tokens = primary.split()
+                    if len(tokens) > 2:
+                        relaxed = " ".join(tokens[:2])
+                        if relaxed.lower() != primary.lower():
+                            search_queries.append(relaxed)
+
+                    if user_prompt and user_prompt not in search_queries:
+                        search_queries.append(user_prompt)
+
+                    for q in search_queries:
+                        logging.info(
+                            "cook_mode_tool: BM25 search in Recipe for query='%s'", q
+                        )
+                        search_results = recipe_collection.query.bm25(
+                            query=q,
+                            limit=5,
+                            return_metadata=["score"],
+                        )
+                        num_results = (
+                            len(search_results.objects)
+                            if getattr(search_results, "objects", None)
+                            else 0
+                        )
+                        logging.info(
+                            "cook_mode_tool: BM25 query='%s' returned %d candidate recipes",
+                            q,
+                            num_results,
+                        )
+
+                        if search_results.objects and num_results > 0:
+                            # Use the first (best) result
+                            recipe = search_results.objects[0].properties
+                            food_id = str(recipe.get("food_id") or "")
+                            logging.info(
+                                "cook_mode_tool: selected recipe food_id=%s dish_name='%s' via query='%s'",
+                                food_id,
+                                recipe.get("dish_name"),
+                                q,
+                            )
+                            yield Response(
+                                f"✅ Đã tìm thấy công thức '{recipe.get('dish_name', dish_name)}'"
+                            )
+                            break
+
+                    if not recipe:
+                        logging.warning(
+                            "cook_mode_tool: no recipes found for dish_name='%s' "
+                            "(queries tried: %s)",
+                            dish_name,
+                            ", ".join(search_queries),
+                        )
                 except Exception as e:
-                    logging.error(f"cook_mode_tool: error during auto-search: {e}")
+                    logging.error(
+                        "cook_mode_tool: error during auto-search for dish_name='%s': %s",
+                        dish_name,
+                        e,
+                    )
     
     if not recipe:
         msg = "No recipe found. Please select a recipe from your meal plan or search results first."
-        logging.warning("cook_mode_tool: %s", msg)
+        user_prompt_str = getattr(tree_data, "user_prompt", "")[:200]
+        logging.warning(
+            "cook_mode_tool: %s (dish_name='%s', user_prompt='%s')",
+            msg,
+            dish_name,
+            user_prompt_str,
+        )
+
+        # Surface a clear error to the UI
         yield Error(msg)
+
+        # Also emit a task_complete signal so the tree does NOT keep retrying
+        # cook_mode_tool in a loop when no matching recipe exists.
+        yield Result(
+            name="task_complete",
+            objects=[
+                {
+                    "status": "failed",
+                    "message": msg,
+                    "dish_name": dish_name or "",
+                    "user_prompt": user_prompt_str,
+                }
+            ],
+            metadata={
+                "task_complete": True,
+                "stop_calling_tool": True,
+                # We cannot satisfy the request automatically; end this branch
+                # and let the user decide the next step (e.g. rephrase or pick another dish).
+                "end_conversation": True,
+                "task_fully_complete": False,
+            },
+            payload_type="generic",
+            display=False,
+        )
         return
 
     # Normalise possible object types before extracting steps

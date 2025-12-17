@@ -455,7 +455,10 @@ def build_meal_agent_tree(
                 "or environment intent hint == optimization:deficit_gap_fill → go to optimization branch (gap_fill/substitute/micros). "
                 "- If user explicitly requests a new plan ('thực đơn', 'kế hoạch', 'meal plan' cho ngày/tuần) → planning branch. "
                 "- Pantry/shopping inventory → pantry branch. "
-                "- Cooking steps/how to make → cooking branch. "
+                "- Cooking steps/how to make for a specific dish name (e.g. 'cách nấu phở bò', 'công thức nấu phở bò viên', "
+                "'cho tôi công thức nấu phở bò viên') OR environment intent hint == cooking:steps → DIRECTLY choose the cooking "
+                "branch and call cook_mode_tool first. cook_mode_tool can search for the recipe itself from the user prompt using "
+                "BM25 on the dish name; do NOT go to the search branch first in these cases. "
                 "- Meal logging ('vừa ăn', 'log', 'ghi lại bữa') → logging branch. "
                 "CRITICAL: After plan_day_e2e_tool OR plan_week_e2e_tool completes, they already stream a summary and set stop_calling_tool=True/end_conversation=True in Result metadata. "
                 "When you see plan_week_e2e_tool.plan or plan_day_e2e_tool.plan in environment with metadata containing stop_calling_tool=True or end_conversation=True, "
@@ -468,8 +471,9 @@ def build_meal_agent_tree(
                 "Only call accept_plan_tool or log_meal_e2e_tool when user explicitly accepts (via UI button, chat message like 'chấp nhận', 'accept', or when user logs actual consumed meals). "
                 "CRITICAL: After accept_plan_tool completes successfully, the task is COMPLETE. "
                 "DO NOT call profile_crud_tool, macro_calc_tool, or any other tools. "
-                "Simply confirm to the user that the plan has been saved and END the conversation."
-                "- Recipe browsing without full plan → search branch. "
+                "Simply confirm to the user that the plan has been saved and END the conversation. "
+                "- Recipe browsing without full plan (user wants a list or multiple suggestions, e.g. 'gợi ý món', 'các món với ức gà') → search branch. "
+                "Do NOT use the search branch for single-dish 'cách nấu X' / 'công thức nấu X' style requests; use cooking instead. "
                 "If none match, ask the user a clarifying question before selecting a branch."
             ),
             root=True,
@@ -484,8 +488,13 @@ def build_meal_agent_tree(
             "status": "Managing profile...",
         },
         "search": {
-            "instruction": "Discover candidate recipes using hybrid search and guardrails.",
-            "description": "Use when the user wants to browse recipes or get a list of dishes, not a full day/week plan.",
+            "instruction": (
+                "Discover candidate recipes using hybrid search and guardrails. "
+                "Use this when the user wants to browse or compare multiple recipes (lists, suggestions, filters). "
+                "If the prompt is a direct cooking request for a specific dish (contains phrases like 'cách nấu', 'công thức nấu', "
+                "'cho tôi công thức nấu X'), DO NOT choose this branch – go to the cooking branch and let cook_mode_tool handle search."
+            ),
+            "description": "Recipe browsing and discovery (lists/suggestions). Not for single-dish 'cách nấu X' requests.",
             "status": "Searching recipes...",
         },
         "nutrition": {
@@ -547,7 +556,10 @@ def build_meal_agent_tree(
         },
         "cooking": {
             "instruction": (
-                "Provide step-by-step cooking instructions for selected recipes. "
+                "Provide step-by-step cooking instructions for selected recipes OR for a specific dish name directly from the user prompt. "
+                "If the prompt clearly asks how to cook a particular dish (e.g. 'cách nấu phở bò', 'công thức nấu phở bò viên', "
+                "'cho tôi công thức nấu X'), go to this branch FIRST and call cook_mode_tool – it can auto-search for the recipe "
+                "by dish name without needing search_and_rank_tool. "
                 "CRITICAL: Before calling cook_mode_tool, check if cook_mode_tool.completed "
                 "already exists for ALL recipes in the plan (or the requested food_id). "
                 "If ALL recipes are already completed, the task is ALREADY DONE - do NOT call "
@@ -562,7 +574,7 @@ def build_meal_agent_tree(
                 "Do NOT call cook_mode_tool multiple times for the same food_id. "
                 "Do NOT automatically call the explain branch after cooking; only do so if the user explicitly asks."
             ),
-            "description": "Works with recipes from search or plan outputs. Cooking alone is usually enough to satisfy the request. Respect task_complete signals to avoid redundant calls. After completion, choose 'explain' branch or END conversation.",
+            "description": "Handles both recipes selected from plans/search and direct 'cách nấu X' prompts via cook_mode_tool's auto-search. Cooking alone is usually enough to satisfy the request. Respect task_complete signals to avoid redundant calls. After completion, choose 'explain' branch or END conversation.",
             "status": "Cooking...",
         },
         "explain": {
