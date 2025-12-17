@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import DisplayPagination from "../../components/DisplayPagination";
 import { ImageIcon } from "lucide-react";
+import RecipeDetail from "./RecipeDetail";
 
 interface RecipeCardProps {
   recipes: RecipeCardPayload[];
@@ -169,19 +170,37 @@ const RecipeCard: React.FC<RecipeCardProps> = ({
   recipes,
   handleResultPayloadChange,
 }) => {
+  const [selectedRecipe, setSelectedRecipe] = useState<RecipeCardPayload | null>(
+    null
+  );
+
   if (recipes.length === 0) return null;
 
   return (
-    <DisplayPagination layout="horizontal" itemsPerPage={3}>
-      {recipes.map((recipe, idx) => (
-        <RecipeCardItem
-          key={`${recipe.food_id}-${idx}`}
-          recipe={recipe}
-          idx={idx}
+    <div className="w-full flex flex-col gap-4">
+      <DisplayPagination layout="horizontal" itemsPerPage={3}>
+        {recipes.map((recipe, idx) => (
+          <RecipeCardItem
+            key={`${recipe.food_id}-${idx}`}
+            recipe={recipe}
+            idx={idx}
+            handleResultPayloadChange={(type, payload) => {
+              // Hiển thị chi tiết ngay trong view hiện tại
+              setSelectedRecipe(payload as RecipeCardPayload);
+              // Đồng thời kích hoạt cơ chế view chung (mở tab Result) nếu được cung cấp
+              handleResultPayloadChange?.(type, payload);
+            }}
+          />
+        ))}
+      </DisplayPagination>
+
+      {selectedRecipe && (
+        <RecipeDetail
+          recipe={selectedRecipe}
           handleResultPayloadChange={handleResultPayloadChange}
         />
-      ))}
-    </DisplayPagination>
+      )}
+    </div>
   );
 };
 
