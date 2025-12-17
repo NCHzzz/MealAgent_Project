@@ -1152,7 +1152,12 @@ class Tree:
                 context=context,
                 num_suggestions=num_suggestions,
             )
-        if suggestions != []:
+
+        # Normalize None -> [] to avoid TypeError when extending
+        if suggestions is None:
+            suggestions = []
+
+        if suggestions:
             self.settings.logger.debug(f"Follow-up suggestions: {suggestions}")
         else:
             self.settings.logger.error("No follow-up suggestions found.")

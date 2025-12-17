@@ -313,7 +313,7 @@ def _enrich_rice_meal(
         )
         if forced_main:
             meal_main = forced_main
-            mark_used_cb(meal_main)
+            mark_used_cb(meal_main, context=f"{meal_slot}_enrich_main")
             excluded.append(meal_main)
             messages.append(f"✅ Added main dish to {meal_slot} to boost macros: {meal_main.get('dish_name','Unknown')}")
 
@@ -332,7 +332,7 @@ def _enrich_rice_meal(
         )
         if forced_veg and _is_vegetable_dish(forced_veg):
             meal_veg = forced_veg
-            mark_used_cb(meal_veg)
+            mark_used_cb(meal_veg, context=f"{meal_slot}_enrich_veg")
             excluded.append(meal_veg)
             messages.append(f"✅ Added vegetable for {meal_slot}: {meal_veg.get('dish_name','Unknown')}")
 
@@ -351,7 +351,7 @@ def _enrich_rice_meal(
         )
         if forced_soup and _is_soup(forced_soup):
             meal_soup = forced_soup
-            mark_used_cb(meal_soup)
+            mark_used_cb(meal_soup, context=f"{meal_slot}_enrich_soup")
             excluded.append(meal_soup)
             messages.append(f"✅ Added soup for {meal_slot}: {meal_soup.get('dish_name','Unknown')}")
 
@@ -381,9 +381,15 @@ def _try_select_from_llm_suggestions(
     recent_recipe_ids_set: set[str],
     min_kcal: float = 0.0,
     max_kcal: Optional[float] = None,
+    used_today_ids: Optional[set[str]] = None,
+    used_today_names: Optional[set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Try to select a recipe from LLM suggestions for a specific role.
+    
+    Args:
+        used_today_ids: Set of recipe IDs already used in this plan (to prevent duplicates)
+        used_today_names: Set of recipe names already used in this plan (to prevent duplicates)
     
     Returns selected recipe or None if no good match found.
     """
@@ -394,6 +400,10 @@ def _try_select_from_llm_suggestions(
     if not meal_draft or not meal_draft.suggestions:
         return None
     
+    # Normalize used_today sets for comparison
+    used_today_ids = used_today_ids or set()
+    used_today_names = {str(n).lower().strip() for n in (used_today_names or set())}
+    
     for suggestion in meal_draft.suggestions:
         suggestion_dict = suggestion.model_dump() if hasattr(suggestion, 'model_dump') else suggestion
         suggestion_role = suggestion_dict.get("role", "")
@@ -402,19 +412,80 @@ def _try_select_from_llm_suggestions(
             mapped_recipe = _map_llm_suggestion_to_recipe(
                 suggestion_dict,
                 recipes,
-                role
+                role,
+                used_today_ids=used_today_ids,
+                used_today_names=used_today_names,
+                recent_recipe_ids_set=recent_recipe_ids_set,
             )
             if mapped_recipe and mapped_recipe not in excluded:
-                if str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set:
-                    # Validate kcal range if specified
-                    if max_kcal or min_kcal > 0:
-                        macros = mapped_recipe.get("macros_per_serving", {})
-                        if isinstance(macros, dict):
-                            kcal = macros.get("kcal", 0)
-                            if min_kcal <= kcal <= (max_kcal or float('inf')):
+                mapped_recipe_id = str(mapped_recipe.get("food_id", ""))
+                mapped_recipe_name = str(mapped_recipe.get("dish_name", "")).lower().strip()
+                
+                # CRITICAL: Check all exclusion sets to prevent duplicates
+                # 1. Check recent_recipe_ids_set (from previous plans)
+                # 2. Check used_today_ids (from current plan)
+                # 3. Check used_today_names (from current plan, fuzzy match)
+                if mapped_recipe_id not in recent_recipe_ids_set:
+                    if mapped_recipe_id not in used_today_ids:
+                        # Check name-based exclusion (fuzzy match)
+                        is_name_blocked = False
+                        blocked_by_name = None
+                        if mapped_recipe_name and mapped_recipe_name not in {"cơm trắng", "com trang", "white rice"}:
+                            for used_name in used_today_names:
+                                if used_name and mapped_recipe_name == used_name:
+                                    is_name_blocked = True
+                                    blocked_by_name = used_name
+                                    break
+                        
+                        if not is_name_blocked:
+                            # Validate kcal range if specified
+                            if max_kcal or min_kcal > 0:
+                                macros = mapped_recipe.get("macros_per_serving", {})
+                                if isinstance(macros, dict):
+                                    kcal = macros.get("kcal", 0)
+                                    if min_kcal <= kcal <= (max_kcal or float("inf")):
+                                        logging.debug(
+                                            f"_try_select_from_llm_suggestions: SELECTED | meal_slot={meal_slot} | "
+                                            f"role={role} | dish='{mapped_recipe_name}' | id={mapped_recipe_id} | "
+                                            f"kcal={kcal:.1f} | used_today_ids={len(used_today_ids)} | "
+                                            f"used_today_names={len(used_today_names)}"
+                                        )
+                                        return mapped_recipe
+                                    else:
+                                        # Prepare safe string representation for max_kcal
+                                        max_kcal_str = (
+                                            f"{max_kcal:.1f}" if isinstance(max_kcal, (int, float)) else "inf"
+                                        )
+                                        logging.debug(
+                                            f"_try_select_from_llm_suggestions: REJECT_KCAL | meal_slot={meal_slot} | "
+                                            f"role={role} | dish='{mapped_recipe_name}' | id={mapped_recipe_id} | "
+                                            f"kcal={kcal:.1f} | required_range=[{min_kcal:.1f}, {max_kcal_str}]"
+                                        )
+                            else:
+                                logging.debug(
+                                    f"_try_select_from_llm_suggestions: SELECTED | meal_slot={meal_slot} | "
+                                    f"role={role} | dish='{mapped_recipe_name}' | id={mapped_recipe_id} | "
+                                    f"used_today_ids={len(used_today_ids)} | used_today_names={len(used_today_names)}"
+                                )
                                 return mapped_recipe
+                        else:
+                            logging.debug(
+                                f"_try_select_from_llm_suggestions: REJECT_DUPLICATE_NAME | meal_slot={meal_slot} | "
+                                f"role={role} | dish='{mapped_recipe_name}' | id={mapped_recipe_id} | "
+                                f"blocked_by='{blocked_by_name}' | used_today_names={len(used_today_names)}"
+                            )
                     else:
-                        return mapped_recipe
+                        logging.debug(
+                            f"_try_select_from_llm_suggestions: REJECT_DUPLICATE_ID | meal_slot={meal_slot} | "
+                            f"role={role} | dish='{mapped_recipe_name}' | id={mapped_recipe_id} | "
+                            f"used_today_ids={len(used_today_ids)}"
+                        )
+                else:
+                    logging.debug(
+                        f"_try_select_from_llm_suggestions: REJECT_RECENT_PLAN | meal_slot={meal_slot} | "
+                        f"role={role} | dish='{mapped_recipe_name}' | id={mapped_recipe_id} | "
+                        f"recent_recipe_ids_count={len(recent_recipe_ids_set)}"
+                    )
     return None
 
 
@@ -445,6 +516,8 @@ def _is_selected_from_llm(
             suggestion_dict,
             recipes,
             role,
+            recent_recipe_ids_set=set(),  # No cross-plan variety context needed here
+            recent_recipe_names_set=set(),
         )
         if mapped and str(mapped.get("food_id", "") or mapped.get("recipe_id", "")) == selected_id:
             return True
@@ -519,7 +592,11 @@ def _select_carb_with_validation(
                     mapped_recipe = _map_llm_suggestion_to_recipe(
                         suggestion_dict,
                         recipes,
-                        "carb"
+                        "carb",
+                        used_today_ids=used_today_ids_set,
+                        used_today_names=used_today_names_set,
+                        recent_recipe_ids_set=recent_recipe_ids_set,
+                        recent_recipe_names_set=None,
                     )
                     if mapped_recipe and mapped_recipe not in excluded:
                         mapped_recipe_id = str(mapped_recipe.get("food_id", ""))
@@ -686,6 +763,10 @@ def _map_llm_suggestion_to_recipe(
     suggestion: Dict[str, Any],
     recipes: List[Dict[str, Any]],
     role: str,
+    used_today_ids: Optional[set[str]] = None,
+    used_today_names: Optional[set[str]] = None,
+    recent_recipe_ids_set: Optional[set[str]] = None,
+    recent_recipe_names_set: Optional[set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Map LLM suggestion to actual recipe from database with improved fuzzy matching.
@@ -694,6 +775,8 @@ def _map_llm_suggestion_to_recipe(
         suggestion: LLM suggestion with dish_name, general_term, role, category
         recipes: List of recipes from database
         role: Expected role (breakfast, carb, main, vegetable, fruit)
+        used_today_ids: Set of recipe IDs already used in this plan (to prevent duplicates)
+        used_today_names: Set of recipe names already used in this plan (to prevent duplicates)
     
     Returns:
         Best matching recipe, or None if not found
@@ -711,13 +794,50 @@ def _map_llm_suggestion_to_recipe(
     common_words = {"và", "với", "kèm", "và", "của", "the", "with", "and", "for"}
     dish_keywords = [w for w in re.split(r'[\s,]+', dish_name) if w and w not in common_words and len(w) > 2]
     
+    # Normalize used_today / recent sets for comparison
+    used_today_ids = used_today_ids or set()
+    used_today_names = {str(n).lower().strip() for n in (used_today_names or set())}
+    recent_recipe_ids_set = recent_recipe_ids_set or set()
+    recent_recipe_names_set = {str(n).lower().strip() for n in (recent_recipe_names_set or set())}
+    
     # Score recipes by match quality
     scored_recipes = []
     for recipe in recipes:
         recipe_name = str(recipe.get("dish_name", "")).lower().strip()
         recipe_type = str(recipe.get("dish_type", "")).lower()
+        recipe_id = str(recipe.get("food_id", "") or recipe.get("recipe_id", "") or "")
         
         if not recipe_name:
+            continue
+        
+        # CRITICAL: Skip recipes already used in this plan OR recently used across plans
+        if recipe_id in used_today_ids:
+            logging.debug(
+                f"_map_llm_suggestion_to_recipe: SKIP_DUPLICATE_ID | suggestion='{dish_name}' | "
+                f"recipe_id={recipe_id} | recipe_name='{recipe_name}' | reason=already_used_in_plan | "
+                f"used_today_ids_count={len(used_today_ids)}"
+            )
+            continue
+        if recipe_id in recent_recipe_ids_set and recipe_id != "default_white_rice":
+            logging.debug(
+                f"_map_llm_suggestion_to_recipe: SKIP_RECENT_ID | suggestion='{dish_name}' | "
+                f"recipe_id={recipe_id} | recipe_name='{recipe_name}' | reason=recently_used_in_other_plans | "
+                f"recent_ids_count={len(recent_recipe_ids_set)}"
+            )
+            continue
+        if recipe_name and recipe_name in used_today_names:
+            logging.debug(
+                f"_map_llm_suggestion_to_recipe: SKIP_DUPLICATE_NAME | suggestion='{dish_name}' | "
+                f"recipe_id={recipe_id} | recipe_name='{recipe_name}' | reason=already_used_in_plan | "
+                f"used_today_names_count={len(used_today_names)}"
+            )
+            continue
+        if recipe_name and recipe_name in recent_recipe_names_set:
+            logging.debug(
+                f"_map_llm_suggestion_to_recipe: SKIP_RECENT_NAME | suggestion='{dish_name}' | "
+                f"recipe_id={recipe_id} | recipe_name='{recipe_name}' | reason=recently_used_in_other_plans | "
+                f"recent_names_count={len(recent_recipe_names_set)}"
+            )
             continue
         
         score = 0.0
@@ -800,23 +920,41 @@ def _map_llm_suggestion_to_recipe(
         if general_term:
             has_general_term_match = general_term == recipe_name or general_term in recipe_name
         
-        # RELAXED THRESHOLD: Accept more LLM suggestions to avoid repetitive fallbacks
+        # STRICTER THRESHOLD: Require better matches to avoid mapping unrelated dishes
         # Require at least ONE of:
-        # 1. Exact match (200 points)
-        # 2. Substring match (100 points) 
-        # 3. Keyword match (at least 1 keyword, score >= 40) - REDUCED from 50
-        # 4. General term match (60+ points) - REDUCED from 80
-        # 5. Multiple criteria combined (score >= 40) - REDUCED from 60
-        # This allows more LLM suggestions to be accepted, reducing fallback to default dishes
+        # 1. Exact match (200 points) - highest confidence
+        # 2. Substring match (100 points) - high confidence  
+        # 3. Keyword match (at least 50% keywords match AND score >= 70) - STRICTER
+        # 4. General term match (90+ points) - STRICTER
+        # 5. Multiple criteria combined (score >= 70 AND has meaningful match) - STRICTER
+        # This prevents mapping unrelated dishes like:
+        #   - "mì ống với dầu ô liu, cà chua và tôm nướng" -> "pha mắm tôm chấm bún đậu" (should not match)
+        #   - "thịt bò và broccoli với cơm jasmine hấp" -> "cơm chiên trứng" (should not match)
         
-        if (has_exact_match or has_substring_match or 
-            (has_keyword_match and best_score >= 40.0) or
-            (has_general_term_match and best_score >= 60.0) or
-            best_score >= 40.0):
+        # Calculate keyword match quality
+        keyword_match_quality = 0
+        matching_keywords_count = 0
+        if dish_keywords:
+            matching_keywords_count = sum(1 for kw in dish_keywords if kw in recipe_name)
+            keyword_match_quality = matching_keywords_count / len(dish_keywords) if dish_keywords else 0
+        
+        # CRITICAL: Require STRICTER matching to avoid false positives
+        # Only accept if we have strong evidence of a match
+        has_strong_match = (
+            has_exact_match or  # Exact name match - highest confidence
+            has_substring_match or  # Substring match - high confidence
+            (has_keyword_match and keyword_match_quality >= 0.5 and best_score >= 70.0) or  # At least 50% keywords match AND score >= 70
+            (has_general_term_match and best_score >= 90.0) or  # General term match with high score
+            (best_score >= 90.0 and has_keyword_match and keyword_match_quality >= 0.3)  # Very high score with some keyword match
+        )
+        
+        if has_strong_match:
             logging.debug(
                 f"_map_llm_suggestion_to_recipe: Matched '{dish_name}' -> '{best_recipe.get('dish_name', 'Unknown')}' "
                 f"(score: {best_score:.1f}, role: {role}, exact: {has_exact_match}, "
-                f"substring: {has_substring_match}, keyword: {has_keyword_match}, general: {has_general_term_match})"
+                f"substring: {has_substring_match}, keyword: {has_keyword_match} (quality: {keyword_match_quality:.2f}, "
+                f"matched: {matching_keywords_count}/{len(dish_keywords) if dish_keywords else 0}), "
+                f"general: {has_general_term_match})"
             )
             return best_recipe
         else:
@@ -1250,60 +1388,91 @@ async def plan_day_e2e_tool(
             names_from_env_cache = 0
 
             if user_id:
-                # SOURCE 1: Check SUGGESTED plans from MealPlan/MealPlanItem (last 30 days)
-                # These are plans that were generated but may not have been accepted yet
-                # We exclude them to avoid suggesting duplicate plans
-                # Increased from 7 to 30 days to prevent repetition across multiple days
-                window_days = 30
-                recent_date = ensure_rfc3339_datetime(
-                    datetime.now(timezone.utc) - timedelta(days=window_days)
-                )
-                plan_filter = build_filters_from_where({
-                    "operator": "And",
-                    "operands": [
-                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                        {"path": ["created_at"], "operator": "GreaterThan", "valueDate": recent_date}
-                    ]
-                })
+                # SOURCE 1: Check SUGGESTED plans from MealPlan/MealPlanItem in a date window
+                # New behavior: use plan start_date window [today - N, today + M]
+                # so that when user plans ahead (future days) or adjusts recent days,
+                # we still avoid repeating dishes in that 2N+1 day window.
+                window_days_past = 14
+                window_days_future = 14
 
-                # Fetch more plans to ensure we block all recent suggestions
-                recent_plans = plan_collection.query.fetch_objects(filters=plan_filter, limit=50)
-                
-                # CRITICAL: Also check plans from TODAY to prevent duplicates in same session
-                # This prevents suggesting the same plan multiple times in one day
-                # Check BOTH created_at (when plan was created) AND start_date (plan date)
-                today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                today_utc = datetime.now(timezone.utc).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                window_start = today_utc - timedelta(days=window_days_past)
+                window_end = today_utc + timedelta(days=window_days_future)
+
+                window_start_str = window_start.isoformat().replace("+00:00", "Z")
+                window_end_str = window_end.isoformat().replace("+00:00", "Z")
+
+                plan_filter = build_filters_from_where(
+                    {
+                        "operator": "And",
+                        "operands": [
+                            {
+                                "path": ["user_id"],
+                                "operator": "Equal",
+                                "valueString": user_id,
+                            },
+                            {
+                                "path": ["plan_type"],
+                                "operator": "Equal",
+                                "valueString": "day",
+                            },
+                            {
+                                "path": ["start_date"],
+                                "operator": "GreaterThanEqual",
+                                "valueDate": window_start_str,
+                            },
+                            {
+                                "path": ["start_date"],
+                                "operator": "LessThanEqual",
+                                "valueDate": window_end_str,
+                            },
+                        ],
+                    }
+                )
+
+                # Fetch plans in the start_date window [today - N, today + M]
+                recent_plans = plan_collection.query.fetch_objects(
+                    filters=plan_filter, limit=100
+                )
+
+                # For same-day duplication safety, also consider plans created today
+                # (in case some plans do not have start_date set consistently)
+                today_start = today_utc
                 today_start_str = today_start.isoformat().replace("+00:00", "Z")
-                
-                # Filter 1: Plans created today (most recent plans)
-                today_created_filter = build_filters_from_where({
-                    "operator": "And",
-                    "operands": [
-                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                        {"path": ["plan_type"], "operator": "Equal", "valueString": "day"},
-                        {"path": ["created_at"], "operator": "GreaterThanEqual", "valueDate": today_start_str}
-                    ]
-                })
-                today_created_plans = plan_collection.query.fetch_objects(filters=today_created_filter, limit=50)
-                
-                # Filter 2: Plans with start_date = today (plans for today)
-                today_startdate_filter = build_filters_from_where({
-                    "operator": "And",
-                    "operands": [
-                        {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                        {"path": ["plan_type"], "operator": "Equal", "valueString": "day"},
-                        {"path": ["start_date"], "operator": "GreaterThanEqual", "valueDate": today_start_str}
-                    ]
-                })
-                today_startdate_plans = plan_collection.query.fetch_objects(filters=today_startdate_filter, limit=50)
-                
-                # Merge all today's plans into recent_plans to ensure we block duplicates from same day
+
+                today_created_filter = build_filters_from_where(
+                    {
+                        "operator": "And",
+                        "operands": [
+                            {
+                                "path": ["user_id"],
+                                "operator": "Equal",
+                                "valueString": user_id,
+                            },
+                            {
+                                "path": ["plan_type"],
+                                "operator": "Equal",
+                                "valueString": "day",
+                            },
+                            {
+                                "path": ["created_at"],
+                                "operator": "GreaterThanEqual",
+                                "valueDate": today_start_str,
+                            },
+                        ],
+                    }
+                )
+                today_created_plans = plan_collection.query.fetch_objects(
+                    filters=today_created_filter, limit=50
+                )
+
+                # Merge today's created plans into recent_plans to ensure same-day variety
                 all_today_plans = []
                 if today_created_plans.objects:
                     all_today_plans.extend(today_created_plans.objects)
-                if today_startdate_plans.objects:
-                    all_today_plans.extend(today_startdate_plans.objects)
-                
+
                 # Deduplicate by UUID and merge into recent_plans
                 seen_uuids = {p.uuid for p in recent_plans.objects}
                 for plan_obj in all_today_plans:
@@ -1387,10 +1556,10 @@ async def plan_day_e2e_tool(
                             f"BLOCKED to prevent same-day repetition"
                         )
                 
-                # CRITICAL: Block dishes that appear >= 2 times in 30 days to prevent repetition
-                # This helps block frequently appearing dishes like "bún cá rô", "gà xé phay", "cá kho riềng"
+                # CRITICAL: Block dishes that appear >= 1 time in 30 days to strongly prevent repetition
+                # This aggressively blocks frequently appearing dishes like "bún cá rô", "gà xé phay", "cá kho riềng"
                 for dish_name, freq in dish_frequency.items():
-                    if freq >= 2:
+                    if freq >= 1:
                         # Add to blocklist to ensure they are blocked
                         recent_recipe_names.add(dish_name)
                         logging.info(
@@ -1398,9 +1567,9 @@ async def plan_day_e2e_tool(
                             f"(appeared {freq} times in last 30 days) - BLOCKED to prevent repetition"
                         )
                 
-                # Also block recipe IDs that appear >= 2 times
+                # Also block recipe IDs that appear >= 1 time
                 for recipe_id, freq in recipe_id_frequency.items():
-                    if freq >= 2 and recipe_id != "default_white_rice":
+                    if freq >= 1 and recipe_id != "default_white_rice":
                         recent_recipe_ids.add(recipe_id)
                         logging.info(
                             f"plan_day_e2e_tool: Frequently appearing recipe ID '{recipe_id}' "
@@ -1783,23 +1952,53 @@ async def plan_day_e2e_tool(
         used_today_ids: set[str] = set()
         used_today_names: set[str] = set()
 
-        def _mark_used(recipe: Dict[str, Any] | None):
+        def _mark_used(recipe: Dict[str, Any] | None, context: str = ""):
             """Remember selected recipe to avoid reusing within the same plan."""
             if not recipe:
+                logging.debug(f"_mark_used: SKIP_NONE | context={context}")
                 return
             rid = str(recipe.get("food_id", "") or "")
             name = str(recipe.get("dish_name", "")).lower().strip()
+            was_id_tracked = False
+            was_name_tracked = False
+            
             # Skip tracking default white rice to allow daily staple reuse
             if rid and rid != "default_white_rice":
-                used_today_ids.add(rid)
+                if rid not in used_today_ids:
+                    used_today_ids.add(rid)
+                    was_id_tracked = True
+                else:
+                    logging.warning(
+                        f"_mark_used: DUPLICATE_ID_DETECTED | id={rid} | name='{name}' | "
+                        f"context={context} | already_in_used_today_ids"
+                    )
+            else:
+                logging.debug(f"_mark_used: SKIP_DEFAULT_RICE | id={rid} | name='{name}' | context={context}")
+            
             if name and name not in {"cơm trắng", "com trang", "white rice"}:
-                used_today_names.add(name)
+                if name not in used_today_names:
+                    used_today_names.add(name)
+                    was_name_tracked = True
+                else:
+                    logging.warning(
+                        f"_mark_used: DUPLICATE_NAME_DETECTED | id={rid} | name='{name}' | "
+                        f"context={context} | already_in_used_today_names"
+                    )
+            
             logging.debug(
-                "plan_day_e2e_tool: mark_used id=%s name=%s | used_today_ids=%d used_today_names=%d",
-                rid,
-                name,
-                len(used_today_ids),
-                len(used_today_names),
+                f"_mark_used: {'TRACKED' if (was_id_tracked or was_name_tracked) else 'SKIPPED'} | "
+                f"id={rid} | name='{name}' | context={context} | "
+                f"used_today_ids={len(used_today_ids)} | used_today_names={len(used_today_names)} | "
+                f"id_tracked={was_id_tracked} | name_tracked={was_name_tracked}"
+            )
+    
+        # Shared wrapper to reuse LLM selection with duplicate guard
+        def _try_select_with_used_check(*args, **kwargs):
+            return _try_select_from_llm_suggestions(
+                *args,
+                used_today_ids=used_today_ids,
+                used_today_names=used_today_names,
+                **kwargs,
             )
         
         # Use macro_fit strategy if targets available for better quality
@@ -1838,9 +2037,13 @@ async def plan_day_e2e_tool(
                 mapped_recipe = _map_llm_suggestion_to_recipe(
                     suggestion.model_dump() if hasattr(suggestion, 'model_dump') else suggestion,
                     recipes,
-                    "breakfast"
+                    "breakfast",
+                    used_today_ids=used_today_ids,
+                    used_today_names=used_today_names,
                 )
-                if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set and str(mapped_recipe.get("food_id", "")) not in used_today_ids:
+                # Note: _map_llm_suggestion_to_recipe already checks used_today_ids and used_today_names
+                # But we still check recent_recipe_ids_set here for additional safety
+                if mapped_recipe and str(mapped_recipe.get("food_id", "")) not in recent_recipe_ids_set:
                     if _is_hotpot(mapped_recipe):
                         logging.warning(
                             "BREAKFAST_REJECT_HOTPOT: Skipping hotpot for breakfast suggestion: %s",
@@ -1849,7 +2052,7 @@ async def plan_day_e2e_tool(
                         continue
                     breakfast = mapped_recipe
                     yield Response(f"✅ Selected breakfast from AI suggestion: {breakfast.get('dish_name', 'Unknown')}")
-                    _mark_used(breakfast)
+                    _mark_used(breakfast, context="breakfast_llm_selection")
                     break
         
         # Fallback to rule-based selection if LLM mapping failed
@@ -1903,7 +2106,7 @@ async def plan_day_e2e_tool(
                 logging.warning("BREAKFAST_REJECT_HOTPOT: Rule-based breakfast is hotpot, retrying fallback...")
                 breakfast = None
             if breakfast:
-                _mark_used(breakfast)
+                _mark_used(breakfast, context="breakfast_rule_based")
         if not breakfast:
             # Fallback: try any breakfast-type dish (still with kcal limit and protein requirement)
             breakfast_targets = targets.copy() if targets else None
@@ -1944,7 +2147,7 @@ async def plan_day_e2e_tool(
                 logging.warning("BREAKFAST_REJECT_HOTPOT: Fallback breakfast is hotpot, clearing...")
                 breakfast = None
             if breakfast:
-                _mark_used(breakfast)
+                _mark_used(breakfast, context="breakfast_fallback")
         if not breakfast:
             yield Response("⚠️ No breakfast dish found. Selecting best available Vietnamese breakfast option...")
             # CRITICAL: Only select Vietnamese breakfast dishes, not main dishes
@@ -2020,7 +2223,7 @@ async def plan_day_e2e_tool(
         # Remember breakfast to avoid reusing within this plan (avoid double-marking)
         bf_id = str(breakfast.get("food_id", ""))
         if bf_id not in used_today_ids:
-            _mark_used(breakfast)
+            _mark_used(breakfast, context="breakfast_final")
         
         # CRITICAL: Validate breakfast kcal and protein after selection
         breakfast_macros = _get_meal_macros(breakfast)
@@ -2188,7 +2391,7 @@ async def plan_day_e2e_tool(
                 yield Response("ℹ️ No suitable lunch dish found. Using default white rice.")
         
         lunch_rice = lunch_carb
-        _mark_used(lunch_rice)
+        _mark_used(lunch_rice, context="lunch_rice_selection")
         
         # Select accompaniments
         if lunch_rice:
@@ -2205,7 +2408,7 @@ async def plan_day_e2e_tool(
                 recipes, excluded, recent_recipe_ids_set,
                 selection_strategy, lunch_targets,
                 llm_draft=llm_draft,
-                try_select_from_llm_suggestions=_try_select_from_llm_suggestions,
+                try_select_from_llm_suggestions=_try_select_with_used_check,
             )
 
             # If eating with rice and deficit remains, force-add accompaniments (main/veg/soup)
@@ -2248,8 +2451,27 @@ async def plan_day_e2e_tool(
                     lunch_veg = None
 
             # Mark used to prevent intra-plan reuse
+            # Only mark dishes that haven't been marked yet (e.g., by _enrich_rice_meal)
             for dish in (lunch_rice, lunch_main, lunch_veg, lunch_soup, lunch_fruit):
-                _mark_used(dish)
+                if not dish:
+                    continue
+                dish_id = str(dish.get("food_id", "") or "")
+                dish_name = str(dish.get("dish_name", "")).lower().strip()
+                # Skip if already tracked (e.g., by _enrich_rice_meal)
+                if dish_id and dish_id != "default_white_rice" and dish_id in used_today_ids:
+                    logging.debug(
+                        f"SKIP_REMARK_USED: lunch dish '{dish.get('dish_name', 'Unknown')}' (id={dish_id}) "
+                        f"already in used_today_ids, skipping remark"
+                    )
+                    continue
+                if dish_name and dish_name not in {"cơm trắng", "com trang", "white rice"} and dish_name in used_today_names:
+                    logging.debug(
+                        f"SKIP_REMARK_USED: lunch dish '{dish.get('dish_name', 'Unknown')}' (name='{dish_name}') "
+                        f"already in used_today_names, skipping remark"
+                    )
+                    continue
+                dish_name_display = dish.get("dish_name", "Unknown")
+                _mark_used(dish, context=f"lunch_accompaniment_{dish_name_display}")
             
             # CRITICAL: Ensure no duplicate dishes in lunch
             lunch_dishes = [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit]
@@ -2341,23 +2563,6 @@ async def plan_day_e2e_tool(
                     has_severe_fat_excess = fat_excess_ratio > 0.15  # Balanced: 15% to prevent over-eating but allow nutrition
                     has_severe_carb_excess = carb_excess_ratio > 0.15  # Balanced: 15%
                     has_severe_kcal_excess = kcal_excess_ratio > 0.15  # Balanced: 15%
-                    
-                    logging.debug(
-                        f"LUNCH_SUPP_ITERATION_{iteration + 1}: "
-                        f"protein_needed={protein_needed:.1f}g ({protein_deficit_ratio*100:.1f}% of daily) | "
-                        f"kcal_needed={kcal_needed:.1f} ({kcal_deficit_ratio*100:.1f}% of daily) | "
-                        f"fat_excess={fat_excess_ratio*100:.1f}% | carb_excess={carb_excess_ratio*100:.1f}% | "
-                        f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
-                        f"current_dishes_count={len(current_lunch_dishes)} | "
-                        f"current_lunch_kcal={current_lunch_macros.get('kcal', 0):.1f} | "
-                        f"current_lunch_protein={current_lunch_macros.get('protein_g', 0):.1f}g | "
-                        f"total_consumed_kcal={total_consumed_kcal:.1f} | "
-                        f"total_consumed_protein={total_consumed_protein:.1f}g | "
-                        f"total_consumed_fat={total_consumed_fat:.1f}g | "
-                        f"total_consumed_carb={total_consumed_carb:.1f}g | "
-                        f"actual_protein_needed={actual_protein_needed:.1f}g | "
-                        f"actual_kcal_needed={actual_kcal_needed:.1f}"
-                    )
                     
                     # CRITICAL: Stop immediately if fat excess is very high (>40%) - this is unhealthy
                     if fat_excess_ratio > 0.40:
@@ -2523,34 +2728,12 @@ async def plan_day_e2e_tool(
                         recent_recipe_ids_set.add(str(supp_recipe.get("food_id", "")))
                         # Update remaining_targets using the actual recipe macros
                         dish_macros = _macros(supp_recipe)
-                        dish_name = (
-                            supp_recipe.get("dish_name")
-                            or "Unknown"
-                        )
-                        logging.debug(
-                            f"LUNCH_SUPP_ADD: {dish_name} | "
-                            f"kcal={dish_macros.get('kcal', 0):.1f} | "
-                            f"protein={dish_macros.get('protein_g', 0):.1f}g"
-                        )
                         for k in remaining_targets:
                             remaining_targets[k] = max(0.0, remaining_targets[k] - dish_macros.get(k, 0.0))
                     
                     iteration += 1
                 
-                logging.debug(
-                    f"LUNCH_SUPP_COMPLETE: Total iterations={iteration}, "
-                    f"total_supplementary_dishes={len(all_supplementary_dishes)}, "
-                    f"final_remaining_kcal={remaining_targets.get('kcal', 0):.1f}, "
-                    f"final_remaining_protein={remaining_targets.get('protein_g', 0):.1f}g"
-                )
-                
                 supplementary_dishes = all_supplementary_dishes
-                
-                # CRITICAL: Log all supplementary dishes before assigning
-                logging.debug(
-                    f"LUNCH_SUPP_DISHES_TO_ASSIGN: {len(supplementary_dishes)} dish(es): "
-                    f"{[d.get('dish_name', 'Unknown') for d in supplementary_dishes]}"
-                )
                 
                 # Add supplementary dishes to lunch components
                 # Track which supplementary dishes were assigned to existing slots to avoid double-counting
@@ -2658,26 +2841,6 @@ async def plan_day_e2e_tool(
                     lunch_total_carb = lunch_total_macros.get("carb_g", 0.0)
                     
                     # Log breakdown of lunch components
-                    logging.debug(
-                        f"LUNCH_COMPONENTS_BREAKDOWN: "
-                        f"rice={lunch_rice.get('dish_name', 'None') if lunch_rice else 'None'} | "
-                        f"main={lunch_main.get('dish_name', 'None') if lunch_main else 'None'} | "
-                        f"soup={lunch_soup.get('dish_name', 'None') if lunch_soup else 'None'} | "
-                        f"veg={lunch_veg.get('dish_name', 'None') if lunch_veg else 'None'} | "
-                        f"fruit={lunch_fruit.get('dish_name', 'None') if lunch_fruit else 'None'} | "
-                        f"supplementary_count={len(supplementary_dishes)}"
-                    )
-                    
-                    logging.debug(
-                        f"LUNCH_TOTAL_MACROS: "
-                        f"kcal={lunch_total_kcal:.1f} | "
-                        f"protein={lunch_total_protein:.1f}g | "
-                        f"fat={lunch_total_fat:.1f}g | "
-                        f"carb={lunch_total_carb:.1f}g | "
-                        f"lunch_max_kcal={lunch_max_kcal:.1f} | "
-                        f"exceeds_by={((lunch_total_kcal / lunch_max_kcal - 1.0) * 100) if lunch_max_kcal > 0 else 0:.1f}%"
-                    )
-                    
                     # CRITICAL: If lunch total exceeds lunch_max_kcal, log warning but allow for better nutrition
                     # Increased tolerance to 50% to ensure we meet nutritional targets
                     if lunch_total_kcal > lunch_max_kcal * 1.4:  # Allow up to 40% when deficit is high
@@ -2720,12 +2883,6 @@ async def plan_day_e2e_tool(
                     remaining_targets["carb_g"] = actual_remaining_carb
                     
                     # Log remaining targets AFTER update (debug only)
-                    logging.debug(
-                        f"REMAINING_TARGETS (after lunch): "
-                        f"kcal={remaining_targets.get('kcal', 0):.1f} protein={remaining_targets.get('protein_g', 0):.1f}g | "
-                        f"coverage_kcal={((total_consumed_so_far_kcal / daily_kcal_check) * 100) if daily_kcal_check > 0 else 0:.1f}%"
-                    )
-                    
                     # CRITICAL: Don't artificially adjust remaining targets - use actual remaining values
                     # Only ensure it doesn't go negative
                     if remaining_targets["kcal"] < 0:
@@ -2862,7 +3019,7 @@ async def plan_day_e2e_tool(
                 yield Response("ℹ️ No suitable dinner dish found. Using default white rice.")
         
         dinner_rice = dinner_carb
-        _mark_used(dinner_rice)
+        _mark_used(dinner_rice, context="dinner_rice_selection")
         
         # Select accompaniments
         if dinner_rice:
@@ -2879,7 +3036,7 @@ async def plan_day_e2e_tool(
                 recipes, excluded, recent_recipe_ids_set,
                 selection_strategy, dinner_targets,
                 llm_draft=llm_draft,
-                try_select_from_llm_suggestions=_try_select_from_llm_suggestions,
+                try_select_from_llm_suggestions=_try_select_with_used_check,
                 carb_dish=dinner_rice,
             )
 
@@ -2920,27 +3077,158 @@ async def plan_day_e2e_tool(
                     dinner_veg = None
 
             # Mark used to prevent intra-plan reuse (before supplementary selection)
+            # Only mark dishes that haven't been marked yet (e.g., by _enrich_rice_meal)
             for dish in (dinner_rice, dinner_main, dinner_veg, dinner_soup, dinner_fruit):
-                _mark_used(dish)
+                if not dish:
+                    continue
+                dish_id = str(dish.get("food_id", "") or "")
+                dish_name = str(dish.get("dish_name", "")).lower().strip()
+                # Skip if already tracked (e.g., by _enrich_rice_meal)
+                if dish_id and dish_id != "default_white_rice" and dish_id in used_today_ids:
+                    logging.debug(
+                        f"SKIP_REMARK_USED: dinner dish '{dish.get('dish_name', 'Unknown')}' (id={dish_id}) "
+                        f"already in used_today_ids, skipping remark"
+                    )
+                    continue
+                if dish_name and dish_name not in {"cơm trắng", "com trang", "white rice"} and dish_name in used_today_names:
+                    logging.debug(
+                        f"SKIP_REMARK_USED: dinner dish '{dish.get('dish_name', 'Unknown')}' (name='{dish_name}') "
+                        f"already in used_today_names, skipping remark"
+                    )
+                    continue
+                dish_name_display = dish.get("dish_name", "Unknown")
+                _mark_used(dish, context=f"dinner_accompaniment_{dish_name_display}")
             
             # CRITICAL: Ensure no duplicate dishes
-            all_selected_dishes = [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit, dinner_rice, dinner_main, dinner_soup, dinner_veg, dinner_fruit]
-            all_selected_ids = {str(d.get("food_id", "")) for d in all_selected_dishes if d and d.get("food_id")}
-            if len(all_selected_ids) < len([d for d in all_selected_dishes if d]):
-                logging.warning("Duplicate dishes detected in plan, removing duplicates...")
+            all_selected_dishes = [
+                breakfast,
+                lunch_rice,
+                lunch_main,
+                lunch_soup,
+                lunch_veg,
+                lunch_fruit,
+                dinner_rice,
+                dinner_main,
+                dinner_soup,
+                dinner_veg,
+                dinner_fruit,
+            ]
+            all_selected_ids = {
+                str(d.get("food_id", ""))
+                for d in all_selected_dishes
+                if d and d.get("food_id")
+            }
+            all_selected_names = {
+                str(d.get("dish_name", "")).lower().strip()
+                for d in all_selected_dishes
+                if d and d.get("dish_name")
+            }
+
+            # Also build sets/lists that IGNORE staple rice dishes when checking duplicates
+            non_rice_dishes = []
+            for d in all_selected_dishes:
+                if not d:
+                    continue
+                did = str(d.get("food_id", "") or "")
+                dname = str(d.get("dish_name", "")).lower().strip()
+                if did == "default_white_rice" or dname in {"cơm trắng", "com trang", "white rice"}:
+                    # Allow white rice to repeat across meals as a staple
+                    continue
+                non_rice_dishes.append(d)
+
+            non_rice_ids = {
+                str(d.get("food_id", ""))
+                for d in non_rice_dishes
+                if d and d.get("food_id")
+            }
+
+            # Log all selected dishes for debugging
+            logging.debug(
+                f"DUPLICATE_CHECK: all_dishes_count={len([d for d in all_selected_dishes if d])} | "
+                f"unique_ids={len(all_selected_ids)} | unique_names={len(all_selected_names)} | "
+                f"non_rice_dishes={len(non_rice_dishes)} | non_rice_unique_ids={len(non_rice_ids)} | "
+                f"used_today_ids={len(used_today_ids)} | used_today_names={len(used_today_names)}"
+            )
+
+            # Log each dish with its ID and name
+            for idx, dish in enumerate(all_selected_dishes):
+                if dish:
+                    dish_id = str(dish.get("food_id", ""))
+                    dish_name = str(dish.get("dish_name", "")).lower().strip()
+                    meal_type = [
+                        "breakfast",
+                        "lunch_rice",
+                        "lunch_main",
+                        "lunch_soup",
+                        "lunch_veg",
+                        "lunch_fruit",
+                        "dinner_rice",
+                        "dinner_main",
+                        "dinner_soup",
+                        "dinner_veg",
+                        "dinner_fruit",
+                    ][idx]
+                    logging.debug(
+                        f"DUPLICATE_CHECK_DISH: {meal_type} | id={dish_id} | name='{dish_name}'"
+                    )
+
+            # Only treat as problematic duplicates if we have collisions among NON-rice dishes
+            if len(non_rice_ids) < len(non_rice_dishes):
+                duplicate_count = len(non_rice_dishes) - len(non_rice_ids)
+                logging.warning(
+                    f"DUPLICATE_DETECTED: Found {duplicate_count} duplicate(s) (excluding staple rice) | "
+                    f"total_non_rice_dishes={len(non_rice_dishes)} | "
+                    f"unique_non_rice_ids={len(non_rice_ids)} | removing duplicates..."
+                )
+                
+                # Check each dish for duplicates
+                breakfast_id = str(breakfast.get("food_id", "")) if breakfast else None
+                lunch_ids = [str(d.get("food_id", "")) for d in [lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit] if d]
+                dinner_ids_before = [str(d.get("food_id", "")) for d in [dinner_rice] if d]
+                
                 # Remove duplicates from dinner components
-                if dinner_main and str(dinner_main.get("food_id", "")) in [str(d.get("food_id", "")) for d in [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit, dinner_rice] if d]:
-                    logging.warning(f"Removing duplicate dinner main: {dinner_main.get('dish_name', 'Unknown')}")
-                    dinner_main = None
-                if dinner_veg and str(dinner_veg.get("food_id", "")) in [str(d.get("food_id", "")) for d in [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit, dinner_rice, dinner_main] if d]:
-                    logging.warning(f"Removing duplicate dinner vegetable: {dinner_veg.get('dish_name', 'Unknown')}")
-                    dinner_veg = None
-                if dinner_soup and str(dinner_soup.get("food_id", "")) in [str(d.get("food_id", "")) for d in [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit, dinner_rice, dinner_main, dinner_veg] if d]:
-                    logging.warning(f"Removing duplicate dinner soup: {dinner_soup.get('dish_name', 'Unknown')}")
-                    dinner_soup = None
-                if dinner_fruit and str(dinner_fruit.get("food_id", "")) in [str(d.get("food_id", "")) for d in [breakfast, lunch_rice, lunch_main, lunch_soup, lunch_veg, lunch_fruit, dinner_rice, dinner_main, dinner_veg, dinner_soup] if d]:
-                    logging.warning(f"Removing duplicate dinner fruit: {dinner_fruit.get('dish_name', 'Unknown')}")
-                    dinner_fruit = None
+                if dinner_main:
+                    dinner_main_id = str(dinner_main.get("food_id", ""))
+                    dinner_main_name = dinner_main.get("dish_name", "Unknown")
+                    if dinner_main_id in ([breakfast_id] if breakfast_id else []) + lunch_ids + dinner_ids_before:
+                        logging.warning(
+                            f"DUPLICATE_REMOVE: dinner_main | id={dinner_main_id} | name='{dinner_main_name}' | "
+                            f"duplicate_of=breakfast_or_lunch"
+                        )
+                        dinner_main = None
+                
+                if dinner_veg:
+                    dinner_veg_id = str(dinner_veg.get("food_id", ""))
+                    dinner_veg_name = dinner_veg.get("dish_name", "Unknown")
+                    current_dinner_ids = [str(d.get("food_id", "")) for d in [dinner_rice, dinner_main] if d]
+                    if dinner_veg_id in ([breakfast_id] if breakfast_id else []) + lunch_ids + current_dinner_ids:
+                        logging.warning(
+                            f"DUPLICATE_REMOVE: dinner_veg | id={dinner_veg_id} | name='{dinner_veg_name}' | "
+                            f"duplicate_of=breakfast_or_lunch_or_dinner"
+                        )
+                        dinner_veg = None
+                
+                if dinner_soup:
+                    dinner_soup_id = str(dinner_soup.get("food_id", ""))
+                    dinner_soup_name = dinner_soup.get("dish_name", "Unknown")
+                    current_dinner_ids = [str(d.get("food_id", "")) for d in [dinner_rice, dinner_main, dinner_veg] if d]
+                    if dinner_soup_id in ([breakfast_id] if breakfast_id else []) + lunch_ids + current_dinner_ids:
+                        logging.warning(
+                            f"DUPLICATE_REMOVE: dinner_soup | id={dinner_soup_id} | name='{dinner_soup_name}' | "
+                            f"duplicate_of=breakfast_or_lunch_or_dinner"
+                        )
+                        dinner_soup = None
+                
+                if dinner_fruit:
+                    dinner_fruit_id = str(dinner_fruit.get("food_id", ""))
+                    dinner_fruit_name = dinner_fruit.get("dish_name", "Unknown")
+                    current_dinner_ids = [str(d.get("food_id", "")) for d in [dinner_rice, dinner_main, dinner_veg, dinner_soup] if d]
+                    if dinner_fruit_id in ([breakfast_id] if breakfast_id else []) + lunch_ids + current_dinner_ids:
+                        logging.warning(
+                            f"DUPLICATE_REMOVE: dinner_fruit | id={dinner_fruit_id} | name='{dinner_fruit_name}' | "
+                            f"duplicate_of=breakfast_or_lunch_or_dinner"
+                        )
+                        dinner_fruit = None
             
             # User feedback for LLM selections
             dinner_main_from_llm = dinner_main and _is_selected_from_llm(dinner_main, llm_draft, "dinner", "main", recipes)
@@ -3022,23 +3310,6 @@ async def plan_day_e2e_tool(
                     has_severe_fat_excess = fat_excess_ratio > 0.15  # Balanced: 15% to prevent over-eating but allow nutrition
                     has_severe_carb_excess = carb_excess_ratio > 0.15  # Balanced: 15%
                     has_severe_kcal_excess = kcal_excess_ratio > 0.15  # Balanced: 15%
-                    
-                    logging.debug(
-                        f"DINNER_SUPP_ITERATION_{iteration + 1}: "
-                        f"protein_needed={protein_needed:.1f}g ({protein_deficit_ratio*100:.1f}% of daily) | "
-                        f"kcal_needed={kcal_needed:.1f} ({kcal_deficit_ratio*100:.1f}% of daily) | "
-                        f"fat_excess={fat_excess_ratio*100:.1f}% | carb_excess={carb_excess_ratio*100:.1f}% | "
-                        f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
-                        f"current_dishes_count={len(current_dinner_dishes)} | "
-                        f"current_dinner_kcal={current_dinner_macros.get('kcal', 0):.1f} | "
-                        f"current_dinner_protein={current_dinner_macros.get('protein_g', 0):.1f}g | "
-                        f"total_consumed_kcal={total_consumed_kcal:.1f} | "
-                        f"total_consumed_protein={total_consumed_protein:.1f}g | "
-                        f"total_consumed_fat={total_consumed_fat:.1f}g | "
-                        f"total_consumed_carb={total_consumed_carb:.1f}g | "
-                        f"actual_protein_needed={actual_protein_needed:.1f}g | "
-                        f"actual_kcal_needed={actual_kcal_needed:.1f}"
-                    )
                     
                     # CRITICAL: Stop immediately if fat excess is very high (>40%) - this is unhealthy
                     if fat_excess_ratio > 0.40:
@@ -3174,7 +3445,8 @@ async def plan_day_e2e_tool(
                                 recent_recipe_ids_set,
                                 effective_meal_max_kcal,
                                 macro_tolerance_percent,
-                                total_consumed_so_far=total_consumed_so_far,
+                                # CRITICAL: Use total_consumed_so_far_dinner for dinner context
+                                total_consumed_so_far=total_consumed_so_far_dinner,
                                 used_recipe_names=used_today_names,
                             )
                             # Filter out invalid/empty supplementary entries (avoid 'Unknown' zero-macro dishes)
@@ -3239,23 +3511,10 @@ async def plan_day_e2e_tool(
                             supp_recipe.get("dish_name")
                             or "Unknown"
                         )
-                        # Simplified logging - only log dish name and macros
-                        logging.debug(
-                            f"DINNER_SUPP_ADD: {dish_name} | "
-                            f"kcal={dish_macros.get('kcal', 0):.1f} | "
-                            f"protein={dish_macros.get('protein_g', 0):.1f}g"
-                        )
                         for k in remaining_targets:
                             remaining_targets[k] = max(0.0, remaining_targets[k] - dish_macros.get(k, 0.0))
                     
                     iteration += 1
-                
-                logging.debug(
-                    f"DINNER_SUPP_COMPLETE: Total iterations={iteration}, "
-                    f"total_supplementary_dishes={len(all_supplementary_dishes)}, "
-                    f"final_remaining_kcal={remaining_targets.get('kcal', 0):.1f}, "
-                    f"final_remaining_protein={remaining_targets.get('protein_g', 0):.1f}g"
-                )
                 
                 supplementary_dishes = all_supplementary_dishes
                 
@@ -3365,27 +3624,6 @@ async def plan_day_e2e_tool(
                     dinner_total_fat = dinner_total_macros.get("fat_g", 0.0)
                     dinner_total_carb = dinner_total_macros.get("carb_g", 0.0)
                     
-                    # Log breakdown of dinner components
-                    logging.debug(
-                        f"DINNER_COMPONENTS_BREAKDOWN: "
-                        f"rice={dinner_rice.get('dish_name', 'None') if dinner_rice else 'None'} | "
-                        f"main={dinner_main.get('dish_name', 'None') if dinner_main else 'None'} | "
-                        f"soup={dinner_soup.get('dish_name', 'None') if dinner_soup else 'None'} | "
-                        f"veg={dinner_veg.get('dish_name', 'None') if dinner_veg else 'None'} | "
-                        f"fruit={dinner_fruit.get('dish_name', 'None') if dinner_fruit else 'None'} | "
-                        f"supplementary_count={len(supplementary_dishes)}"
-                    )
-                    
-                    logging.debug(
-                        f"DINNER_TOTAL_MACROS: "
-                        f"kcal={dinner_total_kcal:.1f} | "
-                        f"protein={dinner_total_protein:.1f}g | "
-                        f"fat={dinner_total_fat:.1f}g | "
-                        f"carb={dinner_total_carb:.1f}g | "
-                        f"dinner_max_kcal={dinner_max_kcal:.1f} | "
-                        f"exceeds_by={((dinner_total_kcal / dinner_max_kcal - 1.0) * 100) if dinner_max_kcal > 0 else 0:.1f}%"
-                    )
-                    
                     # CRITICAL: If dinner total exceeds dinner_max_kcal, log warning but allow for better nutrition
                     # Increased tolerance to 50% to ensure we meet nutritional targets
                     if dinner_total_kcal > dinner_max_kcal * 1.4:  # Allow up to 40% when deficit is high
@@ -3431,13 +3669,6 @@ async def plan_day_e2e_tool(
                     remaining_targets["fat_g"] = actual_remaining_fat
                     remaining_targets["carb_g"] = actual_remaining_carb
                     
-                    # Log remaining targets AFTER update (debug only)
-                    logging.debug(
-                        f"REMAINING_TARGETS (after dinner): "
-                        f"kcal={remaining_targets.get('kcal', 0):.1f} protein={remaining_targets.get('protein_g', 0):.1f}g | "
-                        f"coverage_kcal={((total_consumed_so_far_kcal / daily_kcal_check) * 100) if daily_kcal_check > 0 else 0:.1f}%"
-                    )
-        
         # Validate dinner components
         if not dinner_rice:
             yield Response("⚠️ Could not find dinner dish. Using available options...")
@@ -3700,7 +3931,29 @@ async def plan_day_e2e_tool(
         for supp_dish in lunch_supplementary_dishes:
             supp_recipe = supp_dish.get("recipe", supp_dish)
             dish_name = supp_recipe.get('dish_name', 'Unknown')
+            dish_id = str(supp_recipe.get('food_id', ''))
             dish_macros = _macros(supp_recipe)
+            
+            # Check for duplicates before adding
+            existing_ids = {str(acc.get("recipe", {}).get("food_id", "")) for acc in plan["lunch"]["accompaniments"]}
+            existing_ids.add(str(lunch_rice.get("food_id", "")) if lunch_rice else "")
+            existing_ids.add(str(breakfast.get("food_id", "")) if breakfast else "")
+            existing_names = {str(acc.get("recipe", {}).get("dish_name", "")).lower().strip() for acc in plan["lunch"]["accompaniments"]}
+            existing_names.add(str(lunch_rice.get("dish_name", "")).lower().strip() if lunch_rice else "")
+            existing_names.add(str(breakfast.get("dish_name", "")).lower().strip() if breakfast else "")
+            
+            dish_name_lower = dish_name.lower().strip()
+            is_duplicate_id = dish_id in existing_ids and dish_id
+            is_duplicate_name = dish_name_lower in existing_names and dish_name_lower not in {"cơm trắng", "com trang", "white rice"}
+            
+            if is_duplicate_id or is_duplicate_name:
+                logging.warning(
+                    f"PLAN_LUNCH_ADD_SUPP_SKIP_DUPLICATE: Skipping '{dish_name}' (id={dish_id}) | "
+                    f"duplicate_id={is_duplicate_id} | duplicate_name={is_duplicate_name} | "
+                    f"existing_ids={len(existing_ids)} | existing_names={len(existing_names)}"
+                )
+                continue
+            
             if dish_macros.get("kcal", 0) > 0:
                 # Determine dish type
                 dish_type = "main"
@@ -3719,13 +3972,41 @@ async def plan_day_e2e_tool(
                 })
                 logging.debug(
                     f"PLAN_LUNCH_ADD_SUPP: Added {dish_name} ({dish_type}) to plan accompaniments | "
-                    f"kcal={dish_macros.get('kcal', 0):.1f} | protein={dish_macros.get('protein_g', 0):.1f}g"
+                    f"id={dish_id} | kcal={dish_macros.get('kcal', 0):.1f} | "
+                    f"protein={dish_macros.get('protein_g', 0):.1f}g | "
+                    f"used_today_ids={len(used_today_ids)} | used_today_names={len(used_today_names)}"
                 )
         
         for supp_dish in dinner_supplementary_dishes:
             supp_recipe = supp_dish.get("recipe", supp_dish)
             dish_name = supp_recipe.get('dish_name', 'Unknown')
+            dish_id = str(supp_recipe.get('food_id', ''))
             dish_macros = _macros(supp_recipe)
+            
+            # Check for duplicates before adding
+            existing_ids = {str(acc.get("recipe", {}).get("food_id", "")) for acc in plan["dinner"]["accompaniments"]}
+            existing_ids.add(str(dinner_rice.get("food_id", "")) if dinner_rice else "")
+            existing_ids.update({str(acc.get("recipe", {}).get("food_id", "")) for acc in plan["lunch"]["accompaniments"]})
+            existing_ids.add(str(lunch_rice.get("food_id", "")) if lunch_rice else "")
+            existing_ids.add(str(breakfast.get("food_id", "")) if breakfast else "")
+            existing_names = {str(acc.get("recipe", {}).get("dish_name", "")).lower().strip() for acc in plan["dinner"]["accompaniments"]}
+            existing_names.add(str(dinner_rice.get("dish_name", "")).lower().strip() if dinner_rice else "")
+            existing_names.update({str(acc.get("recipe", {}).get("dish_name", "")).lower().strip() for acc in plan["lunch"]["accompaniments"]})
+            existing_names.add(str(lunch_rice.get("dish_name", "")).lower().strip() if lunch_rice else "")
+            existing_names.add(str(breakfast.get("dish_name", "")).lower().strip() if breakfast else "")
+            
+            dish_name_lower = dish_name.lower().strip()
+            is_duplicate_id = dish_id in existing_ids and dish_id
+            is_duplicate_name = dish_name_lower in existing_names and dish_name_lower not in {"cơm trắng", "com trang", "white rice"}
+            
+            if is_duplicate_id or is_duplicate_name:
+                logging.warning(
+                    f"PLAN_DINNER_ADD_SUPP_SKIP_DUPLICATE: Skipping '{dish_name}' (id={dish_id}) | "
+                    f"duplicate_id={is_duplicate_id} | duplicate_name={is_duplicate_name} | "
+                    f"existing_ids={len(existing_ids)} | existing_names={len(existing_names)}"
+                )
+                continue
+            
             if dish_macros.get("kcal", 0) > 0:
                 # Determine dish type
                 dish_type = "main"
@@ -3744,7 +4025,9 @@ async def plan_day_e2e_tool(
                 })
                 logging.debug(
                     f"PLAN_DINNER_ADD_SUPP: Added {dish_name} ({dish_type}) to plan accompaniments | "
-                    f"kcal={dish_macros.get('kcal', 0):.1f} | protein={dish_macros.get('protein_g', 0):.1f}g"
+                    f"id={dish_id} | kcal={dish_macros.get('kcal', 0):.1f} | "
+                    f"protein={dish_macros.get('protein_g', 0):.1f}g | "
+                    f"used_today_ids={len(used_today_ids)} | used_today_names={len(used_today_names)}"
                 )
         
         # Log total accompaniments count
