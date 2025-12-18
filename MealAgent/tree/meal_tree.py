@@ -89,9 +89,22 @@ def _detect_intent_hint(user_prompt: str | None) -> Optional[str]:
         "plan cho",
         "plan tuần",
         "plan ngày",
+        # Treat generic Vietnamese daily meal suggestion as a planning request,
+        # since users almost always mean a full-day plan (bf/lunch/dinner),
+        # not just 1–2 standalone recipes.
         "gợi ý bữa",
-        "thực đơn tuần",
-        "thực đơn ngày",
+        "gợi ý bữa ăn hôm nay",
+        "gợi ý bữa ăn cho hôm nay",
+        "gợi ý bữa ăn trong ngày",
+        "gợi ý thực đơn hôm nay",
+        "gợi ý ăn hôm nay",
+        "gợi ý hôm nay ăn gì",
+        "hôm nay ăn gì",
+        "gợi ý bữa hôm nay",
+        "gợi ý bữa ngày hôm nay",
+        "thực đơn hôm nay",
+        "thực đơn cho hôm nay",
+        "thực đơn ngày hôm nay",
     ]
     if _contains_any(lowered, plan_keywords):
         return "planning:new_plan"
@@ -397,9 +410,18 @@ def build_meal_agent_tree(
         use_elysia_collections=use_elysia_collections,
     )
 
+    logging.debug(
+        "MealAgent: build_meal_agent_tree called with user_id=%r, conversation_id=%r",
+        user_id,
+        conversation_id,
+    )
+
     # Persist identifiers for downstream tools (plan_day, logging, etc.)
     if user_id:
         tree.tree_data.environment.hidden_environment["user_id"] = user_id
+        logging.debug(
+            "MealAgent: hidden_environment user_id set to '%s' on tree creation", user_id
+        )
     if conversation_id:
         tree.tree_data.environment.hidden_environment["conversation_id"] = conversation_id
     
@@ -450,10 +472,13 @@ def build_meal_agent_tree(
             branch_id=root_id,
             instruction=(
                 "Read the user's prompt AND any intent_router.detected_intent objects in the environment before acting. "
-                "Follow the requirements/design docs mapping: "
-                "- If prompt mentions deficit keywords (\"thiếu\", \"bổ sung\", \"+200 kcal\", \"snack\", \"ăn thêm\") "
+                "Follow the requirements/design docs mapping, and ALWAYS respect detected intent hints first: "
+                "- If environment intent hint == planning:new_plan → prefer the planning branch (daily/weekly plan) even if the wording "
+                "looks like a generic suggestion (e.g. 'gợi ý bữa ăn hôm nay', 'hôm nay ăn gì'). "
+                "- If prompt mentions deficit keywords (\"thiếu\", \"bổ sung\", \"thêm\", \"+200 kcal\", \"snack\", \"ăn thêm\") "
                 "or environment intent hint == optimization:deficit_gap_fill → go to optimization branch (gap_fill/substitute/micros). "
-                "- If user explicitly requests a new plan ('thực đơn', 'kế hoạch', 'meal plan' cho ngày/tuần) → planning branch. "
+                "- If user explicitly requests a new plan ('thực đơn', 'kế hoạch', 'meal plan' cho ngày/tuần, 'gợi ý bữa ăn hôm nay', "
+                "'hôm nay ăn gì', 'gợi ý bữa ăn cho hôm nay') OR environment intent hint == planning:new_plan → planning branch. "
                 "- Pantry/shopping inventory → pantry branch. "
                 "- Cooking steps/how to make for a specific dish name (e.g. 'cách nấu phở bò', 'công thức nấu phở bò viên', "
                 "'cho tôi công thức nấu phở bò viên') OR environment intent hint == cooking:steps → DIRECTLY choose the cooking "

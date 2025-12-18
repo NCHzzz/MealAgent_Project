@@ -18,11 +18,42 @@ def _hidden_env(tree_data: TreeData) -> dict:
 
 
 def resolve_user_id(tree_data: TreeData, explicit_user_id: str | None = None) -> str | None:
+    """
+    Resolve user_id from (priority):
+      1) Explicit argument passed into the tool
+      2) Hidden environment (set by build_meal_agent_tree or previous tools)
+
+    Extra logging is added here to help debug cases where user_id is unexpectedly None.
+    """
     hidden = _hidden_env(tree_data)
-    if explicit_user_id:
-        hidden["user_id"] = explicit_user_id
-        return explicit_user_id
-    return hidden.get("user_id")
+
+    # Normalise explicit_user_id: sometimes the agent passes the literal string "None"
+    # or other placeholder values. Treat these as "no explicit user" so we can fall
+    # back to the hidden environment user_id set at tree creation.
+    normalized_explicit: str | None = explicit_user_id
+    if isinstance(explicit_user_id, str):
+        if explicit_user_id.strip().lower() in {"", "none", "null", "undefined"}:
+            normalized_explicit = None
+
+    if normalized_explicit:
+        logger.debug(
+            "resolve_user_id: using explicit user_id='%s' (overrides hidden_environment)",
+            normalized_explicit,
+        )
+        hidden["user_id"] = normalized_explicit
+        return normalized_explicit
+
+    resolved = hidden.get("user_id")
+    if resolved:
+        logger.debug(
+            "resolve_user_id: resolved from hidden_environment user_id='%s'", resolved
+        )
+    else:
+        logger.debug(
+            "resolve_user_id: no user_id found (explicit=None, hidden keys=%s)",
+            list(hidden.keys()),
+        )
+    return resolved
 
 
 async def ensure_profile_loaded(
@@ -78,6 +109,11 @@ async def ensure_profile_loaded(
 
     resolved_user = resolve_user_id(tree_data, user_id)
     if not resolved_user:
+        logger.debug(
+            "ensure_profile_loaded: user_id not resolved (explicit=%r, hidden_keys=%s)",
+            user_id,
+            list(hidden.keys()),
+        )
         return None, False
 
     try:

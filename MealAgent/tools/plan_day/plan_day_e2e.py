@@ -19,6 +19,8 @@ from MealAgent.tools.utils.planning_helpers import (
     _calculate_meal_targets,
     _calculate_total_deviation_score,
     _try_swap_alternatives,
+    load_pantry_ingredients,
+    extract_ingredients_from_query,
 )
 from MealAgent.tools.utils.recipe_classifiers import (
     _is_vietnamese_breakfast,
@@ -800,7 +802,7 @@ def _map_llm_suggestion_to_recipe(
     recent_recipe_ids_set = recent_recipe_ids_set or set()
     recent_recipe_names_set = {str(n).lower().strip() for n in (recent_recipe_names_set or set())}
     
-    # Score recipes by match quality
+        # Score recipes by match quality
     scored_recipes = []
     for recipe in recipes:
         recipe_name = str(recipe.get("dish_name", "")).lower().strip()
@@ -938,8 +940,27 @@ def _map_llm_suggestion_to_recipe(
             matching_keywords_count = sum(1 for kw in dish_keywords if kw in recipe_name)
             keyword_match_quality = matching_keywords_count / len(dish_keywords) if dish_keywords else 0
         
-        # CRITICAL: Require STRICTER matching to avoid false positives
-        # Only accept if we have strong evidence of a match
+        # CRITICAL: Require STRICTER matching to avoid false positives.
+        # Also lightly incorporate Weaviate / search-and-rank semantics (fit_score)
+        # when available, so that mapping prefers recipes already highly ranked
+        # by the retrieval layer.
+        #
+        # NOTE: fit_score is in [0, 100]; we scale it down so it complements,
+        # but does not dominate, the textual matching score.
+        fit_score = 0.0
+        try:
+            raw_fit = best_recipe.get("fit_score", 0.0)
+            if isinstance(raw_fit, (int, float)):
+                fit_score = float(raw_fit)
+        except Exception:  # pragma: no cover - defensive
+            fit_score = 0.0
+
+        # Integrate a small fraction of fit_score into the overall score
+        # (up to +20 points when fit_score≈100).
+        best_score += 0.2 * fit_score
+
+        # CRITICAL: Require STRICTER matching to avoid false positives.
+        # Only accept if we have strong evidence of a match.
         has_strong_match = (
             has_exact_match or  # Exact name match - highest confidence
             has_substring_match or  # Substring match - high confidence
@@ -1161,9 +1182,43 @@ async def plan_day_e2e_tool(
             pass
 
         # Prepare constraints for LLM draft
+        # Merge constraint filters (if any) with profile-level settings to give the LLM
+        # richer context about diet_type, allergens and health goal.
+        profile_dict: Dict[str, Any] = profile or {}
+
+        # Start with constraint_guard filters (these may already encode some diet/allergen prefs)
+        filter_diet_types = filters_metadata.get("diet_types", []) if filters_metadata else []
+        filter_allergens = filters_metadata.get("exclude_allergens", []) if filters_metadata else []
+
+        # Profile-level fields
+        profile_diet_type = profile_dict.get("diet_type")
+        profile_allergens = profile_dict.get("allergens") or []
+        profile_goal = profile_dict.get("goal")
+
+        # Normalise to lists and merge
+        merged_diet_types: list[str] = []
+        seen_diets: set[str] = set()
+        for src in (filter_diet_types, [profile_diet_type] if profile_diet_type else []):
+            for dt in src or []:
+                dt_str = str(dt).strip()
+                if dt_str and dt_str.lower() not in seen_diets:
+                    seen_diets.add(dt_str.lower())
+                    merged_diet_types.append(dt_str)
+
+        merged_allergens: list[str] = []
+        seen_allergens: set[str] = set()
+        for src in (filter_allergens, profile_allergens):
+            for al in src or []:
+                al_str = str(al).strip()
+                if al_str and al_str.lower() not in seen_allergens:
+                    seen_allergens.add(al_str.lower())
+                    merged_allergens.append(al_str)
+
         constraints_dict = {
-            "diet_types": filters_metadata.get("diet_types", []) if filters_metadata else [],
-            "exclude_allergens": filters_metadata.get("exclude_allergens", []) if filters_metadata else [],
+            "diet_types": merged_diet_types,
+            "exclude_allergens": merged_allergens,
+            # Expose user goal so LLM can bias suggestions (e.g. weight loss, muscle gain, health conditions)
+            "goal": profile_goal,
         }
         
         # Get CONSUMED meal history from MealLogEntry for LLM draft (before recipe search)
@@ -1219,6 +1274,51 @@ async def plan_day_e2e_tool(
             logging.debug(f"plan_day_e2e_tool: Could not load consumed meal history from MealLogEntry: {e}")
             # Continue without meal history
         
+        # Load pantry ingredients (from collection or extract from query)
+        available_ingredients: List[str] = []
+        try:
+            # First, try to load from pantry collection
+            pantry_ingredients = load_pantry_ingredients(resolved_user_id, client_manager)
+            if pantry_ingredients:
+                available_ingredients.extend(pantry_ingredients)
+                logging.info(
+                    f"plan_day_e2e_tool: loaded {len(pantry_ingredients)} ingredient(s) from PantryItem collection: "
+                    f"{', '.join(pantry_ingredients[:10])}"
+                )
+            else:
+                logging.debug(f"plan_day_e2e_tool: no ingredients found in PantryItem collection for user {resolved_user_id}")
+            
+            # Also extract from query if user mentioned ingredients directly
+            if query_text:
+                query_ingredients = extract_ingredients_from_query(query_text)
+                if query_ingredients:
+                    # Merge with pantry ingredients (deduplicate)
+                    seen = set(available_ingredients)
+                    added_from_query = []
+                    for ing in query_ingredients:
+                        if ing not in seen:
+                            available_ingredients.append(ing)
+                            seen.add(ing)
+                            added_from_query.append(ing)
+                    if added_from_query:
+                        logging.info(
+                            f"plan_day_e2e_tool: extracted {len(added_from_query)} additional ingredient(s) from query: "
+                            f"{', '.join(added_from_query[:10])}"
+                        )
+            
+            if available_ingredients:
+                logging.info(
+                    f"plan_day_e2e_tool: PANTRY_INTEGRATION | total_available_ingredients={len(available_ingredients)} | "
+                    f"ingredients={', '.join(available_ingredients[:15])} | "
+                    f"will_pass_to_llm_draft=True | will_add_to_search_query=True"
+                )
+                yield Response(f"📦 Using {len(available_ingredients)} available ingredient(s) from pantry: {', '.join(available_ingredients[:10])}")
+            else:
+                logging.debug(f"plan_day_e2e_tool: PANTRY_INTEGRATION | no ingredients available, planning without pantry context")
+        except Exception as e:
+            logging.warning(f"plan_day_e2e_tool: failed to load pantry ingredients: {e}", exc_info=True)
+            # Continue without pantry ingredients
+        
         # Phase 2.1: LLM Draft Step (BEFORE recipe search, as per flow)
         llm_draft: LLMDraftResponse | None = None
         if base_lm:
@@ -1230,6 +1330,7 @@ async def plan_day_e2e_tool(
                     meal_history=meal_history_dish_names,
                     constraints=constraints_dict,
                     user_preferences=user_preferences if user_preferences else None,
+                    available_ingredients=available_ingredients if available_ingredients else None,
                     tree_data=tree_data,
                 )
                 if llm_draft:
@@ -1272,7 +1373,86 @@ async def plan_day_e2e_tool(
 
             # Search recipes from Weaviate database
             # This ensures we always get the latest recipes with up-to-date macros
-            search_query = query_text if query_text else "Vietnamese recipes"
+            #
+            # IMPROVEMENT: Instead of using a generic natural-language query like
+            # "Gợi ý bữa ăn hôm nay", leverage LLM draft suggestions (dish names)
+            # to build a more informative search query for Weaviate.
+            if llm_draft and (
+                (getattr(llm_draft, "breakfast", None) and llm_draft.breakfast.suggestions)
+                or (getattr(llm_draft, "lunch", None) and llm_draft.lunch.suggestions)
+                or (getattr(llm_draft, "dinner", None) and llm_draft.dinner.suggestions)
+            ):
+                suggestion_names: list[str] = []
+
+                def _collect_names(slot):
+                    meal_slot = getattr(llm_draft, slot, None)
+                    if not meal_slot or not getattr(meal_slot, "suggestions", None):
+                        return
+                    for s in meal_slot.suggestions:
+                        sd = s.model_dump() if hasattr(s, "model_dump") else s
+                        name = str(sd.get("dish_name") or "").strip()
+                        if name:
+                            suggestion_names.append(name)
+
+                _collect_names("breakfast")
+                _collect_names("lunch")
+                _collect_names("dinner")
+
+                # Deduplicate while preserving order
+                seen_names: set[str] = set()
+                unique_names: list[str] = []
+                for n in suggestion_names:
+                    nl = n.lower()
+                    if nl not in seen_names:
+                        seen_names.add(nl)
+                        unique_names.append(n)
+
+                if unique_names:
+                    # Build a compact, dish-name-focused query for Weaviate hybrid search
+                    search_query = ", ".join(unique_names)
+                    
+                    # Add pantry ingredients to search query to boost recipes using available ingredients
+                    if available_ingredients:
+                        ingredients_query = ", ".join(available_ingredients[:10])  # Limit to 10 ingredients
+                        search_query = f"{search_query}, {ingredients_query}"
+                        logging.info(
+                            f"plan_day_e2e_tool: SEARCH_QUERY_WITH_PANTRY | "
+                            f"llm_suggestions_count={len(unique_names)} | "
+                            f"pantry_ingredients_count={len(available_ingredients[:10])} | "
+                            f"pantry_ingredients={', '.join(available_ingredients[:10])} | "
+                            f"query_length={len(search_query)}"
+                        )
+                        logging.debug(
+                            "plan_day_e2e_tool: using LLM suggestion dish names + pantry ingredients for search query: %s",
+                            search_query[:200] + "..." if len(search_query) > 200 else search_query,
+                        )
+                    else:
+                        logging.debug(
+                            "plan_day_e2e_tool: using LLM suggestion dish names for search query: %s",
+                            search_query[:200] + "..." if len(search_query) > 200 else search_query,
+                        )
+                else:
+                    # Fallback to original behaviour when no usable names are present
+                    search_query = query_text if query_text else "Vietnamese recipes"
+                    # Add pantry ingredients if available
+                    if available_ingredients:
+                        ingredients_query = ", ".join(available_ingredients[:10])
+                        search_query = f"{search_query}, {ingredients_query}"
+                        logging.info(
+                            f"plan_day_e2e_tool: SEARCH_QUERY_WITH_PANTRY | "
+                            f"fallback_query=True | pantry_ingredients={', '.join(available_ingredients[:10])}"
+                        )
+            else:
+                # No LLM draft or no suggestions – use original generic query
+                search_query = query_text if query_text else "Vietnamese recipes"
+                # Add pantry ingredients if available
+                if available_ingredients:
+                    ingredients_query = ", ".join(available_ingredients[:10])
+                    search_query = f"{search_query}, {ingredients_query}"
+                    logging.info(
+                        f"plan_day_e2e_tool: SEARCH_QUERY_WITH_PANTRY | "
+                        f"no_llm_draft=True | pantry_ingredients={', '.join(available_ingredients[:10])}"
+                    )
             recipes: list[Dict[str, Any]] = []
             
             async for result in search_and_rank_tool(
@@ -1836,6 +2016,52 @@ async def plan_day_e2e_tool(
 
         except Exception as e:
             logging.debug(f"plan_day_e2e_tool: Could not check recent plans for variety: {e}")
+
+        # If Weaviate returns too few recipes, try to broaden the search
+        if len(recipes) < 3:
+            logging.info(
+                "plan_day_e2e_tool: too few recipes from initial search (count=%d), "
+                "attempting broader fallback query...",
+                len(recipes),
+            )
+            try:
+                from MealAgent.tools.search.search_and_rank import search_and_rank_tool as _search_and_rank_tool
+
+                fallback_recipes: list[Dict[str, Any]] = []
+                # Use a broad Vietnamese query that is decoupled from the original natural-language prompt
+                fallback_query = "Vietnamese recipes for breakfast, lunch and dinner"
+                async for result in _search_and_rank_tool(
+                    tree_data=tree_data,
+                    client_manager=client_manager,
+                    query_text=fallback_query,
+                    collection_name=collection_name,
+                    limit=300,
+                    top_k=300,
+                    base_lm=base_lm,
+                    complex_lm=complex_lm,
+                    **kwargs,
+                ):
+                    if isinstance(result, Error):
+                        logging.warning(
+                            "plan_day_e2e_tool: fallback search_and_rank_tool failed: %s",
+                            str(result),
+                        )
+                        break
+                    if isinstance(result, Result) and result.objects:
+                        fallback_recipes = list(result.objects)
+                if fallback_recipes:
+                    logging.info(
+                        "plan_day_e2e_tool: fallback search provided %d recipes; "
+                        "replacing initial recipe set (initial=%d).",
+                        len(fallback_recipes),
+                        len(recipes),
+                    )
+                    recipes = fallback_recipes
+            except Exception as fb_exc:  # pragma: no cover - defensive
+                logging.warning(
+                    "plan_day_e2e_tool: broader fallback query failed: %s",
+                    fb_exc,
+                )
 
         if len(recipes) < 3:
             yield Error(

@@ -235,6 +235,8 @@ def _normalize_suggestion(item: Dict[str, Any], meal_slot: str) -> Optional[Meal
     field_mapping = {
         "dish_name": "dish_name",
         "name": "dish_name",
+        # Some LLM templates return 'meal_name' instead of 'dish_name' – normalize it.
+        "meal_name": "dish_name",
         "general_term": "general_term",
         "term": "general_term",
         "role": "role",
@@ -283,9 +285,39 @@ def _normalize_suggestion(item: Dict[str, Any], meal_slot: str) -> Optional[Meal
         else:
             normalized[mapped_key] = value
     
-    # Set defaults
-    if "meal_type" not in normalized:
-        normalized["meal_type"] = meal_slot
+    # Set defaults / infer missing fields
+    # Ensure we always have meal_type aligned with the current slot
+    normalized.setdefault("meal_type", meal_slot)
+
+    # Ensure we always have a dish_name; otherwise this suggestion is unusable
+    dish_name_raw = normalized.get("dish_name")
+    if not dish_name_raw:
+        logger.warning("LLM draft suggestion missing 'dish_name', skipping: %s", item)
+        return None
+
+    # Auto-generate general_term if missing using a Vietnamese‑aware slug
+    if "general_term" not in normalized or not str(normalized["general_term"]).strip():
+        dish_name = str(dish_name_raw)
+        general_term = dish_name.lower()
+        try:
+            import unicodedata
+
+            general_term = unicodedata.normalize("NFD", general_term)
+            general_term = "".join(
+                c for c in general_term if unicodedata.category(c) != "Mn"
+            )
+        except ImportError:
+            pass
+        general_term = re.sub(r"[^a-z0-9\s-]", "", general_term)
+        general_term = re.sub(r"\s+", "-", general_term).strip("-")
+        normalized["general_term"] = general_term or "mon-an"
+
+    # If role is still missing, infer a sensible default from meal_slot
+    if "role" not in normalized or not str(normalized["role"]).strip():
+        if meal_slot == "breakfast":
+            normalized["role"] = "breakfast"
+        else:
+            normalized["role"] = "main"
     
     # Infer category from role or dish_name if invalid
     category = normalized.get("category", "")
@@ -348,10 +380,14 @@ async def _llm_draft_meal_suggestions(
     constraints: Dict[str, Any],
     meal_slot: str,
     user_preferences: Optional[str] = None,
+    available_ingredients: Optional[List[str]] = None,
     tree_data=None,
 ) -> Optional[MealSlotDraft]:
     """
     Use LLM to suggest meal framework for a specific meal slot.
+    
+    Args:
+        available_ingredients: List of ingredient names available in pantry or mentioned in query
     """
     if not base_lm:
         logger.debug("No LLM available, skipping LLM draft")
@@ -366,10 +402,45 @@ async def _llm_draft_meal_suggestions(
     )
     diversity_seed = random.randint(0, 10**9)
     
-    diet_types = constraints.get("diet_types", [])
-    allergens = constraints.get("exclude_allergens", [])
-    diet_text = f"Chế độ ăn: {', '.join(diet_types)}" if diet_types else "Không có chế độ ăn đặc biệt"
-    allergen_text = f"Tránh: {', '.join(allergens)}" if allergens else "Không có dị ứng"
+    diet_types = constraints.get("diet_types", []) or []
+    allergens = constraints.get("exclude_allergens", []) or []
+    goal = constraints.get("goal")
+
+    diet_text = (
+        f"Chế độ ăn: {', '.join(diet_types)}"
+        if diet_types
+        else "Không có chế độ ăn đặc biệt (có thể gợi ý đa dạng, ưu tiên món Việt cân bằng dinh dưỡng)"
+    )
+    allergen_text = (
+        f"Tránh hoàn toàn các thành phần gây dị ứng: {', '.join(allergens)}"
+        if allergens
+        else "Không có dị ứng đã biết"
+    )
+    goal_text = (
+        f"Mục tiêu sức khỏe/dinh dưỡng: {goal}"
+        if goal
+        else "Mục tiêu: ăn uống cân bằng, đủ năng lượng và đa dạng thực phẩm"
+    )
+    
+    # Add pantry/ingredients context
+    ingredients_text = ""
+    if available_ingredients and len(available_ingredients) > 0:
+        ingredients_list = ", ".join(available_ingredients[:20])  # Limit to 20 ingredients
+        ingredients_text = (
+            f"\n🍽️ QUAN TRỌNG - NGUYÊN LIỆU CÓ SẴN: "
+            f"Người dùng hiện có các nguyên liệu sau trong pantry: {ingredients_list}. "
+            f"Bạn PHẢI ưu tiên đề xuất các món ăn SỬ DỤNG các nguyên liệu này. "
+            f"Nếu không thể dùng hết, ít nhất phải dùng một số nguyên liệu trong danh sách này. "
+            f"Ví dụ: nếu có 'ức gà', hãy đề xuất các món như 'gà nướng', 'gà xào', 'phở gà', 'cơm gà', v.v. "
+            f"Nếu có 'khoai tây', hãy đề xuất 'khoai tây chiên', 'khoai tây nghiền', 'thịt kho khoai tây', v.v."
+        )
+        logger.info(
+            f"_llm_draft_meal_suggestions: PANTRY_CONTEXT_ADDED | meal_slot={meal_slot} | "
+            f"ingredients_count={len(available_ingredients)} | "
+            f"ingredients={', '.join(available_ingredients[:10])}"
+        )
+    else:
+        logger.debug(f"_llm_draft_meal_suggestions: no pantry ingredients provided for meal_slot={meal_slot}")
     
     # Meal pattern guidelines
     if meal_slot == "breakfast":
@@ -388,12 +459,13 @@ async def _llm_draft_meal_suggestions(
   {"dish_name": "Rau muống xào tỏi", "general_term": "rau-muong-xao-toi", "role": "vegetable", "meal_type": "lunch", "category": "vegetable"}
 ]"""
     
-    prompt = f"""Bạn là chuyên gia ẩm thực Việt Nam. Đề xuất 2-3 món ăn cho bữa {meal_slot}.
+    prompt = f"""Bạn là chuyên gia ẩm thực Việt Nam. Đề xuất 4-8 món ăn cho bữa {meal_slot}.
 
 ## ⚠️ QUAN TRỌNG - ƯU TIÊN MÓN ĂN VIỆT NAM:
 - PHẢI ưu tiên các món ăn Việt Nam 
 - Chỉ đề xuất món Tây/ngoại nếu không có món Việt phù hợp
 - Tên món PHẢI bằng tiếng Việt (VD: "Phở bò", "Cơm trắng", "Thịt kho tàu")
+{ingredients_text}
 
 ## YÊU CẦU:
 {pattern_guide}
@@ -401,6 +473,7 @@ async def _llm_draft_meal_suggestions(
 - Mã đa dạng hóa: {diversity_seed} (hãy dùng mã này để tạo lựa chọn khác nhau giữa các lần gọi, không lặp lại những gợi ý quen thuộc)
 - {diet_text}
 - {allergen_text}
+- {goal_text}
 
 ## FORMAT OUTPUT (BẮT BUỘC - ĐỌC KỸ):
 
@@ -417,7 +490,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
 
 ## QUY TẮC:
 
-1. **Số lượng**: ĐÚNG 2-3 món (KHÔNG được 1, 4, hoặc nhiều hơn)
+1. **Số lượng**: TỪ 4 ĐẾN 8 món (KHÔNG được ít hơn 4 hoặc nhiều hơn 8)
 
 2. **Format**: JSON array trực tiếp `[...]` chứa các OBJECT, KHÔNG phải strings
    - Mỗi item trong array PHẢI là một object `{{...}}`
@@ -462,11 +535,39 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
         if DSPY_AVAILABLE and base_lm is not None and tree_data is not None:
             try:
                 class MealDraftSignature(dspy.Signature):
-                    """Generate meal suggestions for a meal slot."""
-                    meal_slot = dspy.InputField(desc="Meal slot: breakfast, lunch, or dinner")
-                    meal_history = dspy.InputField(desc="Recently used dish names to avoid")
-                    constraints = dspy.InputField(desc="Dietary constraints and preferences")
-                    suggestions = dspy.OutputField(desc="JSON array of meal suggestions")
+                    """Generate 4-8 Vietnamese meal suggestions for a specific meal slot.
+
+                    The model MUST:
+                    - Return a JSON ARRAY (not a wrapped object) of 4-8 suggestions.
+                    - Each suggestion is an object with fields:
+                      dish_name, general_term, role, meal_type, category.
+                    - Respect dietary constraints (diet_type), allergens and health goal.
+                    """
+
+                    meal_slot = dspy.InputField(
+                        desc="Meal slot: 'breakfast', 'lunch', or 'dinner'."
+                    )
+                    meal_history = dspy.InputField(
+                        desc=(
+                            "Recently used dish names to AVOID repeating. "
+                            "Use this to ensure high variety and do not suggest these again."
+                        )
+                    )
+                    constraints = dspy.InputField(
+                        desc=(
+                            "JSON string with dietary constraints from user profile, e.g. "
+                            "{'diet_types': [...], 'exclude_allergens': [...], 'goal': '...'}."
+                            " Use this to avoid allergens and align with the user's diet_type and goal "
+                            "(weight loss, muscle gain, health conditions, etc.)."
+                        )
+                    )
+                    suggestions = dspy.OutputField(
+                        desc=(
+                            "JSON ARRAY of 4-8 meal suggestion objects. "
+                            "Each object MUST include: dish_name (Vietnamese), general_term (slug), "
+                            "role, meal_type and category; do NOT wrap in an outer object."
+                        )
+                    )
                 
                 cot = ElysiaChainOfThought(
                     MealDraftSignature,
@@ -557,14 +658,14 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
             logger.warning("LLM returned invalid format, expected list")
             return None
         
-        # Limit to 7 suggestions (increased from 3 for better variety)
-        items_to_process = suggestions_data[:7]
-        if len(suggestions_data) > 7:
-            logger.debug(f"LLM returned {len(suggestions_data)} suggestions, limiting to 7")
+        # Limit to 10 suggestions for better variety while keeping mapping manageable
+        items_to_process = suggestions_data[:10]
+        if len(suggestions_data) > 10:
+            logger.debug(f"LLM returned {len(suggestions_data)} suggestions, limiting to 10")
         
         suggestions = []
         for item in items_to_process:
-            if len(suggestions) >= 7:
+            if len(suggestions) >= 10:
                 break
             
             # Handle nested structures
@@ -575,7 +676,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
                     extracted = _extract_json_objects(item)
                     if extracted:
                         for obj in extracted:
-                            if len(suggestions) >= 7:
+                            if len(suggestions) >= 10:
                                 break
                             result = _normalize_suggestion(obj, meal_slot)
                             if result:
@@ -584,7 +685,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
             
             if isinstance(item, list):
                 for sub_item in item:
-                    if len(suggestions) >= 7:
+                    if len(suggestions) >= 10:
                         break
                     if isinstance(sub_item, dict):
                         result = _normalize_suggestion(sub_item, meal_slot)
@@ -598,7 +699,7 @@ BẠN PHẢI TRẢ VỀ JSON ARRAY TRỰC TIẾP CHỨA CÁC OBJECT, KHÔNG PH�
                     suggestions.append(result)
         
         # Filter and limit
-        valid_suggestions = _dedup_suggestions_by_name([s for s in suggestions if s is not None])[:7]
+        valid_suggestions = _dedup_suggestions_by_name([s for s in suggestions if s is not None])[:10]
         
         if valid_suggestions:
             try:
@@ -620,10 +721,14 @@ async def generate_llm_draft(
     meal_history: List[str],
     constraints: Dict[str, Any],
     user_preferences: Optional[str] = None,
+    available_ingredients: Optional[List[str]] = None,
     tree_data=None,
 ) -> Optional[LLMDraftResponse]:
     """
     Generate complete LLM draft for all meal slots (breakfast, lunch, dinner).
+    
+    Args:
+        available_ingredients: List of ingredient names available in pantry or mentioned in query
     """
     if not base_lm:
         logger.debug("No LLM available, skipping LLM draft")
@@ -631,13 +736,13 @@ async def generate_llm_draft(
     
     try:
         breakfast_draft = await _llm_draft_meal_suggestions(
-            base_lm, meal_history, constraints, "breakfast", user_preferences, tree_data
+            base_lm, meal_history, constraints, "breakfast", user_preferences, available_ingredients, tree_data
         )
         lunch_draft = await _llm_draft_meal_suggestions(
-            base_lm, meal_history, constraints, "lunch", user_preferences, tree_data
+            base_lm, meal_history, constraints, "lunch", user_preferences, available_ingredients, tree_data
         )
         dinner_draft = await _llm_draft_meal_suggestions(
-            base_lm, meal_history, constraints, "dinner", user_preferences, tree_data
+            base_lm, meal_history, constraints, "dinner", user_preferences, available_ingredients, tree_data
         )
         
         if not all([breakfast_draft, lunch_draft, dinner_draft]):

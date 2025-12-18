@@ -134,7 +134,7 @@ async def substitute_tool(
                 normalized_user_id = None
         user_id = normalized_user_id
 
-        # Desired ingredient for the NEW dish (e.g., "thịt bò")
+        # Desired ingredient for the NEW dish (e.g., "thịt bò", "cơm trắng")
         desired_ingredient = kwargs.get("desired_ingredient") or kwargs.get("substitute_ingredient") or ingredient_name
         if not desired_ingredient:
             yield Error("Bạn cần cung cấp nguyên liệu mong muốn cho món thay thế (vd: 'thịt bò').")
@@ -240,6 +240,10 @@ async def substitute_tool(
             return False
 
         # Load plan
+        # Priority:
+        #   1) Explicit plan_id (most precise)
+        #   2) Plan objects already in this tree's environment (from plan_day/plan_week)
+        #   3) Latest saved day/week plan from Weaviate for this user
         exclude_allergens: List[str] = []
         plan: Dict[str, Any] | None = None
         plan_source: str | None = None
@@ -259,27 +263,36 @@ async def substitute_tool(
             return False
 
         if plan_id:
+            # Hard preference for an explicit plan_id if the agent/tool caller provided one
             from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
+
             plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
             if plan:
-                plan_source = plan.get("plan_type", "day") + "_plan"
-        elif user_id:
-            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
-            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
-            if not plan:
-                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+                plan_source = (plan.get("plan_type", "day") or "day") + "_plan_db"
 
-        if not plan:
-            logger.debug("substitute_tool: No plan from database, trying environment cache")
+        if plan is None:
+            # Prefer the plan that was just generated in this conversation (environment cache)
             day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-            if day_plan_results and day_plan_results[0]["objects"]:
+            if day_plan_results and day_plan_results[0].get("objects"):
                 plan = copy.deepcopy(day_plan_results[0]["objects"][0])
-                plan_source = "plan_day_e2e_tool"
+                plan_source = "plan_day_e2e_tool_env"
             else:
                 week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-                if week_plan_results and week_plan_results[0]["objects"]:
+                if week_plan_results and week_plan_results[0].get("objects"):
                     plan = copy.deepcopy(week_plan_results[0]["objects"][0])
-                    plan_source = "plan_week_e2e_tool"
+                    plan_source = "plan_week_e2e_tool_env"
+
+        if plan is None and user_id:
+            # Fallback to latest persisted plan for this user (day first, then week)
+            from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
+
+            plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+            if plan:
+                plan_source = "latest_day_plan_db"
+            if not plan:
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+                if plan:
+                    plan_source = "latest_week_plan_db"
 
         # If plan loaded but contains no meals (e.g., failed item sync), fallback to environment cache
         if plan and not _plan_has_meals(plan):
@@ -311,6 +324,161 @@ async def substitute_tool(
             original_dish_name,
             replace_kw,
         )
+
+        # ------------------------------------------------------------------
+        # SPECIAL CASE: User wants to *add* white rice (cơm trắng) to dinner
+        # rather than replace the entire dish. This is a very common pattern:
+        #   - "thêm cơm trắng vào bữa tối"
+        #   - "thêm cơm trắng ăn kèm với thịt bò"
+        #
+        # For this specific ingredient, we interpret the request as:
+        #   "giữ món chính hiện tại và thêm một side 'Cơm Trắng'"
+        # instead of substituting the whole dinner with a different rice dish.
+        # ------------------------------------------------------------------
+        def _is_white_rice_phrase(text: str | None) -> bool:
+            if not text:
+                return False
+            lowered = str(text).lower()
+            return "cơm trắng" in lowered or "com trang" in lowered or "white rice" in lowered
+
+        if _is_white_rice_phrase(desired_ingredient) and plan.get("plan_type") == "day":
+            # Try to locate the dinner meal – prefer the one whose main dish
+            # matches original_dish_name (if provided).
+            target_name = (original_dish_name or "").strip().lower()
+            dinner_meal: Dict[str, Any] | None = None
+
+            for meal_data in plan.get("meals", {}).values():
+                if not isinstance(meal_data, dict):
+                    continue
+                meal_type = str(meal_data.get("meal_type") or meal_data.get("type") or "").lower()
+                if meal_type != "dinner":
+                    continue
+                recipe = meal_data.get("recipe") or {}
+                dish_name = str(recipe.get("dish_name", "")).lower()
+                if target_name and target_name in dish_name:
+                    dinner_meal = meal_data
+                    break
+
+            # Fallback: if we didn't find by name, pick the first dinner meal
+            if dinner_meal is None:
+                for meal_data in plan.get("meals", {}).values():
+                    if not isinstance(meal_data, dict):
+                        continue
+                    meal_type = str(meal_data.get("meal_type") or meal_data.get("type") or "").lower()
+                    if meal_type == "dinner":
+                        dinner_meal = meal_data
+                        break
+
+            if dinner_meal is None:
+                logger.debug("substitute_tool: no dinner meal found to add white rice to, continuing with normal substitution flow")
+            else:
+                # Check if dinner already has a rice accompaniment to avoid duplicates
+                accompaniments = list(dinner_meal.get("accompaniments") or [])
+                has_rice = False
+                for acc in accompaniments:
+                    if not isinstance(acc, dict):
+                        continue
+                    acc_recipe = acc.get("recipe") or {}
+                    rid = str(acc_recipe.get("food_id") or acc_recipe.get("recipe_id") or "")
+                    acc_name = str(acc_recipe.get("dish_name", "")).lower()
+                    if rid == "default_white_rice" or "cơm trắng" in acc_name or "com trang" in acc_name or "white rice" in acc_name:
+                        has_rice = True
+                        break
+
+                if not has_rice:
+                    try:
+                        from MealAgent.tools.plan_day.plan_day_e2e import _create_default_white_rice_recipe
+
+                        rice_recipe = _create_default_white_rice_recipe()
+                        accompaniments.append(
+                            {
+                                "recipe": rice_recipe,
+                                "servings": 1.0,
+                                "type": "carb",
+                            }
+                        )
+                        dinner_meal["accompaniments"] = accompaniments
+                        logger.debug(
+                            "substitute_tool: added default white rice accompaniment to dinner for plan_id=%s",
+                            plan.get("plan_id"),
+                        )
+                    except Exception as e:
+                        logger.warning(f"substitute_tool: failed to create default white rice recipe: {e}")
+
+                # Recompute macros for dinner only and then for the whole plan
+                # using the same helper logic as the standard substitution path.
+                from math import isfinite
+
+                def _recompute_meal_macros_for_rice(meal_obj: Dict[str, Any]) -> Dict[str, float]:
+                    recipe = meal_obj.get("recipe", {}) if isinstance(meal_obj, dict) else {}
+                    servings = meal_obj.get("servings", 1.0) if isinstance(meal_obj, dict) else 1.0
+                    macros = _get_meal_macros(recipe)
+                    total = {k: macros.get(k, 0.0) * servings for k in ["kcal", "protein_g", "fat_g", "carb_g"]}
+                    for acc in meal_obj.get("accompaniments", []):
+                        if not isinstance(acc, dict):
+                            continue
+                        acc_recipe = acc.get("recipe", {})
+                        acc_serv = acc.get("servings", 1.0)
+                        acc_macros = _get_meal_macros(acc_recipe)
+                        for k in total:
+                            total[k] += acc_macros.get(k, 0.0) * acc_serv
+                    meal_obj["macros"] = macros
+                    meal_obj["macros_total"] = total
+                    return total
+
+                total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                if plan.get("plan_type") == "day":
+                    for meal_data in plan.get("meals", {}).values():
+                        if not isinstance(meal_data, dict):
+                            continue
+                        meal_tot = _recompute_meal_macros_for_rice(meal_data)
+                        for k in total_macros:
+                            # Guard against NaNs from malformed recipes
+                            val = meal_tot.get(k, 0.0)
+                            total_macros[k] += val if isfinite(val) else 0.0
+                plan["total_macros"] = total_macros
+
+                # Persist updated plan back to Weaviate
+                persist_user_id = plan_user_id or user_id
+                if persist_user_id:
+                    plan = sync_plan_to_weaviate(
+                        plan,
+                        user_id=persist_user_id,
+                        client_manager=client_manager,
+                        start_date=plan.get("start_date"),
+                    )
+
+                yield Result(
+                    name="updated_plan",
+                    objects=[plan],
+                    metadata={
+                        "plan_type": plan.get("plan_type"),
+                        "recipes_updated": 0,
+                        "original_fdc_id": original_fdc_id,
+                        "desired_ingredient": desired_ingredient,
+                        "macros_recalculated": False,
+                        "plan_id": plan.get("plan_id"),
+                        "note": "added_default_white_rice_to_dinner",
+                    },
+                    payload_type="meal_plan",
+                    display=True,
+                )
+
+                yield Result(
+                    name="optimization_done",
+                    objects=[{"message": "optimization_complete"}],
+                    metadata={
+                        "stop_calling_tool": True,
+                        "end_conversation": False,
+                        "task_complete": True,
+                        "plan_id": plan.get("plan_id"),
+                    },
+                    payload_type="generic",
+                    display=False,
+                )
+
+                yield Response("✅ Đã thêm cơm trắng vào bữa tối của bạn (không thay đổi món chính hiện tại).")
+                return
 
         # Constraints (allergens)
         filters_results = tree_data.environment.find("constraints_guard_tool", "filters")

@@ -697,6 +697,138 @@ def _ensure_meal_plan_collections(client):
         return None, None
 
 
+def load_pantry_ingredients(
+    user_id: str,
+    client_manager,
+) -> List[str]:
+    """
+    Load pantry ingredients from Pantry/PantryItem collections.
+    
+    Args:
+        user_id: User ID
+        client_manager: ClientManager instance
+        
+    Returns:
+        List of ingredient names (normalized, lowercase)
+    """
+    if not user_id:
+        return []
+    
+    try:
+        client = client_manager.get_client()
+        try:
+            item_collection = client.collections.get("PantryItem")
+        except Exception:
+            logging.debug("PantryItem collection not available")
+            return []
+        
+        # Get all pantry items for user
+        items_filter = build_filters_from_where(
+            {"path": ["user_id"], "operator": "Equal", "valueString": user_id}
+        )
+        items_results = item_collection.query.fetch_objects(filters=items_filter, limit=200)
+        
+        ingredients = []
+        raw_ingredient_names = []
+        for obj in items_results.objects:
+            ingredient_name = obj.properties.get("ingredient_name", "").strip()
+            if ingredient_name:
+                raw_ingredient_names.append(ingredient_name)
+                # Normalize: lowercase, remove extra spaces
+                normalized = ingredient_name.lower().strip()
+                if normalized:
+                    ingredients.append(normalized)
+        
+        if ingredients:
+            logging.info(
+                f"load_pantry_ingredients: loaded {len(ingredients)} ingredient(s) for user {user_id}: "
+                f"{', '.join(raw_ingredient_names[:10])}"
+            )
+            logging.debug(
+                f"load_pantry_ingredients: normalized ingredients: {', '.join(ingredients[:10])}"
+            )
+        else:
+            logging.debug(f"load_pantry_ingredients: no ingredients found for user {user_id}")
+        return ingredients
+    except Exception as e:
+        logging.warning(f"load_pantry_ingredients: failed to load pantry: {e}")
+        return []
+
+
+def extract_ingredients_from_query(query_text: str) -> List[str]:
+    """
+    Extract ingredient names from user query text.
+    
+    Handles patterns like:
+    - "tôi có ức gà, khoai tây, dưa hấu"
+    - "tôi đang có thịt ức gà, khoai tây, dưa hấu"
+    - "dựa trên pantry của tôi" (returns empty, should use load_pantry_ingredients)
+    
+    Args:
+        query_text: User query text
+        
+    Returns:
+        List of extracted ingredient names (normalized, lowercase)
+    """
+    if not query_text:
+        return []
+    
+    import re
+    
+    query_lower = query_text.lower()
+    
+    # Skip if user just mentions "pantry" without listing ingredients
+    if "pantry" in query_lower or "kho" in query_lower or "tủ" in query_lower:
+        # Check if ingredients are explicitly listed
+        if "có" in query_lower or "đang có" in query_lower or "hiện có" in query_lower:
+            # Continue to extraction
+            pass
+        else:
+            # User just mentions pantry, should use load_pantry_ingredients instead
+            return []
+    
+    # Patterns to extract ingredients
+    patterns = [
+        r"(?:tôi\s+)?(?:có|đang có|hiện có|đã có)\s+([^,]+?)(?:\s*,|\s+và|\s*\.|$)",
+        r"(?:với|bằng|từ)\s+([^,]+?)(?:\s*,|\s+và|\s*\.|$)",
+    ]
+    
+    ingredients = []
+    for pattern in patterns:
+        matches = re.finditer(pattern, query_lower, re.IGNORECASE)
+        for match in matches:
+            ingredient_text = match.group(1).strip()
+            if ingredient_text:
+                # Split by common separators
+                parts = re.split(r'\s*,\s*|\s+và\s+|\s+&amp;\s+', ingredient_text)
+                for part in parts:
+                    part = part.strip()
+                    # Remove common prefixes/suffixes
+                    part = re.sub(r'^(?:tôi\s+)?(?:có|đang có|hiện có|đã có)\s*', '', part, flags=re.IGNORECASE)
+                    part = re.sub(r'\s*(?:trong|từ|với|bằng).*$', '', part, flags=re.IGNORECASE)
+                    part = part.strip(' .,;:!?')
+                    if part and len(part) > 1:
+                        ingredients.append(part)
+    
+    # Deduplicate while preserving order
+    seen = set()
+    unique_ingredients = []
+    for ing in ingredients:
+        ing_normalized = ing.lower().strip()
+        if ing_normalized and ing_normalized not in seen:
+            seen.add(ing_normalized)
+            unique_ingredients.append(ing_normalized)
+    
+    if unique_ingredients:
+        logging.info(
+            f"extract_ingredients_from_query: extracted {len(unique_ingredients)} ingredient(s) from query: "
+            f"{', '.join(unique_ingredients[:10])}"
+        )
+    else:
+        logging.debug(f"extract_ingredients_from_query: no ingredients extracted from query (may be pantry-only request)")
+    return unique_ingredients
+
+
 def sync_plan_to_weaviate(
     plan: Dict[str, Any],
     user_id: str,
@@ -769,10 +901,20 @@ def sync_plan_to_weaviate(
             )
             existing_same_day = plan_collection.query.fetch_objects(
                 filters=duplicate_filter,
-                limit=5,
+                limit=10,
             )
             if existing_same_day.objects:
-                for obj in existing_same_day.objects:
+                # Sort existing same-day plans by created_at (newest first)
+                sorted_same_day = sorted(
+                    list(existing_same_day.objects),
+                    key=lambda o: o.properties.get("created_at", ""),
+                    reverse=True,
+                )
+                # We want to keep at most 3 plans for the same day (including the one
+                # we are about to insert). That means we can safely delete all but
+                # the 2 most recent existing plans.
+                plans_to_delete = sorted_same_day[2:] if len(sorted_same_day) > 2 else []
+                for obj in plans_to_delete:
                     old_plan_id = obj.properties.get("plan_id")
                     # Delete old MealPlanItem records tied to the old plan
                     if old_plan_id:
@@ -784,12 +926,16 @@ def sync_plan_to_weaviate(
                             try:
                                 item_collection.data.delete_by_id(itm.uuid)
                             except Exception as e:
-                                logging.debug(f"sync_plan_to_weaviate: failed deleting old item {itm.uuid}: {str(e)}")
-                    # Delete the old MealPlan record
+                                logging.debug(
+                                    f"sync_plan_to_weaviate: failed deleting old item {itm.uuid}: {str(e)}"
+                                )
+                    # Delete the old MealPlan record itself
                     try:
                         plan_collection.data.delete_by_id(obj.uuid)
                     except Exception as e:
-                        logging.debug(f"sync_plan_to_weaviate: failed deleting old plan {obj.uuid}: {str(e)}")
+                        logging.debug(
+                            f"sync_plan_to_weaviate: failed deleting old plan {obj.uuid}: {str(e)}"
+                        )
         except Exception as e:
             logging.warning(f"sync_plan_to_weaviate: unable to purge existing day plan for {plan_start_date}: {str(e)}")
 

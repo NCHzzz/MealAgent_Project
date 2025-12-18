@@ -15,6 +15,8 @@ from MealAgent.tools.utils.planning_helpers import (
     sync_plan_to_weaviate,
     _calculate_plan_micronutrients,
     ensure_rfc3339_datetime,
+    load_pantry_ingredients,
+    extract_ingredients_from_query,
 )
 from MealAgent.tools.utils.recipe_classifiers import (
     _is_vietnamese_breakfast,
@@ -416,18 +418,227 @@ async def plan_week_e2e_tool(
         else:
             yield Response("ℹ️ No dietary constraints specified")
         
-        # Step 3: Search recipes from Weaviate database
+        # Prepare constraints_dict for LLM draft (merge filters + profile, aligned with plan_day_e2e_tool)
+        profile_dict: Dict[str, Any] = profile or {}
+        filter_diet_types = filters_metadata.get("diet_types", []) if filters_metadata else []
+        filter_allergens = filters_metadata.get("exclude_allergens", []) if filters_metadata else []
+        profile_diet_type = profile_dict.get("diet_type")
+        profile_allergens = profile_dict.get("allergens") or []
+        profile_goal = profile_dict.get("goal")
+
+        merged_diet_types: list[str] = []
+        seen_diets: set[str] = set()
+        for src in (filter_diet_types, [profile_diet_type] if profile_diet_type else []):
+            for dt in src or []:
+                dt_str = str(dt).strip()
+                if dt_str and dt_str.lower() not in seen_diets:
+                    seen_diets.add(dt_str.lower())
+                    merged_diet_types.append(dt_str)
+
+        merged_allergens: list[str] = []
+        seen_allergens: set[str] = set()
+        for src in (filter_allergens, profile_allergens):
+            for al in src or []:
+                al_str = str(al).strip()
+                if al_str and al_str.lower() not in seen_allergens:
+                    seen_allergens.add(al_str.lower())
+                    merged_allergens.append(al_str)
+
+        constraints_dict = {
+            "diet_types": merged_diet_types,
+            "exclude_allergens": merged_allergens,
+            "goal": profile_goal,
+        }
+
+        # Meal history for LLM draft and variety (CONSUMED meals from MealLogEntry, aligned with plan_day_e2e_tool)
+        meal_history_dish_names: List[str] = []
+        meal_history_recipe_ids: set[str] = set()
+        try:
+            if resolved_user_id:
+                client = client_manager.get_client()
+                meal_log_collection = client.collections.get("MealLogEntry")
+
+                recent_date = ensure_rfc3339_datetime(
+                    datetime.now(timezone.utc) - timedelta(days=30)
+                )
+                meal_filter = build_filters_from_where(
+                    {
+                        "operator": "And",
+                        "operands": [
+                            {"path": ["user_id"], "operator": "Equal", "valueString": resolved_user_id},
+                            {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": recent_date},
+                        ],
+                    }
+                )
+                meal_logs = meal_log_collection.query.fetch_objects(filters=meal_filter, limit=100)
+                if meal_logs.objects:
+                    # Sort by logged_at desc and keep latest 50, like plan_day_e2e_tool
+                    from types import SimpleNamespace
+
+                    sorted_objects = sorted(
+                        list(meal_logs.objects),
+                        key=lambda x: x.properties.get("logged_at", ""),
+                        reverse=True,
+                    )[:50]
+                    meal_logs = SimpleNamespace(objects=sorted_objects)
+                for log_obj in meal_logs.objects:
+                    dname = log_obj.properties.get("dish_name")
+                    rid = log_obj.properties.get("recipe_id")
+                    if dname:
+                        meal_history_dish_names.append(str(dname))
+                    if rid:
+                        meal_history_recipe_ids.add(str(rid))
+        except Exception as e:
+            logging.debug(f"plan_week_e2e_tool: Could not load consumed meal history from MealLogEntry: {e}")
+
+        # Load pantry ingredients (collection + query_text), aligned with plan_day_e2e_tool
+        available_ingredients: List[str] = []
+        try:
+            pantry_ingredients = load_pantry_ingredients(resolved_user_id, client_manager)
+            if pantry_ingredients:
+                available_ingredients.extend(pantry_ingredients)
+                logging.info(
+                    "plan_week_e2e_tool: loaded %d ingredient(s) from PantryItem: %s",
+                    len(pantry_ingredients),
+                    ", ".join(pantry_ingredients[:10]),
+                )
+            else:
+                logging.debug(
+                    "plan_week_e2e_tool: no ingredients found in PantryItem for user %s",
+                    resolved_user_id,
+                )
+
+            if query_text:
+                query_ingredients = extract_ingredients_from_query(query_text)
+                if query_ingredients:
+                    seen_ing = set(available_ingredients)
+                    added_from_query: list[str] = []
+                    for ing in query_ingredients:
+                        if ing not in seen_ing:
+                            available_ingredients.append(ing)
+                            seen_ing.add(ing)
+                            added_from_query.append(ing)
+                    if added_from_query:
+                        logging.info(
+                            "plan_week_e2e_tool: extracted %d additional ingredient(s) from query: %s",
+                            len(added_from_query),
+                            ", ".join(added_from_query[:10]),
+                        )
+
+            if available_ingredients:
+                logging.info(
+                    "plan_week_e2e_tool: PANTRY_INTEGRATION | total_available_ingredients=%d | ingredients=%s",
+                    len(available_ingredients),
+                    ", ".join(available_ingredients[:15]),
+                )
+                yield Response(
+                    f"📦 Using {len(available_ingredients)} available ingredient(s) from pantry: "
+                    f"{', '.join(available_ingredients[:10])}"
+                )
+        except Exception as e:
+            logging.warning(
+                "plan_week_e2e_tool: failed to load pantry ingredients: %s",
+                e,
+                exc_info=True,
+            )
+
+        # Step 3: LLM Draft (BEFORE recipe search, aligned with plan_day_e2e_tool)
+        llm_draft: LLMDraftResponse | None = None
+        if base_lm:
+            try:
+                yield Response("🤖 Generating meal suggestions with AI...")
+                user_preferences = (profile_dict or {}).get("preferences", "") or ""
+                llm_draft = await generate_llm_draft(
+                    base_lm=base_lm,
+                    meal_history=meal_history_dish_names,
+                    constraints=constraints_dict,
+                    user_preferences=user_preferences if user_preferences else None,
+                    available_ingredients=available_ingredients if available_ingredients else None,
+                    tree_data=tree_data,
+                )
+                if llm_draft:
+                    yield Response("✅ AI suggestions ready. Using to guide meal selection and search...")
+                else:
+                    logging.debug(
+                        "plan_week_e2e_tool: using rule-based weekly selection (AI suggestions unavailable)"
+                    )
+            except Exception as e:
+                logging.warning("plan_week_e2e_tool: LLM draft failed: %s", e)
+                llm_draft = None
+        else:
+            logging.debug("plan_week_e2e_tool: No base_lm available, skipping LLM draft")
+
+        # Step 4: Search recipes from Weaviate database
         # IMPORTANT: Always search from Weaviate to get latest data, not from environment cache
         # Environment cache may be stale - Weaviate is the source of truth
         yield Response("🔍 Searching recipes from database...")
         try:
             from MealAgent.tools.search.search_and_rank import search_and_rank_tool
 
-            # Search recipes from Weaviate database
-            # This ensures we always get the latest recipes with up-to-date macros
-            search_query = query_text if query_text else "Vietnamese recipes"
+            # Build search_query using LLM suggestions + pantry (aligned with plan_day_e2e_tool)
+            if llm_draft and (
+                (getattr(llm_draft, "breakfast", None) and llm_draft.breakfast.suggestions)
+                or (getattr(llm_draft, "lunch", None) and llm_draft.lunch.suggestions)
+                or (getattr(llm_draft, "dinner", None) and llm_draft.dinner.suggestions)
+            ):
+                suggestion_names: list[str] = []
+
+                def _collect_names(slot: str) -> None:
+                    meal_slot = getattr(llm_draft, slot, None)
+                    if not meal_slot or not getattr(meal_slot, "suggestions", None):
+                        return
+                    for s in meal_slot.suggestions:
+                        sd = s.model_dump() if hasattr(s, "model_dump") else s
+                        name = str(sd.get("dish_name") or "").strip()
+                        if name:
+                            suggestion_names.append(name)
+
+                _collect_names("breakfast")
+                _collect_names("lunch")
+                _collect_names("dinner")
+
+                seen_names: set[str] = set()
+                unique_names: list[str] = []
+                for n in suggestion_names:
+                    nl = n.lower()
+                    if nl not in seen_names:
+                        seen_names.add(nl)
+                        unique_names.append(n)
+
+                if unique_names:
+                    search_query = ", ".join(unique_names)
+                    if available_ingredients:
+                        ingredients_query = ", ".join(available_ingredients[:10])
+                        search_query = f"{search_query}, {ingredients_query}"
+                        logging.info(
+                            "plan_week_e2e_tool: SEARCH_QUERY_WITH_PANTRY | "
+                            "llm_suggestions_count=%d | pantry_ingredients_count=%d | query_length=%d",
+                            len(unique_names),
+                            len(available_ingredients[:10]),
+                            len(search_query),
+                        )
+                else:
+                    search_query = query_text if query_text else "Vietnamese recipes"
+                    if available_ingredients:
+                        ingredients_query = ", ".join(available_ingredients[:10])
+                        search_query = f"{search_query}, {ingredients_query}"
+                        logging.info(
+                            "plan_week_e2e_tool: SEARCH_QUERY_WITH_PANTRY | "
+                            "fallback_query=True | pantry_ingredients=%s",
+                            ", ".join(available_ingredients[:10]),
+                        )
+            else:
+                search_query = query_text if query_text else "Vietnamese recipes"
+                if available_ingredients:
+                    ingredients_query = ", ".join(available_ingredients[:10])
+                    search_query = f"{search_query}, {ingredients_query}"
+                    logging.info(
+                        "plan_week_e2e_tool: SEARCH_QUERY_WITH_PANTRY | no_llm_draft=True | pantry_ingredients=%s",
+                        ", ".join(available_ingredients[:10]),
+                    )
+
             recipes: list[Dict[str, Any]] = []
-            
+
             async for result in search_and_rank_tool(
                 tree_data=tree_data,
                 inputs={},
@@ -436,34 +647,32 @@ async def plan_week_e2e_tool(
                 client_manager=client_manager,
                 query_text=search_query,
                 collection_name="Recipe",
-                limit=1000,  # Maximum allowed by search_and_rank_tool (increased from 200 to 1000 for maximum variety)
-                top_k=1000,  # Top 1000 for planning (increased from 200 to 1000, max allowed by Weaviate)
+                limit=1000,
+                top_k=1000,
                 **kwargs,
             ):
                 if isinstance(result, Error):
-                    error_msg = str(result) if hasattr(result, '__str__') else "Unknown error"
+                    error_msg = str(result) if hasattr(result, "__str__") else "Unknown error"
                     yield Error(
                         f"Failed to search recipes from database: {error_msg}. "
                         "Please check your search query or try a different query."
                     )
                     return
                 if isinstance(result, Response):
-                    # Forward progress messages to the user
                     yield result
                 elif isinstance(result, Result) and result.objects:
-                    # Capture the ranked recipes from Weaviate search
                     recipes = list(result.objects)
 
             # Fallback: If search returned no results, try reading from environment cache
-            # This is only a fallback - primary source is always Weaviate
             if not recipes:
-                logging.debug("plan_week_e2e_tool: No recipes from Weaviate search, trying environment cache...")
+                logging.debug(
+                    "plan_week_e2e_tool: No recipes from Weaviate search, trying environment cache..."
+                )
                 sr = tree_data.environment.find("search_and_rank_tool", "topk")
                 if sr:
                     for entry in reversed(sr):
                         objs = entry.get("objects") or []
                         if objs:
-                            # Handle case where objs is a list containing a list of recipes
                             if len(objs) == 1 and isinstance(objs[0], list):
                                 recipes = objs[0]
                             else:
@@ -471,7 +680,7 @@ async def plan_week_e2e_tool(
                             break
                     if recipes:
                         yield Response("⚠️ Using cached recipes (database search returned no results)")
-            
+
             if not recipes:
                 yield Error(
                     "No recipes found in database. "
@@ -483,11 +692,10 @@ async def plan_week_e2e_tool(
             logging.debug(
                 "plan_week_e2e_tool: recipes from Weaviate search count=%d query='%s'",
                 len(recipes),
-                query_text,
+                search_query,
             )
         except Exception as e:  # pragma: no cover - defensive
             logging.error("plan_week_e2e_tool: Failed to search recipes from Weaviate: %s", e)
-            # Last resort: try environment cache
             sr = tree_data.environment.find("search_and_rank_tool", "topk")
             recipes = []
             if sr:
@@ -501,7 +709,7 @@ async def plan_week_e2e_tool(
                         break
                 if recipes:
                     yield Response("⚠️ Using cached recipes (database search failed)")
-            
+
             if not recipes:
                 yield Error(
                     f"Failed to search recipes from database: {str(e)}. "
@@ -836,69 +1044,6 @@ async def plan_week_e2e_tool(
                 return
         else:
             start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # Step 5: Generate LLM draft for meal suggestions (aligned with plan_day)
-        llm_draft: LLMDraftResponse | None = None
-        if base_lm:
-            try:
-                yield Response("🤖 Generating meal suggestions with AI...")
-                profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-                user_preferences = ""
-                if profile_results and profile_results[0]["objects"]:
-                    profile = profile_results[0]["objects"][0]
-                    user_preferences = profile.get("preferences", "") or ""
-                
-                # Collect meal history for context
-                meal_history_dish_names = []
-                try:
-                    client = client_manager.get_client()
-                    # Use MealLogEntry for CONSUMED meals, aligned with plan_day_e2e_tool
-                    meal_log_collection = client.collections.get("MealLogEntry")
-                    if user_id:
-                        meal_history_date = ensure_rfc3339_datetime(
-                            datetime.now(timezone.utc) - timedelta(days=30)
-                        )
-                        meal_filter = build_filters_from_where(
-                            {
-                                "operator": "And",
-                                "operands": [
-                                    {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                                    {"path": ["logged_at"], "operator": "GreaterThan", "valueDate": meal_history_date},
-                                ],
-                            }
-                        )
-                        meal_logs = meal_log_collection.query.fetch_objects(filters=meal_filter, limit=50)
-                        for log_obj in meal_logs.objects:
-                            dish_name = log_obj.properties.get("dish_name")
-                            if dish_name:
-                                meal_history_dish_names.append(str(dish_name))
-                except Exception as e:
-                    logging.debug(f"plan_week_e2e_tool: Could not collect meal history: {e}")
-                
-                # Build constraints dict
-                constraints_dict = {}
-                if filters_metadata:
-                    constraints_dict = {
-                        "diet_types": filters_metadata.get("diet_types", []),
-                        "exclude_allergens": filters_metadata.get("exclude_allergens", []),
-                    }
-                
-                llm_draft = await generate_llm_draft(
-                    base_lm=base_lm,
-                    meal_history=meal_history_dish_names,
-                    constraints=constraints_dict,
-                    user_preferences=user_preferences if user_preferences else None,
-                    tree_data=tree_data,
-                )
-                if llm_draft:
-                    yield Response("✅ AI suggestions ready. Using to guide meal selection...")
-                else:
-                    yield Response("ℹ️ Using rule-based selection (AI suggestions unavailable)")
-            except Exception as e:
-                logging.warning(f"plan_week_e2e_tool: LLM draft failed: {e}")
-                llm_draft = None
-        else:
-            logging.debug("plan_week_e2e_tool: No base_lm available, skipping LLM draft")
         
         # Step 6: Assemble 21-meal plan with Vietnamese meal patterns
         # Use macro_fit strategy if targets available for better quality
@@ -2721,13 +2866,27 @@ async def plan_week_e2e_tool(
                     _track_name(dish)
             
             # CRITICAL: If eating with rice and deficit remains, force-add accompaniments (main/veg/soup)
-            # This aligns with plan_day_e2e.py logic
-            def _mark_used_cb(recipe):
-                if recipe:
-                    excluded.append(recipe)
-                    _track_name(recipe)
-                    if recipe.get("food_id"):
-                        used_recipe_ids.add(str(recipe.get("food_id")))
+            # This aligns with plan_day_e2e.py logic. Keep the same callback shape as
+            # `_mark_used` in `plan_day_e2e.py` (accepting an optional `context` argument)
+            # so we can safely pass it into `_enrich_rice_meal`, which calls
+            # `mark_used_cb(..., context=...)`.
+            def _mark_used_cb(recipe, context: str = ""):
+                if not recipe:
+                    logging.debug(f"_mark_used_cb: SKIP_NONE | context={context}")
+                    return
+
+                excluded.append(recipe)
+                _track_name(recipe)
+
+                food_id = recipe.get("food_id")
+                if food_id:
+                    used_recipe_ids.add(str(food_id))
+
+                logging.debug(
+                    f"_mark_used_cb: TRACKED | id={food_id} | "
+                    f"name='{str(recipe.get('dish_name', '')).lower().strip()}' | "
+                    f"context={context} | used_recipe_ids={len(used_recipe_ids)}"
+                )
             
             lunch_main, lunch_veg, lunch_soup, lunch_msgs = _enrich_rice_meal(
                 meal_slot="lunch",
@@ -3377,7 +3536,34 @@ async def plan_week_e2e_tool(
                     f"fat={remaining_targets['fat_g']:.1f} carb={remaining_targets['carb_g']:.1f}"
                 )
             
-            if not breakfast or not lunch_rice or not lunch_main or not dinner_rice or not dinner_main:
+            # Final safety check: ensure we have at least a primary carb and something to eat for each meal.
+            # For noodle/combined dishes, main dish may legitimately be None (standalone bowls),
+            # so we only require a separate main when the carb is plain rice.
+            def _needs_main(carb_recipe: Dict[str, Any] | None, is_noodle: bool, is_combined: bool) -> bool:
+                if not carb_recipe:
+                    return False
+                if is_noodle or is_combined:
+                    return False
+                # Plain rice (including gạo lứt, cơm trắng) should have a main dish.
+                return _is_rice_dish(carb_recipe)
+
+            lunch_needs_main = _needs_main(lunch_rice, is_lunch_noodle, is_lunch_combined)
+            dinner_needs_main = _needs_main(dinner_rice, is_dinner_noodle, is_dinner_combined)
+
+            if not breakfast or not lunch_rice or not dinner_rice or (lunch_needs_main and not lunch_main) or (dinner_needs_main and not dinner_main):
+                logging.error(
+                    "plan_week_e2e_tool: Day %d - Incomplete meal assembly | "
+                    "breakfast=%s lunch_rice=%s lunch_main=%s dinner_rice=%s dinner_main=%s | "
+                    "lunch_needs_main=%s dinner_needs_main=%s",
+                    day_index + 1,
+                    bool(breakfast),
+                    bool(lunch_rice),
+                    bool(lunch_main),
+                    bool(dinner_rice),
+                    bool(dinner_main),
+                    lunch_needs_main,
+                    dinner_needs_main,
+                )
                 yield Error(f"Could not assemble meals for day {day_index + 1}")
                 return
             
