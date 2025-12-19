@@ -443,6 +443,9 @@ async def cook_mode_tool(
                     "serving_size": recipe.get("serving_size", 1),
                     "image_link": recipe.get("image_link"),
                     "cooking_time": recipe.get("cooking_time"),
+                    # Include ingredients for ingredient list requests
+                    "ingredients": recipe.get("ingredients") or [],
+                    "ingredients_with_qty": recipe.get("ingredients_with_qty") or [],
                 }
                 
                 # Emit Result for this dish immediately
@@ -780,6 +783,9 @@ async def cook_mode_tool(
         # Pass through useful recipe metadata for frontend (image, time)
         "image_link": recipe.get("image_link"),
         "cooking_time": recipe.get("cooking_time"),
+        # Include ingredients for ingredient list requests
+        "ingredients": recipe.get("ingredients") or [],
+        "ingredients_with_qty": recipe.get("ingredients_with_qty") or [],
     }
 
     yield Result(

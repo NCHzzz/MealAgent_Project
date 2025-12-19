@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useContext, useEffect, useState } from "react";
-
+import { motion } from "framer-motion";
 import { SessionContext } from "../components/contexts/SessionContext";
 import MealHistoryDisplay from "../components/chat/displays/meal_agent/MealHistoryDisplay";
 import { Separator } from "@/components/ui/separator";
@@ -95,159 +95,281 @@ export default function MealHistoryPage() {
     ];
   };
 
-        // Helper: format YYYY-MM-DD
-        const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
+  // Helper: format YYYY-MM-DD
+  const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
 
-        // Build calendar days for the current month (array of Date or null for blanks)
-        const buildMonthGrid = (month: Date) => {
-          const first = new Date(month.getFullYear(), month.getMonth(), 1);
-          const last = new Date(month.getFullYear(), month.getMonth() + 1, 0);
-          const startWeekday = first.getDay(); // 0 (Sun) - 6
-          const days: (Date | null)[] = [];
-          // Fill blanks before first day
-          for (let i = 0; i < startWeekday; i++) days.push(null);
-          for (let d = 1; d <= last.getDate(); d++) days.push(new Date(month.getFullYear(), month.getMonth(), d));
-          // Pad to complete weeks (42 cells)
-          while (days.length % 7 !== 0) days.push(null);
-          return days;
-        };
+  // Build calendar days for the current month (array of Date or null for blanks)
+  const buildMonthGrid = (month: Date) => {
+    const first = new Date(month.getFullYear(), month.getMonth(), 1);
+    const last = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+    const startWeekday = first.getDay(); // 0 (Sun) - 6
+    const days: (Date | null)[] = [];
+    // Fill blanks before first day
+    for (let i = 0; i < startWeekday; i++) days.push(null);
+    for (let d = 1; d <= last.getDate(); d++) days.push(new Date(month.getFullYear(), month.getMonth(), d));
+    // Pad to complete weeks (42 cells)
+    while (days.length % 7 !== 0) days.push(null);
+    return days;
+  };
 
-        const monthGrid = buildMonthGrid(currentMonth);
+  const monthGrid = buildMonthGrid(currentMonth);
 
-        // Map logs by date (YYYY-MM-DD)
-        const logsByDate: Record<string, any[]> = {};
-        if (historyData && historyData.logs) {
-          historyData.logs.forEach((log) => {
-            const d = log.logged_at.slice(0, 10);
-            if (!logsByDate[d]) logsByDate[d] = [] as any;
-            logsByDate[d].push(log as any);
-          });
-        }
+  // Map logs by date (YYYY-MM-DD)
+  const logsByDate: Record<string, any[]> = {};
+  if (historyData && historyData.logs) {
+    historyData.logs.forEach((log) => {
+      const d = log.logged_at.slice(0, 10);
+      if (!logsByDate[d]) logsByDate[d] = [] as any;
+      logsByDate[d].push(log as any);
+    });
+  }
 
   return (
-    <div className="w-full">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
-        <div className="flex items-center justify-between gap-4 mb-6">
-          <div className="flex-1">
-            <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Meal History</h1>
-          </div>
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45 }}
+      className="w-full h-full overflow-y-auto bg-gradient-to-br from-background via-background_alt to-background_alt/30"
+    >
+      <div className="w-full max-w-6xl mx-auto px-4 py-10 pb-20">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="text-center mb-10"
+        >
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.5, delay: 0.1 }}
+            className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-r from-primary via-accent to-accent rounded-full mb-6 shadow-xl"
+          >
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </motion.div>
+          <motion.h1
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+            className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent to-accent mb-3"
+          >
+            Lịch sử bữa ăn
+          </motion.h1>
+          <motion.p
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+            className="text-secondary max-w-2xl mx-auto text-base md:text-lg"
+          >
+            Xem lại các bữa ăn đã ghi nhận và tổng lượng dinh dưỡng hàng ngày của bạn.
+          </motion.p>
+        </motion.div>
 
-          <div className="flex items-center gap-2">
-            <Button size="icon" variant="outline" onClick={handleRefresh} disabled={loading || refreshing}>
-              <IoRefresh className={refreshing ? "animate-spin" : ""} />
-            </Button>
-          </div>
-        </div>
+        {/* Action buttons */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
+          className="flex items-center justify-center gap-2 mb-8"
+        >
+          <Button size="icon" variant="outline" onClick={handleRefresh} disabled={loading || refreshing} className="h-11 w-11">
+            <IoRefresh className={`h-5 w-5 ${refreshing ? "animate-spin" : ""}`} />
+          </Button>
+        </motion.div>
 
-        <Card className="bg-background_alt border-secondary/10 shadow-lg">
-          <CardHeader>
-            <CardTitle>Last 30 days</CardTitle>
-            <CardDescription>Browse your logged meals and daily macro totals.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Separator className="mb-4" />
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.5 }}
+        >
+          <Card className="shadow-xl bg-background_alt border-secondary/20 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-2xl flex items-center gap-2">
+                <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                30 ngày gần đây
+              </CardTitle>
+              <CardDescription className="text-sm mt-1">Duyệt qua các bữa ăn đã ghi nhận và tổng lượng dinh dưỡng hàng ngày.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Separator className="mb-6" />
 
-            {/* Calendar */}
-            <div className="mb-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}>&lt;</Button>
-                  <div className="text-sm font-medium">{currentMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</div>
-                  <Button size="icon" variant="ghost" onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}>&gt;</Button>
-                </div>
-                <div>
-                  <Button size="sm" variant={selectedDate ? "default" : "outline"} onClick={() => setSelectedDate(null)}>Show All</Button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-7 gap-1 text-xs text-secondary mb-1">
-                <div className="text-center">Sun</div>
-                <div className="text-center">Mon</div>
-                <div className="text-center">Tue</div>
-                <div className="text-center">Wed</div>
-                <div className="text-center">Thu</div>
-                <div className="text-center">Fri</div>
-                <div className="text-center">Sat</div>
-              </div>
-
-              <div className="grid grid-cols-7 gap-2">
-                {monthGrid.map((d, idx) => {
-                  if (!d) return <div key={idx} />;
-                  const dayKey = fmtDate(d);
-                  const hasLogs = !!logsByDate[dayKey] && logsByDate[dayKey].length > 0;
-                  const kcal = historyData?.daily_totals?.[dayKey]?.kcal;
-                  const isSelected = selectedDate === dayKey;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedDate(dayKey)}
-                      className={`p-2 rounded-lg text-sm w-full text-left ${isSelected ? 'bg-accent/10 border border-accent' : 'hover:bg-foreground/5'} `}
+              {/* Calendar */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      size="icon" 
+                      variant="outline" 
+                      onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                      className="h-9 w-9"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium">{d.getDate()}</span>
-                        {hasLogs && <span className="text-xs text-secondary">{kcal ? Math.round(kcal) + ' kcal' : '●'}</span>}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {loading && (
-              <div className="flex w-full h-40 items-center justify-center">
-                <p className="text-primary text-lg shine">Loading meal history...</p>
-              </div>
-            )}
-
-            {error && !loading && (
-              <div className="flex flex-col w-full items-center justify-center gap-3 py-8">
-                <p className="text-destructive text-base">{error}</p>
-                <Button onClick={handleRefresh} variant="outline" size="sm">Retry</Button>
-              </div>
-            )}
-
-            {!loading && !error && historyData && (
-              <div className="flex flex-col w-full">
-                {historyData.total_logs === 0 ? (
-                  <div className="flex flex-col items-center justify-center w-full py-12">
-                    <p className="text-primary text-sm">No meal logs found for the selected period.</p>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </Button>
+                    <div className="text-base font-semibold px-4 min-w-[200px] text-center">
+                      {currentMonth.toLocaleString("vi-VN", { month: 'long', year: 'numeric' })}
+                    </div>
+                    <Button 
+                      size="icon" 
+                      variant="outline" 
+                      onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                      className="h-9 w-9"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </Button>
                   </div>
-                ) : (
-                  <div className="w-full">
-                    <div className="max-h-[60vh] overflow-y-auto px-2">
-                      <div className="mx-auto w-full max-w-3xl">
-                        {(() => {
-                          // If a specific date is selected, show only that day's logs
-                          if (selectedDate) {
-                            const dayLogs = (logsByDate[selectedDate] || []).map((log: any) => ({
-                              log_id: log.log_id,
-                              logged_at: log.logged_at,
-                              meal_description: log.meal_description,
-                              parsed_dish: log.parsed_dish,
-                              calculated_macros: log.calculated_macros,
-                              calculated_micros: log.calculated_micros,
-                              portion_size: log.portion_size,
-                              ingredients: log.ingredients,
-                            }));
-                            const payload = [
-                              {
-                                logs: dayLogs,
-                                daily_totals: selectedDate && historyData?.daily_totals ? { [selectedDate]: historyData.daily_totals[selectedDate] } : {},
-                              } as any as MealHistoryPayload,
-                            ];
-                            return <MealHistoryDisplay history={payload} />;
-                          }
-                          return <MealHistoryDisplay history={getDisplayData()} />;
-                        })()}
+                  <div>
+                    <Button 
+                      size="sm" 
+                      variant={selectedDate ? "default" : "outline"} 
+                      onClick={() => setSelectedDate(null)}
+                      className="bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70"
+                    >
+                      Hiển thị tất cả
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 text-xs font-semibold text-secondary mb-2 px-1">
+                  <div className="text-center py-2">CN</div>
+                  <div className="text-center py-2">T2</div>
+                  <div className="text-center py-2">T3</div>
+                  <div className="text-center py-2">T4</div>
+                  <div className="text-center py-2">T5</div>
+                  <div className="text-center py-2">T6</div>
+                  <div className="text-center py-2">T7</div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-2">
+                  {monthGrid.map((d, idx) => {
+                    if (!d) return <div key={idx} className="aspect-square" />;
+                    const dayKey = fmtDate(d);
+                    const hasLogs = !!logsByDate[dayKey] && logsByDate[dayKey].length > 0;
+                    const kcal = historyData?.daily_totals?.[dayKey]?.kcal;
+                    const isSelected = selectedDate === dayKey;
+                    const isToday = dayKey === fmtDate(new Date());
+                    return (
+                      <motion.button
+                        key={idx}
+                        onClick={() => setSelectedDate(dayKey)}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className={`aspect-square p-2 rounded-lg text-sm w-full text-left transition-all ${
+                          isSelected 
+                            ? 'bg-accent/20 border-2 border-accent shadow-lg' 
+                            : isToday
+                            ? 'bg-accent/10 border border-accent/30'
+                            : 'hover:bg-foreground/5 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex flex-col items-start justify-between h-full">
+                          <span className={`font-medium ${isToday ? 'text-accent' : ''}`}>{d.getDate()}</span>
+                          {hasLogs && (
+                            <span className="text-xs text-secondary mt-auto">
+                              {kcal ? Math.round(kcal) + ' kcal' : '●'}
+                            </span>
+                          )}
+                        </div>
+                      </motion.button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {loading && (
+                <div className="flex w-full h-40 items-center justify-center">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-center"
+                  >
+                    <p className="text-primary text-lg shine">Đang tải lịch sử bữa ăn...</p>
+                  </motion.div>
+                </div>
+              )}
+
+              {error && !loading && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex flex-col w-full items-center justify-center gap-3 py-8"
+                >
+                  <Card className="border-destructive/30 bg-destructive/10">
+                    <CardContent className="pt-6">
+                      <p className="text-destructive text-base flex items-center gap-2">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        {error}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Button onClick={handleRefresh} variant="outline" size="sm" className="gap-2">
+                    <IoRefresh className="h-4 w-4" />
+                    Thử lại
+                  </Button>
+                </motion.div>
+              )}
+
+              {!loading && !error && historyData && (
+                <div className="flex flex-col w-full">
+                  {historyData.total_logs === 0 ? (
+                    <motion.div
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className="flex flex-col items-center justify-center w-full py-16"
+                    >
+                      <div className="inline-flex items-center justify-center w-16 h-16 bg-secondary/10 rounded-full mb-4">
+                        <svg className="w-8 h-8 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <p className="text-secondary text-lg">Không tìm thấy bữa ăn nào trong khoảng thời gian đã chọn.</p>
+                    </motion.div>
+                  ) : (
+                    <div className="w-full">
+                      <div className="max-h-[60vh] overflow-y-auto px-2">
+                        <div className="mx-auto w-full max-w-3xl">
+                          {(() => {
+                            // If a specific date is selected, show only that day's logs
+                            if (selectedDate) {
+                              const dayLogs = (logsByDate[selectedDate] || []).map((log: any) => ({
+                                log_id: log.log_id,
+                                logged_at: log.logged_at,
+                                meal_description: log.meal_description,
+                                parsed_dish: log.parsed_dish,
+                                calculated_macros: log.calculated_macros,
+                                calculated_micros: log.calculated_micros,
+                                portion_size: log.portion_size,
+                                ingredients: log.ingredients,
+                              }));
+                              const payload = [
+                                {
+                                  logs: dayLogs,
+                                  daily_totals: selectedDate && historyData?.daily_totals ? { [selectedDate]: historyData.daily_totals[selectedDate] } : {},
+                                } as any as MealHistoryPayload,
+                              ];
+                              return <MealHistoryDisplay history={payload} />;
+                            }
+                            return <MealHistoryDisplay history={getDisplayData()} />;
+                          })()}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
       </div>
-    </div>
+    </motion.div>
   );
 }

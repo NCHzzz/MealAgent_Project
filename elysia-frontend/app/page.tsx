@@ -14,6 +14,7 @@ import DisplayPage from "./pages/DisplayPage";
 import MealHistoryPage from "./pages/MealHistoryPage";
 import ProfilePage from "./pages/ProfilePage";
 import PantryPage from "./pages/PantryPage";
+import ShoppingListPage from "./pages/ShoppingListPage";
 import { ToastContext } from "./components/contexts/ToastContext";
 import ConfirmationModal from "./components/dialog/ConfirmationModal";
 
@@ -34,6 +35,7 @@ export default function Home() {
       {currentPage === "mealHistory" && <MealHistoryPage />}
       {currentPage === "profile" && <ProfilePage />}
       {currentPage === "pantry" && <PantryPage />}
+      {currentPage === "shopping" && <ShoppingListPage />}
     </div>
   );
 }

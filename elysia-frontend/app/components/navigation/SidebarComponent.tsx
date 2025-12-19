@@ -27,6 +27,7 @@ import { GiMeal } from "react-icons/gi";
 
 import { RiRobot2Line, RiCalendarTodoLine } from "react-icons/ri";
 import { FiUser } from "react-icons/fi";
+import { HiOutlineShoppingCart } from "react-icons/hi2";
 
 
 import { public_path } from "@/app/components/host";
@@ -102,6 +103,12 @@ const SidebarComponent: React.FC = () => {
         mode: ["pantry"],
         icon: <GiMeal />,
         onClick: () => changePage("pantry", {}, true, unsavedChanges),
+      },
+      {
+        title: "Shopping List",
+        mode: ["shopping"],
+        icon: <HiOutlineShoppingCart />,
+        onClick: () => changePage("shopping", {}, true, unsavedChanges),
       },
       {
         title: "Data",

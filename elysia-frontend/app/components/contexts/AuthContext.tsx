@@ -66,17 +66,40 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       } catch (err) {
         console.error(err);
         window.localStorage.removeItem(STORAGE_KEY);
+        setLoading(false);
       }
+    } else {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
     if (!authUser?.token) {
       setProfile(null);
+      if (loading) {
+        setLoading(false);
+      }
       return;
     }
-    void refreshProfile();
+    // Fetch profile when authUser token is available
+    const loadProfile = async () => {
+      setLoading(true);
+      try {
+        const resp = await fetchProfile(authUser.token);
+        if (!resp.error) {
+          setProfile(resp.profile || null);
+        } else {
+          showErrorToast("Profile error", resp.error);
+        }
+      } catch (err) {
+        console.error("Error fetching profile:", err);
+        showErrorToast("Profile error", "Failed to load profile data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.token]);
 
   const persistUser = (user: AuthUser | null) => {

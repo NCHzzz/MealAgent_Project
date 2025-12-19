@@ -14,6 +14,7 @@ SHOPPING_LIST_SCHEMA = {
         Property(name="list_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="user_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="plan_id", data_type=DataType.TEXT),  # Links to MealPlan
+        Property(name="plan_start_date", data_type=DataType.DATE),  # Start date of the plan for display
         Property(name="created_at", data_type=DataType.DATE),
     ],
     "vector_config": None,  # Non-vectorized

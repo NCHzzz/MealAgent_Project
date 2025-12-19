@@ -195,37 +195,65 @@ const PantryPage: React.FC = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.45 }}
-      className="min-h-screen overflow-y-auto bg-gradient-to-br from-background via-background_alt to-background_alt/30"
+      className="w-full h-full overflow-y-auto bg-gradient-to-br from-background via-background_alt to-background_alt/30"
     >
-      <div className="container mx-auto px-4 py-10 max-w-6xl pb-20">
+      <div className="w-full max-w-6xl mx-auto px-4 py-10 pb-20">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="flex items-center justify-between mb-8"
+          className="text-center mb-10"
         >
-          <div>
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-primary to-accent rounded-full mb-4 shadow-lg">
-              <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-              </svg>
-            </div>
-            <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">
-              Quản lý kho
-            </h1>
-            <p className="text-secondary max-w-2xl">
-              Thêm, sửa, xóa các vật phẩm trong kho của bạn để MealAgent có thể tạo kế hoạch bữa ăn phù hợp hơn.
-            </p>
-          </div>
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.5, delay: 0.1 }}
+            className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-r from-primary via-accent to-accent rounded-full mb-6 shadow-xl"
+          >
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </motion.div>
+          <motion.h1
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+            className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent to-accent mb-3"
+          >
+            Quản lý kho
+          </motion.h1>
+          <motion.p
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+            className="text-secondary max-w-2xl mx-auto text-base md:text-lg"
+          >
+            Thêm, sửa, xóa các vật phẩm trong kho của bạn để MealAgent có thể tạo kế hoạch bữa ăn phù hợp hơn.
+          </motion.p>
+        </motion.div>
+
+        {/* Action buttons */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
+          className="flex items-center justify-center gap-2 mb-8"
+        >
           <div className="flex items-center gap-2">
-            <Button size="icon" variant="outline" onClick={handleRefresh} disabled={loading || refreshing}>
-              <IoRefresh className={refreshing ? "animate-spin" : ""} />
+            <Button 
+              size="icon" 
+              variant="outline" 
+              onClick={handleRefresh} 
+              disabled={loading || refreshing}
+              className="h-11 w-11"
+            >
+              <IoRefresh className={`h-5 w-5 ${refreshing ? "animate-spin" : ""}`} />
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
-                <Button onClick={handleAddItem} className="gap-2">
-                  <IoAdd />
+                <Button onClick={handleAddItem} className="gap-2 h-11 px-6 bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 shadow-lg text-white font-medium">
+                  <IoAdd className="h-5 w-5" />
                   Thêm vật phẩm
                 </Button>
               </DialogTrigger>
@@ -306,77 +334,114 @@ const PantryPage: React.FC = () => {
 
         {/* Error message */}
         {error && !loading && (
-          <Card className="mb-6 border-destructive/20 bg-destructive/5">
-            <CardContent className="pt-6">
-              <p className="text-destructive">{error}</p>
-            </CardContent>
-          </Card>
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <Card className="mb-6 border-destructive/30 bg-destructive/10 shadow-lg backdrop-blur-sm">
+              <CardContent className="pt-6">
+                <p className="text-destructive flex items-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {error}
+                </p>
+              </CardContent>
+            </Card>
+          </motion.div>
         )}
 
         {/* Pantry items table */}
-        <Card className="shadow-lg bg-background_alt border-secondary/10">
-          <CardHeader>
-            <CardTitle>Danh sách vật phẩm ({items.length})</CardTitle>
-            <CardDescription>
-              {items.length === 0 
-                ? "Kho của bạn hiện đang trống. Hãy thêm vật phẩm để bắt đầu."
-                : "Quản lý các vật phẩm trong kho của bạn"}
-            </CardDescription>
-          </CardHeader>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.5 }}
+        >
+          <Card className="shadow-xl bg-background_alt border-secondary/20 backdrop-blur-sm">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-2xl flex items-center gap-2">
+                <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                Danh sách vật phẩm ({items.length})
+              </CardTitle>
+              <CardDescription className="text-sm mt-1">
+                {items.length === 0 
+                  ? "Kho của bạn hiện đang trống. Hãy thêm vật phẩm để bắt đầu."
+                  : "Quản lý các vật phẩm trong kho của bạn"}
+              </CardDescription>
+            </CardHeader>
           <CardContent>
             {items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12">
-                <p className="text-secondary mb-4">Chưa có vật phẩm nào trong kho</p>
-                <Button onClick={handleAddItem} className="gap-2">
-                  <IoAdd />
-                  Thêm vật phẩm đầu tiên
-                </Button>
+              <div className="flex flex-col items-center justify-center py-16">
+                <motion.div
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ duration: 0.3 }}
+                  className="text-center"
+                >
+                  <div className="inline-flex items-center justify-center w-16 h-16 bg-secondary/10 rounded-full mb-4">
+                    <svg className="w-8 h-8 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                    </svg>
+                  </div>
+                  <p className="text-secondary mb-4 text-lg">Chưa có vật phẩm nào trong kho</p>
+                  <Button onClick={handleAddItem} className="gap-2 bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 shadow-lg">
+                    <IoAdd className="h-5 w-5" />
+                    Thêm vật phẩm đầu tiên
+                  </Button>
+                </motion.div>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead>Tên nguyên liệu</TableHead>
-                      <TableHead>Số lượng</TableHead>
-                      <TableHead>Đơn vị</TableHead>
-                      <TableHead>FDC ID</TableHead>
-                      <TableHead>Hạn sử dụng</TableHead>
-                      <TableHead className="text-right">Thao tác</TableHead>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="font-semibold">Tên nguyên liệu</TableHead>
+                      <TableHead className="font-semibold">Số lượng</TableHead>
+                      <TableHead className="font-semibold">Đơn vị</TableHead>
+                      <TableHead className="font-semibold">FDC ID</TableHead>
+                      <TableHead className="font-semibold">Hạn sử dụng</TableHead>
+                      <TableHead className="text-right font-semibold">Thao tác</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {items.map((item, index) => (
-                      <TableRow key={index}>
-                        <TableCell className="font-medium">{item.ingredient_name}</TableCell>
-                        <TableCell>{item.quantity}</TableCell>
-                        <TableCell>{item.unit}</TableCell>
-                        <TableCell>{item.fdc_id || "—"}</TableCell>
-                        <TableCell>
-                          {item.expiry_date 
-                            ? new Date(item.expiry_date).toLocaleDateString("vi-VN")
-                            : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => handleEditItem(item)}
-                            >
-                              <IoCreate />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => handleDeleteItem(item)}
-                              className="text-destructive hover:text-destructive"
-                            >
-                              <IoTrash />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                        <TableRow 
+                          key={index}
+                          className="hover:bg-foreground/5 transition-colors"
+                        >
+                          <TableCell className="font-medium">{item.ingredient_name}</TableCell>
+                          <TableCell>{item.quantity}</TableCell>
+                          <TableCell>{item.unit}</TableCell>
+                          <TableCell className="text-secondary">{item.fdc_id || "—"}</TableCell>
+                          <TableCell>
+                            {item.expiry_date 
+                              ? new Date(item.expiry_date).toLocaleDateString("vi-VN")
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleEditItem(item)}
+                                className="h-8 w-8 hover:bg-accent/10"
+                              >
+                                <IoCreate className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleDeleteItem(item)}
+                                className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <IoTrash className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
                     ))}
                   </TableBody>
                 </Table>
@@ -384,6 +449,7 @@ const PantryPage: React.FC = () => {
             )}
           </CardContent>
         </Card>
+        </motion.div>
       </div>
     </motion.div>
   );

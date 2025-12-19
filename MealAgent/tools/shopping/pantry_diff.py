@@ -4,6 +4,8 @@ Subtract pantry items from shopping list to get final shopping list.
 from typing import AsyncGenerator, Dict, Any, List
 from datetime import datetime, timezone
 from uuid import uuid4
+import hashlib
+import logging
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -196,17 +198,23 @@ async def pantry_diff_tool(
     
     ⚠️ CRITICAL: This tool is ONLY for generating shopping lists from meal plans.
     
-    DO NOT call this tool when:
+    **WHEN TO CALL THIS TOOL:**
+    ✅ CALL this tool when:
+    - User explicitly asks for a shopping list from a meal plan (e.g., "cho tôi danh sách nguyên liệu cần mua của plan này")
+    - User wants to know what to buy for a specific plan
+    - User asks "what do I need to buy?" in context of a meal plan
+    - User asks follow-up questions about shopping list AFTER a plan has been created
+      **IMPORTANT**: Even if `plan_day_e2e_tool` or `plan_week_e2e_tool` set `end_conversation=True`,
+      if the user asks a NEW question about shopping list, this is a VALID follow-up request.
+      The `end_conversation=True` signal only applies to the PLANNING task, not to new user requests.
+    
+    ❌ DO NOT call this tool when:
     - User asks "what's in my pantry?" → Use pantry_crud_tool(action="read") instead
     - User asks "list my pantry items" → Use pantry_crud_tool(action="read") instead
     - User asks "show me my inventory" → Use pantry_crud_tool(action="read") instead
+    - User is asking about pantry contents (not shopping list)
     
-    ONLY call this tool when:
-    - User explicitly asks for a shopping list from a meal plan
-    - User wants to know what to buy for a specific plan
-    - User asks "what do I need to buy?" in context of a meal plan
-    
-    If pantry_crud_tool(action="read") was just called and completed successfully,
+    ⚠️ IMPORTANT: If pantry_crud_tool(action="read") was just called and completed successfully,
     the task is COMPLETE. Do NOT automatically call pantry_diff_tool.
 
     Environment contract:
@@ -217,10 +225,18 @@ async def pantry_diff_tool(
         • `pantry_diff_tool.diff` (diagnostics) and `pantry_diff_tool.shopping_list` (UI payload).
 
     Decision hints:
+      • **CRITICAL**: When user asks for shopping list AFTER a plan is created, this is a NEW request.
+        The `end_conversation=True` from planning tools only applies to the planning conversation,
+        NOT to follow-up questions. If user asks "cho tôi danh sách nguyên liệu cần mua của plan này",
+        you MUST call this tool, regardless of previous `end_conversation=True` signals.
       • ONLY call this tool when user explicitly wants a shopping list from a meal plan.
       • To list pantry items, use pantry_crud_tool(action="read") instead.
       • `shopping_list` result with `final_items=[]` implies pantry already covers the plan.
       • Errors typically indicate missing pantry state—prompt the user to run pantry CRUD first.
+      • **CRITICAL**: When this tool emits `Result(name="task_complete")` with `task_complete=True`,
+        `stop_calling_tool=True`, and `end_conversation=True`, the task is COMPLETE. 
+        Do NOT call `explain` or any other tools. The `shopping_list` Result with `display=True` 
+        is sufficient for the user. END the conversation branch immediately.
     """
     yield Response("🛒 Generating shopping list (checking pantry inventory)...")
 
@@ -306,10 +322,17 @@ async def pantry_diff_tool(
     
     plan_id = plan.get("plan_id")
     plan_user_id = plan.get("user_id") or user_id
+    plan_start_date = plan.get("start_date")
+    plan_type = plan.get("plan_type", "day")
+    
+    # Log plan date for debugging
+    if plan_start_date:
+        logger.info(f"pantry_diff_tool: Plan {plan_id} has start_date: {plan_start_date} (type: {type(plan_start_date)})")
+    else:
+        logger.warning(f"pantry_diff_tool: Plan {plan_id} has no start_date field")
     
     # Extract shopping items from plan
     shopping_items = _extract_ingredients_from_plan(plan)
-    plan_type = plan.get("plan_type", "day")
     yield Response(f"📋 Extracted {len(shopping_items)} ingredient(s) from {plan_type} plan")
 
     # Load pantry state from Weaviate database
@@ -427,33 +450,81 @@ async def pantry_diff_tool(
             "warnings": warnings,
         }
 
-        list_id = f"{plan_id or user_id}_shopping_{uuid4().hex[:8]}"
-        shopping_payload = {
-            "list_id": list_id,
-            "user_id": plan_user_id or user_id,
-            "plan_id": plan_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+        # Normalize plan start_date for storage
+        # plan_start_date was already extracted above, but normalize it here for consistency
+        if plan_start_date:
+            if isinstance(plan_start_date, str):
+                # Already a string, use as-is
+                pass
+            elif hasattr(plan_start_date, "isoformat"):
+                plan_start_date = plan_start_date.isoformat()
+            else:
+                logger.warning(f"pantry_diff_tool: Unexpected plan_start_date type: {type(plan_start_date)}, setting to None")
+                plan_start_date = None
+        else:
+            plan_start_date = None
+            logger.warning(f"pantry_diff_tool: No plan_start_date found for plan {plan_id}")
 
+        # Check for existing shopping list for this plan_id FIRST
+        # This prevents creating duplicate lists for the same plan
+        existing_list_id = None
         if plan_id:
             existing_list_filter = build_filters_from_where(
                 {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
             )
             existing_lists = shopping_list_collection.query.fetch_objects(
-                filters=existing_list_filter, limit=5
+                filters=existing_list_filter, limit=1
             )
-            for lst in existing_lists.objects:
+            if existing_lists.objects:
+                # Reuse existing list_id
+                existing_list_id = existing_lists.objects[0].properties.get("list_id")
+                logger.info(f"pantry_diff_tool: Found existing shopping list {existing_list_id} for plan {plan_id}, reusing it")
+                
+                # Delete existing items to replace with new ones
                 list_filter = build_filters_from_where(
-                    {"path": ["list_id"], "operator": "Equal", "valueString": lst.properties.get("list_id")}
+                    {"path": ["list_id"], "operator": "Equal", "valueString": existing_list_id}
                 )
                 existing_items = shopping_item_collection.query.fetch_objects(
                     filters=list_filter, limit=256
                 )
                 for obj in existing_items.objects:
                     shopping_item_collection.data.delete_by_id(obj.uuid)
-                shopping_list_collection.data.delete_by_id(lst.uuid)
-
-        shopping_list_collection.data.insert(shopping_payload)
+                
+                # Update existing list with new data and plan_start_date
+                existing_list_obj = existing_lists.objects[0]
+                updated_props = dict(existing_list_obj.properties)
+                updated_props["plan_start_date"] = plan_start_date
+                updated_props["created_at"] = datetime.now(timezone.utc).isoformat()  # Update timestamp
+                shopping_list_collection.data.update(uuid=existing_list_obj.uuid, properties=updated_props)
+        
+        # Generate list_id: reuse existing or create new deterministic one
+        if existing_list_id:
+            list_id = existing_list_id
+        elif plan_id:
+            # Deterministic list_id based on plan_id (no random UUID)
+            list_id_hash = hashlib.md5(f"{plan_id}_shopping".encode()).hexdigest()[:8]
+            list_id = f"{plan_id}_shopping_{list_id_hash}"
+        else:
+            # Fallback: use random UUID only if no plan_id
+            list_id = f"{user_id}_shopping_{uuid4().hex[:8]}"
+        
+        # Log final plan_start_date value (after list_id is defined)
+        if plan_start_date:
+            logger.info(f"pantry_diff_tool: Using plan_start_date: {plan_start_date} for shopping list {list_id}")
+        else:
+            logger.warning(f"pantry_diff_tool: Shopping list {list_id} will be created without plan_start_date")
+        
+        # Only create new list if we don't have an existing one
+        if not existing_list_id:
+            shopping_payload = {
+                "list_id": list_id,
+                "user_id": plan_user_id or user_id,
+                "plan_id": plan_id,
+                "plan_start_date": plan_start_date,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            shopping_list_collection.data.insert(shopping_payload)
+            logger.info(f"pantry_diff_tool: Created new shopping list {list_id} for plan {plan_id}")
         for item in final_items:
             shopping_item_collection.data.insert(
                 {
@@ -507,11 +578,45 @@ async def pantry_diff_tool(
         removed_count = len(shopping_items) - len(final_items)
         if warnings:
             yield Response(f"ℹ️ {len(warnings)} item(s) have excess pantry stock")
+        
+        # Include plan date in success message if available
+        date_info = ""
+        if plan_start_date:
+            try:
+                from datetime import datetime as dt
+                plan_date_obj = dt.fromisoformat(plan_start_date.replace('Z', '+00:00')) if isinstance(plan_start_date, str) else plan_start_date
+                if isinstance(plan_date_obj, str):
+                    plan_date_obj = dt.fromisoformat(plan_date_obj.replace('Z', '+00:00'))
+                date_info = f" cho {plan_date_obj.strftime('%d/%m/%Y')}"
+            except Exception as e:
+                logger.debug(f"pantry_diff_tool: Could not format plan date: {e}")
+        
         yield Response(
             f"✅ Shopping list ready: {len(final_items)} item(s) needed "
-            f"({removed_count} already in pantry)"
+            f"({removed_count} already in pantry){date_info}"
         )
         yield Response(f"💾 Shopping list saved (ID: {list_id})")
+        
+        # Emit task_complete signal to prevent unnecessary explain branch
+        # The shopping_list Result with display=True is sufficient for the user
+        yield Result(
+            name="task_complete",
+            objects=[{
+                "status": "completed",
+                "message": f"Shopping list with {len(final_items)} items has been generated and saved."
+            }],
+            metadata={
+                "task_complete": True,
+                "stop_calling_tool": True,
+                "should_explain": False,  # Explicitly signal NOT to call explain
+                "task_fully_complete": True,  # Strong signal that nothing more is needed
+                "end_conversation": True,  # Signal to end the conversation branch
+                "shopping_list_id": list_id,
+                "items_count": len(final_items),
+            },
+            payload_type="generic",
+            display=False,
+        )
 
     except Exception as e:
         yield Error(f"Pantry diff calculation failed for user {user_id}: {str(e)}")

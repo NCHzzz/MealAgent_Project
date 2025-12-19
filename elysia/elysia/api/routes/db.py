@@ -628,3 +628,335 @@ async def pantry_crud(
     except Exception as e:
         logger.exception(f"Error in /pantry API: {str(e)}")
         return JSONResponse(content={"state": None, "items": [], "error": str(e)}, status_code=500, headers=headers)
+
+
+class ShoppingListPayload(BaseModel):
+    list_id: str | None = None
+    shopping_items: list[dict] | None = None
+
+
+@router.get("/{user_id}/shopping")
+@router.post("/{user_id}/shopping")
+async def shopping_crud(
+    user_id: str,
+    action: str = Query("read", description="Action: read, create, update, delete, or toggle_purchased"),
+    list_id: str | None = Query(None, description="Shopping list ID (required for read/update/delete)"),
+    payload: ShoppingListPayload | None = Body(None),
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    """
+    CRUD operations for shopping lists and items.
+    GET: Read shopping lists and items
+    POST: Create, update, delete shopping items, or toggle purchased status
+    """
+    headers = {"Cache-Control": "no-cache"}
+    
+    try:
+        user_local = await user_manager.get_user_local(user_id)
+        client_manager: ClientManager = user_local["client_manager"]
+
+        if not client_manager.is_client:
+            return JSONResponse(
+                content={"lists": [], "items": [], "error": "Client manager is not connected"},
+                status_code=200,
+                headers=headers,
+            )
+
+        allowed_actions = {"read", "create", "update", "delete", "toggle_purchased"}
+        if action not in allowed_actions:
+            return JSONResponse(
+                content={
+                    "lists": [],
+                    "items": [],
+                    "error": f"Unsupported action: {action}. Allowed: {sorted(list(allowed_actions))}",
+                },
+                status_code=400,
+                headers=headers,
+            )
+
+        async with client_manager.connect_to_async_client() as client:
+            # Ensure collections exist
+            if not await client.collections.exists("ShoppingList") or not await client.collections.exists("ShoppingItem"):
+                return JSONResponse(
+                    content={"lists": [], "items": [], "error": "ShoppingList/ShoppingItem collections do not exist"},
+                    status_code=200,
+                    headers=headers,
+                )
+
+            list_collection = client.collections.get("ShoppingList")
+            item_collection = client.collections.get("ShoppingItem")
+
+            if action == "read":
+                # Read all shopping lists for user
+                list_results = await list_collection.query.fetch_objects(
+                    filters=Filter.by_property("user_id").equal(user_id),
+                    sort=Sort.by_property("created_at", ascending=False),
+                    limit=100,
+                )
+                
+                lists = []
+                for list_obj in list_results.objects:
+                    list_props = _json_safe(list_obj.properties)
+                    list_id_val = list_props.get("list_id")
+                    
+                    # Get items for this list
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.by_property("list_id").equal(list_id_val),
+                        limit=9999,
+                    )
+                    items = [_json_safe(obj.properties) for obj in item_results.objects]
+                    
+                    lists.append({
+                        **list_props,
+                        "items": items,
+                        "item_count": len(items),
+                    })
+                
+                # If list_id specified, return only that list
+                if list_id:
+                    filtered_lists = [lst for lst in lists if lst.get("list_id") == list_id]
+                    if filtered_lists:
+                        return JSONResponse(
+                            content={"lists": filtered_lists, "items": filtered_lists[0].get("items", []), "error": ""},
+                            status_code=200,
+                            headers=headers,
+                        )
+                    else:
+                        return JSONResponse(
+                            content={"lists": [], "items": [], "error": f"Shopping list {list_id} not found"},
+                            status_code=404,
+                            headers=headers,
+                        )
+                
+                # Return all lists
+                all_items = []
+                for lst in lists:
+                    all_items.extend(lst.get("items", []))
+                
+                return JSONResponse(
+                    content={"lists": lists, "items": all_items, "error": ""},
+                    status_code=200,
+                    headers=headers,
+                )
+
+            # Other actions require payload
+            payload_list_id = (payload.list_id if payload else None) or list_id
+            shopping_items = (payload.shopping_items if payload else None) or []
+
+            if action == "create":
+                if not payload_list_id:
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": "list_id is required for create"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                
+                # Create shopping list if it doesn't exist
+                existing_lists = await list_collection.query.fetch_objects(
+                    filters=Filter.by_property("list_id").equal(payload_list_id),
+                    limit=1,
+                )
+                if not existing_lists.objects:
+                    await list_collection.data.insert({
+                        "list_id": payload_list_id,
+                        "user_id": user_id,
+                        "plan_id": None,  # Can be set later
+                        "created_at": ensure_rfc3339_datetime(datetime.now(timezone.utc)),
+                    })
+
+                # Create items
+                if shopping_items:
+                    for it in shopping_items:
+                        if not isinstance(it, dict):
+                            continue
+                        name = (it.get("ingredient_name") or "").strip()
+                        if not name:
+                            continue
+                        await item_collection.data.insert({
+                            "list_id": payload_list_id,
+                            "ingredient_name": name,
+                            "quantity": float(it.get("quantity", 0.0)),
+                            "unit": (it.get("unit") or "g").strip() or "g",
+                            "category": (it.get("category") or "general").strip(),
+                            "purchased": bool(it.get("purchased", False)),
+                        })
+
+            elif action == "update":
+                if not payload_list_id:
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": "list_id is required for update"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                
+                if not shopping_items:
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": "shopping_items is required for update"},
+                        status_code=400,
+                        headers=headers,
+                    )
+
+                for it in shopping_items:
+                    if not isinstance(it, dict):
+                        continue
+                    name = (it.get("ingredient_name") or "").strip()
+                    if not name:
+                        continue
+                    
+                    # Find existing item
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.all_of([
+                            Filter.by_property("list_id").equal(payload_list_id),
+                            Filter.by_property("ingredient_name").equal(name),
+                        ]),
+                        limit=1,
+                    )
+                    
+                    if item_results.objects:
+                        obj = item_results.objects[0]
+                        props = dict(obj.properties)
+                        props.update({
+                            "quantity": float(it.get("quantity", props.get("quantity", 0.0))),
+                            "unit": (it.get("unit") or props.get("unit", "g")).strip() or "g",
+                            "category": (it.get("category") or props.get("category", "general")).strip(),
+                            "purchased": bool(it.get("purchased", props.get("purchased", False))),
+                        })
+                        await item_collection.data.update(uuid=obj.uuid, properties=props)
+                    else:
+                        # Upsert: create if not found
+                        await item_collection.data.insert({
+                            "list_id": payload_list_id,
+                            "ingredient_name": name,
+                            "quantity": float(it.get("quantity", 0.0)),
+                            "unit": (it.get("unit") or "g").strip() or "g",
+                            "category": (it.get("category") or "general").strip(),
+                            "purchased": bool(it.get("purchased", False)),
+                        })
+
+            elif action == "delete":
+                if not payload_list_id:
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": "list_id is required for delete"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                
+                if shopping_items:
+                    # Delete specific items
+                    for it in shopping_items:
+                        if not isinstance(it, dict):
+                            continue
+                        name = (it.get("ingredient_name") or "").strip()
+                        if not name:
+                            continue
+                        
+                        item_results = await item_collection.query.fetch_objects(
+                            filters=Filter.all_of([
+                                Filter.by_property("list_id").equal(payload_list_id),
+                                Filter.by_property("ingredient_name").equal(name),
+                            ]),
+                            limit=10,
+                        )
+                        for obj in item_results.objects:
+                            await item_collection.data.delete_by_id(obj.uuid)
+                else:
+                    # Delete entire list and all its items
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.by_property("list_id").equal(payload_list_id),
+                        limit=9999,
+                    )
+                    for obj in item_results.objects:
+                        await item_collection.data.delete_by_id(obj.uuid)
+                    
+                    list_results = await list_collection.query.fetch_objects(
+                        filters=Filter.by_property("list_id").equal(payload_list_id),
+                        limit=1,
+                    )
+                    for obj in list_results.objects:
+                        await list_collection.data.delete_by_id(obj.uuid)
+
+            elif action == "toggle_purchased":
+                if not payload_list_id:
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": "list_id is required for toggle_purchased"},
+                        status_code=400,
+                        headers=headers,
+                    )
+                
+                if not shopping_items:
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": "shopping_items is required for toggle_purchased"},
+                        status_code=400,
+                        headers=headers,
+                    )
+
+                for it in shopping_items:
+                    if not isinstance(it, dict):
+                        continue
+                    name = (it.get("ingredient_name") or "").strip()
+                    if not name:
+                        continue
+                    
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.all_of([
+                            Filter.by_property("list_id").equal(payload_list_id),
+                            Filter.by_property("ingredient_name").equal(name),
+                        ]),
+                        limit=1,
+                    )
+                    
+                    if item_results.objects:
+                        obj = item_results.objects[0]
+                        props = dict(obj.properties)
+                        props["purchased"] = not props.get("purchased", False)
+                        await item_collection.data.update(uuid=obj.uuid, properties=props)
+
+            # Return latest state
+            if payload_list_id:
+                list_results = await list_collection.query.fetch_objects(
+                    filters=Filter.by_property("list_id").equal(payload_list_id),
+                    limit=1,
+                )
+                if list_results.objects:
+                    list_props = _json_safe(list_results.objects[0].properties)
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=Filter.by_property("list_id").equal(payload_list_id),
+                        limit=9999,
+                    )
+                    items = [_json_safe(obj.properties) for obj in item_results.objects]
+                    return JSONResponse(
+                        content={"lists": [{**list_props, "items": items, "item_count": len(items)}], "items": items, "error": ""},
+                        status_code=200,
+                        headers=headers,
+                    )
+            
+            # Return all lists for user
+            list_results = await list_collection.query.fetch_objects(
+                filters=Filter.by_property("user_id").equal(user_id),
+                sort=Sort.by_property("created_at", ascending=False),
+                limit=100,
+            )
+            lists = []
+            for list_obj in list_results.objects:
+                list_props = _json_safe(list_obj.properties)
+                list_id_val = list_props.get("list_id")
+                item_results = await item_collection.query.fetch_objects(
+                    filters=Filter.by_property("list_id").equal(list_id_val),
+                    limit=9999,
+                )
+                items = [_json_safe(obj.properties) for obj in item_results.objects]
+                lists.append({**list_props, "items": items, "item_count": len(items)})
+            
+            all_items = []
+            for lst in lists:
+                all_items.extend(lst.get("items", []))
+            
+            return JSONResponse(
+                content={"lists": lists, "items": all_items, "error": ""},
+                status_code=200,
+                headers=headers,
+            )
+
+    except Exception as e:
+        logger.exception(f"Error in /shopping API: {str(e)}")
+        return JSONResponse(content={"lists": [], "items": [], "error": str(e)}, status_code=500, headers=headers)
