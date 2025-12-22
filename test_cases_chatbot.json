@@ -1,0 +1,103 @@
+[
+  {
+    "query": "Tạo kế hoạch bữa ăn hôm nay cho tôi",
+    "expected_topics": ["meal plan", "daily plan", "breakfast", "lunch", "dinner", "kế hoạch", "bữa ăn"],
+    "expected_actions": ["plan_day_e2e_tool"],
+    "category": "meal_planning",
+    "ground_truth": {
+      "should_have": ["breakfast", "lunch", "dinner"],
+      "should_include": ["macros", "nutrition"]
+    }
+  },
+  {
+    "query": "Tôi muốn kế hoạch bữa ăn cho cả tuần",
+    "expected_topics": ["weekly plan", "7 days", "variety", "tuần", "kế hoạch"],
+    "expected_actions": ["plan_week_e2e_tool"],
+    "category": "meal_planning",
+    "ground_truth": {
+      "should_have": ["7 days", "21 meals"],
+      "should_include": ["variety"]
+    }
+  },
+  {
+    "query": "Tôi cần bao nhiêu calo mỗi ngày?",
+    "expected_topics": ["TDEE", "calories", "macros", "calo", "dinh dưỡng"],
+    "expected_actions": ["macro_calc_tool"],
+    "category": "nutrition",
+    "ground_truth": {
+      "should_have": ["TDEE", "calories calculation"],
+      "should_include": ["formula", "explanation"]
+    }
+  },
+  {
+    "query": "Hướng dẫn tôi nấu phở bò",
+    "expected_topics": ["cooking", "steps", "recipe", "nấu", "hướng dẫn", "phở"],
+    "expected_actions": ["cook_mode_tool"],
+    "category": "cooking",
+    "ground_truth": {
+      "should_have": ["cooking steps", "ingredients"],
+      "should_include": ["step-by-step", "instructions"]
+    }
+  },
+  {
+    "query": "Tôi ăn chay, không ăn đậu phộng",
+    "expected_topics": ["vegetarian", "allergen", "constraints", "ăn chay", "dị ứng"],
+    "expected_actions": ["constraints_guard_tool", "profile_crud_tool"],
+    "category": "constraints",
+    "ground_truth": {
+      "should_have": ["vegetarian filter", "allergen exclusion"],
+      "should_include": ["confirmation"]
+    }
+  },
+  {
+    "query": "Tôi muốn giảm cân, tạo kế hoạch bữa ăn",
+    "expected_topics": ["weight loss", "meal plan", "calories", "giảm cân"],
+    "expected_actions": ["plan_day_e2e_tool", "macro_calc_tool"],
+    "category": "complex",
+    "ground_truth": {
+      "should_have": ["calorie deficit", "meal plan"],
+      "should_include": ["weight loss strategy"]
+    }
+  },
+  {
+    "query": "Cho tôi xem danh sách mua sắm",
+    "expected_topics": ["shopping", "list", "ingredients", "mua sắm"],
+    "expected_actions": ["shopping_tool"],
+    "category": "shopping",
+    "ground_truth": {
+      "should_have": ["shopping list", "ingredients"],
+      "should_include": ["quantities"]
+    }
+  },
+  {
+    "query": "Tôi vừa ăn phở bò với 200g thịt bò",
+    "expected_topics": ["meal logging", "nutrition", "tracking", "ăn"],
+    "expected_actions": ["log_meal_e2e_tool"],
+    "category": "meal_logging",
+    "ground_truth": {
+      "should_have": ["meal logged", "nutrition calculated"],
+      "should_include": ["confirmation"]
+    }
+  },
+  {
+    "query": "Tôi có thể thay thế thịt gà bằng gì?",
+    "expected_topics": ["substitution", "ingredients", "alternatives", "thay thế"],
+    "expected_actions": ["substitute_tool"],
+    "category": "substitution",
+    "ground_truth": {
+      "should_have": ["substitute suggestions"],
+      "should_include": ["macro equivalence"]
+    }
+  },
+  {
+    "query": "Kế hoạch của tôi có đủ vitamin C không?",
+    "expected_topics": ["micronutrients", "vitamins", "nutrition", "vitamin C"],
+    "expected_actions": ["micros_tool"],
+    "category": "nutrition",
+    "ground_truth": {
+      "should_have": ["micronutrient analysis"],
+      "should_include": ["vitamin C content"]
+    }
+  }
+]
+
