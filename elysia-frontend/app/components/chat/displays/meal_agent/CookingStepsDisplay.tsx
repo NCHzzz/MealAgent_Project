@@ -55,14 +55,19 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
 
-  const totalTime =
-    stepData.total_time_seconds ??
-    (stepList.length > 0
-      ? stepList.reduce(
-          (sum, step) => sum + (step.estimated_seconds ?? 0),
-          0
-        )
-      : 0);
+  // Prefer explicit cooking_time from Recipe collection (minutes) if available.
+  const totalTimeMinutesFromRecipe =
+    typeof stepData.cooking_time === "number" && stepData.cooking_time > 0
+      ? stepData.cooking_time
+      : undefined;
+
+  const totalTimeSeconds =
+    typeof stepData.total_time_seconds === "number"
+      ? stepData.total_time_seconds
+      : 0;
+
+  const totalTimeMinutes =
+    totalTimeMinutesFromRecipe ?? Math.max(0, Math.floor(totalTimeSeconds / 60));
 
   return (
     <motion.div
@@ -129,11 +134,6 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
                   </div>
                   <div className="flex-1">
                     <p className="text-sm text-primary">{step.instruction}</p>
-                    {step.estimated_seconds > 0 && (
-                      <p className="text-xs text-secondary mt-1">
-                        Est. {formatTime(step.estimated_seconds)}
-                      </p>
-                    )}
                   </div>
                 </div>
               </motion.div>
@@ -142,14 +142,9 @@ const CookingStepsCard: React.FC<CookingStepsCardProps> = ({
 
           {/* Total Time & Serving Info */}
           <div className="pt-3 border-t border-secondary/10 space-y-1">
-            {totalTime > 0 && (
+            {totalTimeMinutes > 0 && (
               <p className="text-xs text-secondary">
-                ⏱️ Total estimated time: {formatTime(totalTime)}
-              </p>
-            )}
-            {stepData.cooking_time && stepData.cooking_time > 0 && (
-              <p className="text-xs text-secondary">
-                🕒 Recipe cooking time: {stepData.cooking_time} min
+                ⏱️ Thời gian nấu ước tính: {totalTimeMinutes} min
               </p>
             )}
             {stepData.serving_size && stepData.serving_size > 0 && (

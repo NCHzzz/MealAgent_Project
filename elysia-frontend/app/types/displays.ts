@@ -261,6 +261,8 @@ export type RecipeCardPayload = DefaultResultPayload & {
   image_link?: string;
   ingredients?: string[];
   ingredients_with_qty?: string[];
+  // Detailed cooking steps from Recipe collection (primary source for instructions)
+  cooking_method_array?: string[];
 };
 
 export type NutritionSummaryPayload = DefaultResultPayload & {

@@ -4,6 +4,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { SessionContext } from "../components/contexts/SessionContext";
 import MealHistoryDisplay from "../components/chat/displays/meal_agent/MealHistoryDisplay";
+import RecipeDetail from "../components/chat/displays/meal_agent/RecipeDetail";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +16,15 @@ import {
 } from "@/components/ui/card";
 import { IoRefresh } from "react-icons/io5";
 import { getMealHistory, MealHistoryResponse } from "../api/getMealHistory";
-import { MealHistoryPayload } from "../types/displays";
+import { getCollectionData } from "../api/getCollection";
+import { MealHistoryPayload, RecipeCardPayload } from "../types/displays";
+import { CollectionDataPayload } from "../types/payloads";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export default function MealHistoryPage() {
   const { id } = useContext(SessionContext);
@@ -25,6 +34,12 @@ export default function MealHistoryPage() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null); // YYYY-MM-DD
+  const [selectedMeal, setSelectedMeal] = useState<any | null>(null);
+  const [selectedRecipes, setSelectedRecipes] = useState<RecipeCardPayload[]>([]);
+  const [activeRecipeIndex, setActiveRecipeIndex] = useState<number>(0);
+  const [loadingRecipe, setLoadingRecipe] = useState<boolean>(false);
+  const [recipeError, setRecipeError] = useState<string | null>(null);
+  const [isRecipeDialogOpen, setIsRecipeDialogOpen] = useState<boolean>(false);
 
   const fetchMealHistory = async () => {
     if (!id) {
@@ -68,6 +83,147 @@ export default function MealHistoryPage() {
   const handleRefresh = () => {
     setRefreshing(true);
     fetchMealHistory();
+  };
+
+  const buildRecipePayloadFromCollection = (
+    dishName: string,
+    entry: any,
+    raw: any | undefined,
+  ): RecipeCardPayload => {
+
+    const baseName = dishName || entry?.parsed_dish || entry?.meal_description || "Món ăn";
+
+    const macrosFromEntry = entry?.calculated_macros || {};
+
+    const rawMacros =
+      raw?.macros_per_serving ||
+      raw?.macros ||
+      (typeof raw?.kcal_per_serving === "number"
+        ? {
+            kcal: raw.kcal_per_serving,
+            protein_g: raw.protein_g_per_serving ?? macrosFromEntry.protein_g,
+            fat_g: raw.fat_g_per_serving ?? macrosFromEntry.fat_g,
+            carb_g: raw.carb_g_per_serving ?? macrosFromEntry.carb_g,
+          }
+        : undefined);
+
+    const macros_per_serving =
+      rawMacros ||
+      (macrosFromEntry && typeof macrosFromEntry.kcal === "number"
+        ? {
+            kcal: macrosFromEntry.kcal,
+            protein_g: macrosFromEntry.protein_g,
+            fat_g: macrosFromEntry.fat_g,
+            carb_g: macrosFromEntry.carb_g,
+          }
+        : undefined);
+
+    const ingredients_with_qty =
+      raw?.ingredients_with_qty ||
+      raw?.ingredients ||
+      entry?.ingredients ||
+      undefined;
+
+    return {
+      food_id:
+        raw?.food_id ||
+        raw?.uuid ||
+        raw?.id ||
+        raw?._REF_ID ||
+        baseName,
+      dish_name: raw?.dish_name || raw?.title || baseName,
+      dish_type: raw?.dish_type,
+      serving_size: raw?.serving_size,
+      cooking_time: raw?.cooking_time,
+      macros_per_serving,
+      allergens: raw?.allergens,
+      diet_type: Array.isArray(raw?.diet_type)
+        ? raw.diet_type
+        : raw?.diet_type
+        ? [raw.diet_type]
+        : undefined,
+      image_link: raw?.image_link || raw?.image_url || raw?.image,
+      ingredients: raw?.ingredients || entry?.ingredients,
+      ingredients_with_qty,
+      cooking_method_array:
+        (Array.isArray(raw?.cooking_method_array)
+          ? raw.cooking_method_array
+          : Array.isArray(entry?.cooking_method_array)
+          ? entry.cooking_method_array
+          : undefined) as string[] | undefined,
+    };
+  };
+
+  const handleMealClick = async (entry: any) => {
+    if (!id) return;
+
+    const baseDishText: string =
+      typeof entry?.parsed_dish === "string" && entry.parsed_dish.trim().length > 0
+        ? entry.parsed_dish
+        : typeof entry?.meal_description === "string"
+        ? entry.meal_description
+        : "Món ăn";
+
+    // Try to split into multiple possible dishes (e.g. "Cơm trắng, Thịt ba chỉ nướng")
+    const rawParts = baseDishText
+      .split(/[,;+•\-]|và|&/i)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+
+    const dishCandidates = rawParts.length > 1 ? rawParts : [baseDishText];
+
+    setSelectedMeal(entry);
+    setSelectedRecipes([]);
+    setActiveRecipeIndex(0);
+    setRecipeError(null);
+    setLoadingRecipe(true);
+    setIsRecipeDialogOpen(true);
+
+    try {
+      const filter_config = {
+        type: "and",
+        filters: [] as any[],
+      };
+
+      const results: RecipeCardPayload[] = [];
+
+      // Fetch recipes for each candidate dish name in parallel
+      const collectionResponses: (CollectionDataPayload | null)[] =
+        await Promise.all(
+          dishCandidates.map((name) =>
+            getCollectionData(
+              id,
+              "Recipe",
+              1,
+              1,
+              null,
+              true,
+              filter_config,
+              name,
+            ) as Promise<CollectionDataPayload | null>,
+          ),
+        );
+
+      collectionResponses.forEach((data, idx) => {
+        const raw = data?.items?.[0] as any | undefined;
+        const dishName = dishCandidates[idx];
+        const payload = buildRecipePayloadFromCollection(dishName, entry, raw);
+        results.push(payload);
+      });
+
+      // If nothing came back from collection, still create one generic payload
+      if (results.length === 0) {
+        results.push(buildRecipePayloadFromCollection(baseDishText, entry, undefined));
+      }
+
+      setSelectedRecipes(results);
+      setActiveRecipeIndex(0);
+    } catch (e) {
+      console.error("Error fetching recipe from collection:", e);
+      setRecipeError("Không thể tải công thức từ Recipe collection");
+    } finally {
+      setLoadingRecipe(false);
+    }
   };
 
   // Convert API response to format expected by MealHistoryDisplay
@@ -356,9 +512,19 @@ export default function MealHistoryPage() {
                                   daily_totals: selectedDate && historyData?.daily_totals ? { [selectedDate]: historyData.daily_totals[selectedDate] } : {},
                                 } as any as MealHistoryPayload,
                               ];
-                              return <MealHistoryDisplay history={payload} />;
+                              return (
+                                <MealHistoryDisplay
+                                  history={payload}
+                                  onMealClick={handleMealClick}
+                                />
+                              );
                             }
-                            return <MealHistoryDisplay history={getDisplayData()} />;
+                            return (
+                              <MealHistoryDisplay
+                                history={getDisplayData()}
+                                onMealClick={handleMealClick}
+                              />
+                            );
                           })()}
                         </div>
                       </div>
@@ -369,6 +535,61 @@ export default function MealHistoryPage() {
             </CardContent>
           </Card>
         </motion.div>
+
+        {/* Recipe detail modal */}
+        <Dialog
+          open={isRecipeDialogOpen}
+          onOpenChange={(open) => {
+            setIsRecipeDialogOpen(open);
+            if (!open) {
+              setSelectedMeal(null);
+              setSelectedRecipes([]);
+              setActiveRecipeIndex(0);
+              setRecipeError(null);
+              setLoadingRecipe(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto bg-background_alt border-secondary/20">
+            <DialogHeader>
+              <DialogTitle className="text-lg md:text-2xl">
+                {selectedMeal?.parsed_dish ||
+                  selectedMeal?.meal_description ||
+                  "Chi tiết món ăn"}
+              </DialogTitle>
+            </DialogHeader>
+
+            {loadingRecipe && (
+              <p className="text-sm text-secondary">
+                Đang tải nguyên liệu và công thức từ Recipe collection...
+              </p>
+            )}
+
+            {recipeError && !loadingRecipe && (
+              <p className="text-sm text-destructive mb-2">{recipeError}</p>
+            )}
+
+            {selectedRecipes.length > 1 && !loadingRecipe && (
+              <div className="mb-4 flex flex-wrap gap-2">
+                {selectedRecipes.map((r, idx) => (
+                  <Button
+                    key={r.food_id + idx}
+                    size="sm"
+                    variant={idx === activeRecipeIndex ? "default" : "outline"}
+                    onClick={() => setActiveRecipeIndex(idx)}
+                    className="text-xs md:text-sm"
+                  >
+                    {r.dish_name}
+                  </Button>
+                ))}
+              </div>
+            )}
+
+            {selectedRecipes[activeRecipeIndex] && !loadingRecipe && (
+              <RecipeDetail recipe={selectedRecipes[activeRecipeIndex]} />
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </motion.div>
   );

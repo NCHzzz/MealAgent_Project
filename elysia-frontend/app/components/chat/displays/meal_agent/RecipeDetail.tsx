@@ -52,6 +52,112 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
   const macros = recipe.macros_per_serving;
   const hasMacros = Boolean(macros && typeof macros.kcal === "number");
 
+  // Extract cooking instructions from multiple possible shapes/fields.
+  // Mirrors cook_mode_tool behaviour as much as possible on the frontend
+  // so Calendar view always has reasonable guidance.
+  const buildInstructionList = (): string[] => {
+    const r: any = recipe;
+
+    // 0) Preferred: structured array `cooking_method_array` (used by cook_mode_tool)
+    if (Array.isArray(r.cooking_method_array) && r.cooking_method_array.length > 0) {
+      return r.cooking_method_array
+        .map((s: unknown) => (typeof s === "string" ? s.trim() : String(s ?? "")))
+        .filter((s) => s.length > 0);
+    }
+
+    // 1) Structured steps from CookingSteps-like payload
+    if (Array.isArray(r.steps) && r.steps.length > 0) {
+      // steps: [{ index, instruction, ... }]
+      if (typeof r.steps[0] === "object" && r.steps[0] !== null) {
+        return r.steps
+          .map((s: any) => s?.instruction)
+          .filter((s: unknown): s is string => typeof s === "string" && s.trim().length > 0);
+      }
+      // steps: string[]
+      if (typeof r.steps[0] === "string") {
+        return r.steps.filter(
+          (s: unknown): s is string => typeof s === "string" && s.trim().length > 0,
+        );
+      }
+    }
+
+    // 2) Single string with newlines or numbered bullets
+    const stringCandidates: string[] = [
+      r.cooking_instructions,
+      r.instructions,
+      r.method,
+      r.directions,
+      r.preparation,
+    ].filter((s: unknown): s is string => typeof s === "string" && s.trim().length > 0);
+
+    if (stringCandidates.length > 0) {
+      const joined = stringCandidates.join("\n");
+      // Split on newlines first, then fallback to ". " if needed
+      const lines = joined
+        .split(/\r?\n+/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      if (lines.length > 0) {
+        return lines;
+      }
+
+      return joined
+        .split(/(?<=[.!?])\s+/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+    }
+
+    // 3) Array of strings in alternative fields
+    const arrayCandidates: unknown[] = [
+      r.cooking_steps,
+      r.cooking_steps_text,
+      r.instructions_list,
+    ];
+
+    for (const candidate of arrayCandidates) {
+      if (Array.isArray(candidate)) {
+        const arr = (candidate as unknown[]).filter(
+          (s: unknown): s is string => typeof s === "string" && s.trim().length > 0,
+        );
+        if (arr.length > 0) return arr;
+      }
+    }
+
+    // 4) Fallback: synthesise generic steps from ingredients (like cook_mode_tool)
+    const ingredientsSource =
+      r.ingredients_with_qty ||
+      r.ingredients ||
+      ingredientList ||
+      ([] as unknown[]);
+
+    const ingredientsArr = Array.isArray(ingredientsSource)
+      ? ingredientsSource
+      : [];
+
+    if (ingredientsArr.length > 0) {
+      const synthetic: string[] = [];
+      synthetic.push("Chuẩn bị đầy đủ tất cả nguyên liệu ở trên.");
+      ingredientsArr.forEach((ing: unknown) => {
+        const text =
+          typeof ing === "string"
+            ? ing
+            : typeof ing === "object" && ing !== null
+            ? JSON.stringify(ing)
+            : String(ing);
+        synthetic.push(`Sơ chế / chuẩn bị: ${text}`);
+      });
+      synthetic.push(
+        "Tiến hành nấu món ăn theo phương pháp phù hợp (xào, luộc, chiên, hầm...) cho tới khi chín và nêm nếm vừa ăn.",
+      );
+      return synthetic;
+    }
+
+    return [];
+  };
+
+  const instructionList = buildInstructionList();
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -177,6 +283,26 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
                     </li>
                   ))}
                 </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Cooking Instructions */}
+          {instructionList.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold mb-3">👩‍🍳 Hướng dẫn nấu</h3>
+              <div className="bg-background rounded-lg border border-secondary/10 p-4 space-y-2">
+                {instructionList.map((step, idx) => (
+                  <div
+                    key={`${idx}-${step.slice(0, 20)}`}
+                    className="flex items-start gap-3"
+                  >
+                    <div className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {idx + 1}
+                    </div>
+                    <p className="text-sm leading-relaxed text-primary">{step}</p>
+                  </div>
+                ))}
               </div>
             </div>
           )}

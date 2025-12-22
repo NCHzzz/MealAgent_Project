@@ -32,7 +32,10 @@ from types import GeneratorType
 
 def _extract_steps_from_recipe(recipe: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Build simple cooking steps from cooking_method_array or fallback to ingredients list.
-    This is deterministic and avoids LLM; good as a baseline.
+
+    NOTE: We intentionally no longer try to estimate per-step durations.
+    Frontend only displays the overall cooking_time from Recipe collection,
+    so each step gets a neutral `estimated_seconds=0` to avoid misleading UX.
     """
     steps: List[Dict[str, Any]] = []
 
@@ -52,24 +55,41 @@ def _extract_steps_from_recipe(recipe: Dict[str, Any]) -> List[Dict[str, Any]]:
         for idx, s in enumerate(cooking_steps, start=1):
             if not s:
                 continue
-            steps.append({
-                "index": idx,
-                "instruction": str(s),
-                "estimated_seconds": _estimate_duration_seconds(str(s)),
-            })
+            steps.append(
+                {
+                    "index": idx,
+                    "instruction": str(s),
+                    # Per-step duration no longer used in UI; keep 0 for compatibility.
+                    "estimated_seconds": 0,
+                }
+            )
     else:
         # Fallback: create generic steps from ingredients
         ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []
         if not isinstance(ingredients, list):
             ingredients = []
-        steps.append({"index": 1, "instruction": "Gather all ingredients.", "estimated_seconds": 60})
+        steps.append(
+            {
+                "index": 1,
+                "instruction": "Gather all ingredients.",
+                "estimated_seconds": 0,
+            }
+        )
         for i, ing in enumerate(ingredients, start=2):
-            steps.append({
-                "index": i,
-                "instruction": f"Prepare: {ing}",
-                "estimated_seconds": 45,
-            })
-        steps.append({"index": len(steps) + 1, "instruction": "Cook following your preferred method.", "estimated_seconds": 300})
+            steps.append(
+                {
+                    "index": i,
+                    "instruction": f"Prepare: {ing}",
+                    "estimated_seconds": 0,
+                }
+            )
+        steps.append(
+            {
+                "index": len(steps) + 1,
+                "instruction": "Cook following your preferred method.",
+                "estimated_seconds": 0,
+            }
+        )
 
     return steps
 
@@ -424,16 +444,33 @@ async def cook_mode_tool(
                 recipe_fid = str(recipe.get("food_id") or "")
                 dish_name = str(recipe.get("dish_name") or "món ăn")
                 
-                # Extract steps
+                # Extract steps (without per-step timing; see _extract_steps_from_recipe)
                 steps = _extract_steps_from_recipe(recipe)
                 if not steps:
                     logging.warning(f"cook_mode_tool: no steps for {dish_name} (food_id={recipe_fid})")
                     continue
                 
-                # Calculate times
-                total_time_seconds = sum(s.get("estimated_seconds", 0) for s in steps)
-                total_time_minutes = total_time_seconds // 60
+                # Overall cooking time: prefer explicit recipe.cooking_time (minutes)
+                # and fall back to naive per-step sum only if missing.
+                cooking_time_minutes = None
+                try:
+                    raw_ct = recipe.get("cooking_time")
+                    if isinstance(raw_ct, (int, float)):
+                        cooking_time_minutes = int(raw_ct)
+                except Exception:
+                    cooking_time_minutes = None
+
+                if cooking_time_minutes is not None and cooking_time_minutes > 0:
+                    total_time_minutes = cooking_time_minutes
+                    total_time_seconds = cooking_time_minutes * 60
+                else:
+                    total_time_seconds = sum(
+                        s.get("estimated_seconds", 0) for s in steps
+                    )
+                    total_time_minutes = total_time_seconds // 60
                 
+                # Keep payload focused on what the UI needs to display to avoid
+                # sending unnecessary text back into the LLM context.
                 steps_payload = {
                     "food_id": recipe_fid,
                     "dish_name": dish_name,
@@ -443,9 +480,6 @@ async def cook_mode_tool(
                     "serving_size": recipe.get("serving_size", 1),
                     "image_link": recipe.get("image_link"),
                     "cooking_time": recipe.get("cooking_time"),
-                    # Include ingredients for ingredient list requests
-                    "ingredients": recipe.get("ingredients") or [],
-                    "ingredients_with_qty": recipe.get("ingredients_with_qty") or [],
                 }
                 
                 # Emit Result for this dish immediately
@@ -750,28 +784,34 @@ async def cook_mode_tool(
     dish_name = str(recipe.get("dish_name") or "the dish")
 
     # Stream brief progress; per-step streaming is optional to avoid duplicate UI with cards
-    total_time = sum(s.get("estimated_seconds", 0) for s in steps)
-    total_minutes = total_time // 60
-    yield Response(f"📋 Found {len(steps)} steps for {dish_name} (est. {total_minutes} min total)")
+    # Overall cooking time: prefer recipe.cooking_time (minutes) if available.
+    cooking_time_minutes = None
+    try:
+        raw_ct = recipe.get("cooking_time")
+        if isinstance(raw_ct, (int, float)):
+            cooking_time_minutes = int(raw_ct)
+    except Exception:
+        cooking_time_minutes = None
 
-    if stream_steps:
-        for step in steps:
-            idx = step.get("index")
-            txt = step.get("instruction")
-            dur = step.get("estimated_seconds")
-            dur_min = dur // 60 if dur >= 60 else dur
-            dur_unit = "min" if dur >= 60 else "sec"
-            logging.debug("cook_mode_tool: step %s (%ss): %s", idx, dur, txt)
-            yield Response(f"Step {idx}: {txt} (~{dur_min} {dur_unit})")
-    
+    if cooking_time_minutes is not None and cooking_time_minutes > 0:
+        total_time_seconds = cooking_time_minutes * 60
+        total_minutes = cooking_time_minutes
+    else:
+        total_time_seconds = sum(s.get("estimated_seconds", 0) for s in steps)
+        total_minutes = total_time_seconds // 60
+    # Ensure we expose a consistently named value for downstream metadata
+    total_time_minutes = total_minutes
+
+    yield Response(
+        f"📋 Found {len(steps)} steps for {dish_name} (total cooking time ≈ {total_minutes} min)"
+    )
+
+    # Optional per-step streaming is disabled to avoid duplicating step text
+    # in the conversation context, which significantly increases token usage.
+    # The UI already renders all steps from the `steps` Result payload.
+
     # Stream completion message
     yield Response(f"✅ Cooking instructions ready for {dish_name}!")
-    
-    # Emit Result objects FIRST to ensure cooking steps display appears before tips
-    # This ensures the main recipe component is shown before supplementary tips
-    # Calculate total cooking time for metadata
-    total_time_seconds = sum(s.get("estimated_seconds", 0) for s in steps)
-    total_time_minutes = total_time_seconds // 60
 
     steps_payload = {
         "food_id": str(recipe.get("food_id") or ""),

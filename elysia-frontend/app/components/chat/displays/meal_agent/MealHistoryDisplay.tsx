@@ -16,11 +16,17 @@ interface MealHistoryDisplayProps {
     type: string,
     payload: /* eslint-disable @typescript-eslint/no-explicit-any */ any
   ) => void;
+  /**
+   * Optional callback when the user clicks on a specific meal entry.
+   * Used by Calendar/Meal history page to open a richer recipe + ingredient view.
+   */
+  onMealClick?: (entry: any) => void;
 }
 
 const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
   history,
   handleResultPayloadChange,
+  onMealClick,
 }) => {
   if (history.length === 0) return null;
 
@@ -277,7 +283,8 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
                             {meals.map((entry: any, mealIdx: number) => (
                               <div
                                 key={entry.log_id || `${date}-${mealIdx}`}
-                                className="p-2 sm:p-3 rounded border border-secondary/10 bg-background"
+                                onClick={() => onMealClick?.(entry)}
+                                className="p-2 sm:p-3 rounded border border-secondary/10 bg-background cursor-pointer hover:border-primary/30 transition-colors"
                               >
                               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 sm:gap-3">
                                   <div className="flex-1 min-w-0">
@@ -332,7 +339,10 @@ const MealHistoryDisplay: React.FC<MealHistoryDisplayProps> = ({
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: idx * 0.1 }}
         >
-          <Card className="w-full bg-background_alt border-secondary/10">
+          <Card
+            className="w-full bg-background_alt border-secondary/10 cursor-pointer hover:border-primary/30 transition-colors"
+            onClick={() => onMealClick?.(entry)}
+          >
             <CardHeader>
               <div className="flex justify-between items-center">
                 <CardTitle className="text-lg">
