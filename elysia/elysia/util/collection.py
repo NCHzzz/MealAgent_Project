@@ -39,6 +39,9 @@ def get_collection_data_types(client, collection_name: str):
 
 
 async def async_get_collection_data_types(client, collection_name: str):
+    # Check if collection exists before trying to access it
+    if not await client.collections.exists(collection_name):
+        raise ValueError(f"Collection '{collection_name}' does not exist")
     config = client.collections.get(collection_name).config
     config = await config.get()
     properties = config.properties

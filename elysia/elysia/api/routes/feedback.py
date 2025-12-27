@@ -43,6 +43,7 @@ async def run_add_feedback(
                 client,
             )
         except Exception as e:
+            logger.exception(f"Error in /add_feedback API: {e}")
             return JSONResponse(content={"error": str(e)}, status_code=500)
 
     return JSONResponse(content={"error": ""}, status_code=200)

@@ -13,6 +13,7 @@ from elysia.util.collection import (
     async_get_collection_data_types,
     paginated_collection,
 )
+from elysia.api.utils.feedback import create_feedback_collection
 from elysia.preprocessing.collection import (
     edit_preprocessed_collection_async,
     delete_preprocessed_collection_async,
@@ -304,6 +305,20 @@ async def view_paginated_collection(
         user_local = await user_manager.get_user_local(user_id)
         client_manager = user_local["client_manager"]
         async with client_manager.connect_to_async_client() as client:
+            # Check if collection exists, and create it if it's the feedback collection
+            if not await client.collections.exists(collection_name):
+                if collection_name == "ELYSIA_FEEDBACK__":
+                    # Create the feedback collection if it doesn't exist
+                    logger.info(f"Creating feedback collection {collection_name} as it doesn't exist")
+                    await create_feedback_collection(client)
+                else:
+                    # For other collections, return empty result
+                    logger.warning(f"Collection {collection_name} does not exist")
+                    return JSONResponse(
+                        content={"properties": {}, "items": [], "error": f"Collection '{collection_name}' does not exist"},
+                        status_code=200,
+                    )
+            
             # get collection properties
             data_types = await async_get_collection_data_types(client, collection_name)
 

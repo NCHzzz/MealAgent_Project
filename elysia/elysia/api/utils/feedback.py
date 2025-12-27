@@ -167,9 +167,8 @@ async def create_feedback_collection(client):
             wc.Property(name="training_updates", data_type=wc.DataType.TEXT),
         ],
         vectorizer_config=[
-            wc.Configure.NamedVectors.text2vec_openai(
+            wc.Configure.NamedVectors.text2vec_transformers(
                 name="user_prompt",
-                model="text-embedding-3-small",
                 source_properties=["user_prompt"],
                 vector_index_config=wc.Configure.VectorIndex.hnsw(
                     quantizer=wc.Configure.VectorIndex.Quantizer.sq(),
@@ -187,6 +186,14 @@ async def create_feedback(
         await create_feedback_collection(client)
 
     feedback_collection = client.collections.get("ELYSIA_FEEDBACK__")
+
+    # Check if query_id exists in tree history
+    if query_id not in tree.history:
+        raise KeyError(
+            f"Query ID '{query_id}' not found in tree history. "
+            "This can happen if the page was refreshed or the session expired. "
+            "Please make a new query to submit feedback."
+        )
 
     history = tree.history[query_id]
 
@@ -229,12 +236,10 @@ async def create_feedback(
         "decision_time": tree.tracker.get_average_time("decision_node"),
         "base_lm_used": tree.base_lm.model,
         "complex_lm_used": tree.complex_lm.model,
-        "feedback_datetime": format_datetime(date_now),
         "feedback_date": format_datetime(
             date_now.replace(hour=0, minute=0, second=0, microsecond=0)
         ),
         "training_updates": json.dumps(history["training_updates"]),
-        "initialisation": history["initialisation"],
     }
 
     # uuid is generated based on the user_id, conversation_id, query_id ONLY
