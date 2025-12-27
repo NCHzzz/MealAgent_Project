@@ -13,8 +13,8 @@ bert-score>=0.3.13
 transformers>=4.30.0
 torch>=2.0.0
 
-# LLM Judge (Gemini)
-google-generativeai>=0.3.0
+# LLM Judge (OpenRouter - supports multiple models including Gemini)
+requests>=2.31.0
 
 # Utilities
 python-dotenv>=1.0.0

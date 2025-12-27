@@ -10,7 +10,7 @@ This module provides various evaluation methods:
 
 from .nutrition_error import NutritionErrorEvaluator
 from .llm_judge import LLMJudgeEvaluator
-from .bertscore_eval import BERTScoreEvaluator
+# from .bertscore_eval import BERTScoreEvaluator
 
 __all__ = [
     "NutritionErrorEvaluator",

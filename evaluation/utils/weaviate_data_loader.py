@@ -429,7 +429,60 @@ def aggregate_meal_logs_to_plan(
     if not meal_logs:
         return None
     
-    # Aggregate macros từ tất cả meal logs
+    # Validate: Tất cả logs phải cùng 1 ngày
+    log_dates = []
+    for log in meal_logs:
+        logged_at = log.get("logged_at")
+        if logged_at:
+            try:
+                if isinstance(logged_at, str):
+                    log_date = datetime.fromisoformat(logged_at.replace("Z", "+00:00"))
+                else:
+                    log_date = logged_at
+                # Normalize về UTC và lấy date
+                if log_date.tzinfo is None:
+                    log_date = log_date.replace(tzinfo=timezone.utc)
+                log_dates.append(log_date.date())
+            except Exception as e:
+                logger.warning(f"Failed to parse logged_at for log {log.get('log_id')}: {e}")
+                continue
+    
+    if not log_dates:
+        logger.warning(f"No valid dates found in meal logs for user {user_id}")
+        return None
+    
+    # Kiểm tra xem tất cả logs có cùng 1 ngày không
+    unique_dates = set(log_dates)
+    if len(unique_dates) > 1:
+        logger.warning(
+            f"Meal logs for user {user_id} contain multiple dates: {unique_dates}. "
+            f"Only aggregating logs from the first date: {log_dates[0]}"
+        )
+        # Chỉ lấy logs từ ngày đầu tiên
+        target_date = log_dates[0]
+        filtered_logs = []
+        for log in meal_logs:
+            logged_at = log.get("logged_at")
+            if logged_at:
+                try:
+                    if isinstance(logged_at, str):
+                        log_date = datetime.fromisoformat(logged_at.replace("Z", "+00:00"))
+                    else:
+                        log_date = logged_at
+                    if log_date.tzinfo is None:
+                        log_date = log_date.replace(tzinfo=timezone.utc)
+                    if log_date.date() == target_date:
+                        filtered_logs.append(log)
+                except Exception:
+                    continue
+        meal_logs = filtered_logs
+    
+    # Xác định plan_date
+    plan_date = date
+    if not plan_date:
+        plan_date = datetime.combine(log_dates[0], datetime.min.time()).replace(tzinfo=timezone.utc)
+    
+    # Aggregate macros từ tất cả meal logs (đã được filter để cùng 1 ngày)
     total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
     
     for log in meal_logs:
@@ -448,27 +501,10 @@ def aggregate_meal_logs_to_plan(
             total_macros["fat_g"] += float(macros.get("fat_g", 0.0))
             total_macros["carb_g"] += float(macros.get("carb_g", 0.0))
     
-    # Tạo meal plan structure từ meal logs
-    plan_date = date
-    if not plan_date and meal_logs:
-        # Lấy date từ log đầu tiên
-        logged_at = meal_logs[0].get("logged_at")
-        if logged_at:
-            try:
-                if isinstance(logged_at, str):
-                    plan_date = datetime.fromisoformat(logged_at.replace("Z", "+00:00"))
-                else:
-                    plan_date = logged_at
-            except Exception:
-                plan_date = datetime.now(timezone.utc)
-    
-    if not plan_date:
-        plan_date = datetime.now(timezone.utc)
-    
     return {
         "plan_id": f"meal_logs_{user_id}_{plan_date.date().isoformat()}",
         "user_id": user_id,
-        "plan_type": "day",
+        "plan_type": "day",  # MealLogEntry luôn là day plan
         "start_date": plan_date.isoformat(),
         "created_at": plan_date.isoformat(),
         "meals": {},  # Meal logs không có structure meals chi tiết
@@ -595,14 +631,24 @@ def load_all_meal_logs_from_weaviate(
             if not user_id or not logged_at:
                 continue
             
-            # Parse date
+            # Parse date - đảm bảo normalize về UTC và lấy đúng date
             try:
                 if isinstance(logged_at, str):
                     log_date = datetime.fromisoformat(logged_at.replace("Z", "+00:00"))
                 else:
                     log_date = logged_at
+                
+                # Normalize về UTC nếu chưa có timezone
+                if log_date.tzinfo is None:
+                    log_date = log_date.replace(tzinfo=timezone.utc)
+                elif log_date.tzinfo != timezone.utc:
+                    # Convert về UTC
+                    log_date = log_date.astimezone(timezone.utc)
+                
+                # Lấy date (bỏ time)
                 date_key = log_date.date().isoformat()
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to parse logged_at for log: {e}")
                 continue
             
             key = (str(user_id), date_key)

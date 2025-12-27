@@ -1,0 +1,1706 @@
+{
+  "method": "nutrition_error",
+  "metadata": {
+    "total_evaluations": 46,
+    "meal_plan_count": 29,
+    "meal_log_count": 17,
+    "user_profile_count": 46,
+    "data_source": "Weaviate",
+    "load_all": true,
+    "date_filter": null
+  },
+  "individual_results": [
+    {
+      "mae": {
+        "protein_g": 38.312074999999965,
+        "carb_g": 94.01007499999997,
+        "fat_g": 194.03517500000004,
+        "calories": 1719.2249999999995,
+        "overall": 144.022625
+      },
+      "percentage_error": {
+        "protein_g": 19.985432968179428,
+        "carb_g": 22.65360230922744,
+        "fat_g": 29.623575133707284,
+        "calories": 24.750868858324324,
+        "overall": 12.187494695037097
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 153.38792500000002,
+        "carb_g": 313.010075,
+        "fat_g": 254.83517500000002,
+        "calories": 3909.2249999999995
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_4e3ea626c750",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 72.58882307511902,
+        "carb_g": 41.76708900327384,
+        "fat_g": 38.60913439285714,
+        "calories": 127.09242914285687,
+        "overall": 57.17795603919643
+      },
+      "percentage_error": {
+        "protein_g": 22.21774117159095,
+        "carb_g": 19.071730138481204,
+        "fat_g": 24.014051920181963,
+        "calories": 5.803307266797118,
+        "overall": 5.781797181300816
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 119.11117692488097,
+        "carb_g": 260.76708900327384,
+        "fat_g": 99.40913439285714,
+        "calories": 2317.092429142857
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_e9ab26e1d94c",
+        "source": "MealPlan",
+        "plan_type": "week",
+        "plan_date": "2025-12-16T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 35.26443333333333,
+        "carb_g": 157.07116666666667,
+        "fat_g": 204.78799999999995,
+        "calories": 2366.2000000000007,
+        "overall": 180.9295833333333
+      },
+      "percentage_error": {
+        "protein_g": 18.395635541644932,
+        "carb_g": 24.436978872196416,
+        "fat_g": 29.810967437433863,
+        "calories": 25.860618716156967,
+        "overall": 12.122782289319007
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 156.43556666666666,
+        "carb_g": 376.07116666666667,
+        "fat_g": 265.58799999999997,
+        "calories": 4556.200000000001
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_a23bbc66af59",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 105.57562499999999,
+        "carb_g": 158.012925,
+        "fat_g": 82.79764999999999,
+        "calories": 874.5374999999999,
+        "overall": 131.794275
+      },
+      "percentage_error": {
+        "protein_g": 23.51929242043336,
+        "carb_g": 24.45774801548098,
+        "fat_g": 26.664675485460116,
+        "calories": 22.40243460939061,
+        "overall": 12.041357008181848
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 86.124375,
+        "carb_g": 377.012925,
+        "fat_g": 143.59765,
+        "calories": 3064.5375
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_249daf754e1c",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-07T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 80.71606249999999,
+        "carb_g": 178.73416250000002,
+        "fat_g": 35.93075,
+        "calories": 646.7824999999998,
+        "overall": 129.72511250000002
+      },
+      "percentage_error": {
+        "protein_g": 22.58646287521189,
+        "carb_g": 24.885867673326125,
+        "fat_g": 23.764261660817986,
+        "calories": 21.354273201435788,
+        "overall": 12.141461726782408
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 110.9839375,
+        "carb_g": 397.7341625,
+        "fat_g": 96.73075,
+        "calories": 2836.7825
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_afdd7dfcdb2f",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-07T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 19.772743750000018,
+        "carb_g": 172.29279375,
+        "fat_g": 204.79423749999995,
+        "calories": 2492.34,
+        "overall": 188.54351562499997
+      },
+      "percentage_error": {
+        "protein_g": 10.314420318205539,
+        "carb_g": 24.758344021561474,
+        "fat_g": 29.811073258891263,
+        "calories": 26.04106541681977,
+        "overall": 9.372984874253676
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 211.47274375,
+        "carb_g": 391.29279375,
+        "fat_g": 265.59423749999996,
+        "calories": 4682.34
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_c8f83c502949",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-05T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 1.6736500000000092,
+        "carb_g": 273.935,
+        "fat_g": 63.630750000000006,
+        "calories": 1629.1800000000003,
+        "overall": 168.782875
+      },
+      "percentage_error": {
+        "protein_g": 0.8730568596765829,
+        "carb_g": 26.369387312247085,
+        "fat_g": 25.749867738015343,
+        "calories": 24.563959675950862,
+        "overall": 0.8730568596765829
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 193.37365,
+        "carb_g": 492.935,
+        "fat_g": 124.43075,
+        "calories": 3819.1800000000003
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_e29911a5e2f2",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 75.8699836875,
+        "carb_g": 54.18839800000001,
+        "fat_g": 24.388751375000012,
+        "calories": 25.97564999999986,
+        "overall": 40.08202399999993
+      },
+      "percentage_error": {
+        "protein_g": 22.37134305716899,
+        "carb_g": 20.739457611382196,
+        "fat_g": 22.418047931813664,
+        "calories": 1.186102739726021,
+        "overall": 1.186102739726021
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 115.83001631249999,
+        "carb_g": 273.188398,
+        "fat_g": 85.18875137500001,
+        "calories": 2215.97565
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_fac27f493177",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-05T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 131.68068749999998,
+        "carb_g": 86.9301125,
+        "fat_g": 9.478549999999998,
+        "calories": 309.1575,
+        "overall": 109.30539999999999
+      },
+      "percentage_error": {
+        "protein_g": 24.28695981414,
+        "carb_g": 22.38156904928498,
+        "fat_g": 15.589720394736839,
+        "calories": 14.11678082191781,
+        "overall": 11.255637242066248
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 60.0193125,
+        "carb_g": 305.9301125,
+        "fat_g": 51.32145,
+        "calories": 1880.8425
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_7ec29c368cbd",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-07T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 41.50125,
+        "carb_g": 116.32829999999996,
+        "fat_g": 13.449325000000002,
+        "calories": 346.18624999999975,
+        "overall": 78.91477499999998
+      },
+      "percentage_error": {
+        "protein_g": 20.27527255305713,
+        "carb_g": 23.39369016749828,
+        "fat_g": 20.350135307254433,
+        "calories": 15.807591324200901,
+        "overall": 11.730930182493045
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 150.19875,
+        "carb_g": 335.32829999999996,
+        "fat_g": 74.249325,
+        "calories": 2536.1862499999997
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_e3c2debc5fd7",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 92.88,
+        "carb_g": 35.01999999999998,
+        "fat_g": 3.9199999999999946,
+        "calories": 32.43000000000029,
+        "overall": 33.725000000000136
+      },
+      "percentage_error": {
+        "protein_g": 23.07416078550779,
+        "carb_g": 15.990867579908668,
+        "fat_g": 6.447368421052622,
+        "calories": 1.4808219178082325,
+        "overall": 1.4808219178082325
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 98.82,
+        "carb_g": 254.01999999999998,
+        "fat_g": 56.88,
+        "calories": 2222.4300000000003
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_62d7f94924eb",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 90.72347499999998,
+        "carb_g": 202.2526249999999,
+        "fat_g": 17.795024999999995,
+        "calories": 220.7100000000005,
+        "overall": 146.48804999999993
+      },
+      "percentage_error": {
+        "protein_g": 22.992540545572922,
+        "carb_g": 25.315360451566452,
+        "fat_g": 21.32292022030613,
+        "calories": 10.078082191780844,
+        "overall": 9.218518233564787
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 100.97652500000001,
+        "carb_g": 421.2526249999999,
+        "fat_g": 78.59502499999999,
+        "calories": 2410.7100000000005
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_26c6ae8a347d",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 39.14143125000001,
+        "carb_g": 304.7246,
+        "fat_g": 136.39639999999997,
+        "calories": 2401.7299999999996,
+        "overall": 220.5605
+      },
+      "percentage_error": {
+        "protein_g": 20.071876748251288,
+        "carb_g": 26.73946724106478,
+        "fat_g": 28.3989546633182,
+        "calories": 25.912400578967038,
+        "overall": 12.187370841843727
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 152.55856874999998,
+        "carb_g": 523.7246,
+        "fat_g": 197.19639999999998,
+        "calories": 4591.73
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_e7578410a1c8",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 83.33031628124998,
+        "carb_g": 50.82735247946431,
+        "fat_g": 15.53593125892857,
+        "calories": 125.27263928571438,
+        "overall": 67.07883438035714
+      },
+      "percentage_error": {
+        "protein_g": 22.69720737325469,
+        "carb_g": 20.516987024317988,
+        "fat_g": 20.851229728240135,
+        "calories": 5.720211839530337,
+        "overall": 5.702921669737014
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 108.36968371875001,
+        "carb_g": 269.8273524794643,
+        "fat_g": 76.33593125892857,
+        "calories": 2064.7273607142856
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_8b7837bb5786",
+        "source": "MealPlan",
+        "plan_type": "week",
+        "plan_date": "2025-12-27T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 122.97067499999999,
+        "carb_g": 41.993449999999996,
+        "fat_g": 3.78347500000001,
+        "calories": 615.1812500000001,
+        "overall": 82.48206249999998
+      },
+      "percentage_error": {
+        "protein_g": 24.049195587139153,
+        "carb_g": 19.17509132420091,
+        "fat_g": 6.222820723684227,
+        "calories": 21.180231837653224,
+        "overall": 6.172977706275173
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 68.729325,
+        "carb_g": 177.00655,
+        "fat_g": 64.583475,
+        "calories": 1574.81875
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_707ce3f9b2dc",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-07T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 103.83571249999999,
+        "carb_g": 26.99566250000001,
+        "fat_g": 18.31915,
+        "calories": 894.9737500000001,
+        "overall": 65.41568749999999
+      },
+      "percentage_error": {
+        "protein_g": 23.46155710999247,
+        "carb_g": 12.32678652968037,
+        "fat_g": 21.42377395041259,
+        "calories": 22.482689495501557,
+        "overall": 10.52295359711482
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 87.8642875,
+        "carb_g": 192.0043375,
+        "fat_g": 42.48085,
+        "calories": 1295.02625
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_977b27cc382e",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-27T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 17.62246428124999,
+        "carb_g": 52.88811542000002,
+        "fat_g": 34.045869672500004,
+        "calories": 2.2703800000003866,
+        "overall": 25.834166976874997
+      },
+      "percentage_error": {
+        "protein_g": 9.19273045448617,
+        "carb_g": 20.655071851434368,
+        "fat_g": 23.57704685919102,
+        "calories": 0.10367031963472086,
+        "overall": 0.10367031963472086
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 174.07753571875,
+        "carb_g": 271.88811542,
+        "fat_g": 94.8458696725,
+        "calories": 2187.7296199999996
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_9766989a7edd",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-05T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 119.82998333333336,
+        "carb_g": 282.14781458333334,
+        "fat_g": 220.97222499999998,
+        "calories": 2697.9224999999997,
+        "overall": 251.56001979166666
+      },
+      "percentage_error": {
+        "protein_g": 23.95930712296655,
+        "carb_g": 26.472020641794604,
+        "fat_g": 30.03009316396156,
+        "calories": 26.31644287641332,
+        "overall": 11.781944926791514
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 311.52998333333335,
+        "carb_g": 501.14781458333334,
+        "fat_g": 281.772225,
+        "calories": 4887.9225
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_d488cfc20774",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-05T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 108.40921679166667,
+        "carb_g": 54.45996458000002,
+        "fat_g": 26.654373949999993,
+        "calories": 22.67422499999975,
+        "overall": 40.557169265000006
+      },
+      "percentage_error": {
+        "protein_g": 23.6113127864487,
+        "carb_g": 20.756825952327006,
+        "fat_g": 22.7266792917165,
+        "calories": 1.035352739726016,
+        "overall": 1.035352739726016
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 83.29078320833332,
+        "carb_g": 273.45996458,
+        "fat_g": 87.45437394999999,
+        "calories": 2167.3257750000002
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_dfc260dacf61",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-05T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 47.42352708333334,
+        "carb_g": 23.594455416666676,
+        "fat_g": 260.525805,
+        "calories": 2171.2825000000003,
+        "overall": 153.97466604166667
+      },
+      "percentage_error": {
+        "protein_g": 20.738733940587526,
+        "carb_g": 10.773723934550993,
+        "fat_g": 30.258934949000945,
+        "calories": 25.561937772545793,
+        "overall": 9.66252766547076
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 144.27647291666665,
+        "carb_g": 242.59445541666668,
+        "fat_g": 321.325805,
+        "calories": 4361.2825
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_743f0e4744b6",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 3.5553750000000264,
+        "carb_g": 54.901925000000006,
+        "fat_g": 97.518625,
+        "calories": 1069.1075,
+        "overall": 76.210275
+      },
+      "percentage_error": {
+        "protein_g": 1.854655712050092,
+        "carb_g": 20.784907693385215,
+        "fat_g": 27.23323195376603,
+        "calories": 23.100378125716208,
+        "overall": 1.854655712050092
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 195.25537500000002,
+        "carb_g": 273.901925,
+        "fat_g": 158.318625,
+        "calories": 3259.1075
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_a6f4846f9afa",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 66.10559999999998,
+        "carb_g": 146.51344999999998,
+        "fat_g": 115.21505,
+        "calories": 1245.5699999999997,
+        "overall": 130.86425
+      },
+      "percentage_error": {
+        "protein_g": 21.892689142929434,
+        "carb_g": 24.19522707554465,
+        "fat_g": 27.81260510160951,
+        "calories": 23.631152232349077,
+        "overall": 12.097230268869488
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 125.59440000000001,
+        "carb_g": 365.51345,
+        "fat_g": 176.01505,
+        "calories": 3435.5699999999997
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_7e67948d3757",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 67.70304999999999,
+        "carb_g": 69.9822375,
+        "fat_g": 286.601875,
+        "calories": 2592.9487499999996,
+        "overall": 178.29205625
+      },
+      "percentage_error": {
+        "protein_g": 21.9756490032521,
+        "carb_g": 21.62810970640881,
+        "fat_g": 30.391505447567933,
+        "calories": 26.17855857966414,
+        "overall": 12.12084111243106
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 123.99695,
+        "carb_g": 288.9822375,
+        "fat_g": 347.401875,
+        "calories": 4782.94875
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_85e0b5ee552f",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 49.85146875000001,
+        "carb_g": 226.07047500000004,
+        "fat_g": 196.11640624999995,
+        "calories": 2697.2174999999997,
+        "overall": 211.093440625
+      },
+      "percentage_error": {
+        "protein_g": 20.9122067976392,
+        "carb_g": 25.702157890471454,
+        "fat_g": 29.660642811584637,
+        "calories": 26.315534866281283,
+        "overall": 12.166658500860697
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 241.55146875,
+        "carb_g": 445.07047500000004,
+        "fat_g": 256.91640624999997,
+        "calories": 4887.2175
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_636f52b4d2df",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 122.31114875000003,
+        "carb_g": 287.36203275,
+        "fat_g": 140.58254599999998,
+        "calories": 2715.3034000000007,
+        "overall": 213.972289375
+      },
+      "percentage_error": {
+        "protein_g": 24.03051149244648,
+        "carb_g": 26.53564221295246,
+        "fat_g": 28.50398263474341,
+        "calories": 26.33875402334115,
+        "overall": 11.7667132739136
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 314.01114875,
+        "carb_g": 506.36203275,
+        "fat_g": 201.382546,
+        "calories": 4905.303400000001
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_42c7643cc3ad",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 95.67237924999999,
+        "carb_g": 128.75063075,
+        "fat_g": 24.167324999999998,
+        "calories": 1147.975,
+        "overall": 112.21150499999999
+      },
+      "percentage_error": {
+        "protein_g": 23.177075727236065,
+        "carb_g": 23.74620203860187,
+        "fat_g": 22.386360060273507,
+        "calories": 23.347666558579427,
+        "overall": 12.04333048760256
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 96.02762075,
+        "carb_g": 90.24936925,
+        "fat_g": 36.632675,
+        "calories": 1042.025
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_b51ab5e826a9",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-27T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 65.77096503365092,
+        "carb_g": 101.41021537611425,
+        "fat_g": 18.25708838800425,
+        "calories": 328.5,
+        "overall": 83.59059020488259
+      },
+      "percentage_error": {
+        "protein_g": 21.8750568448822,
+        "carb_g": 22.9168607565784,
+        "fat_g": 21.411983545414376,
+        "calories": 15.0,
+        "overall": 11.527777777777779
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 125.92903496634906,
+        "carb_g": 320.41021537611425,
+        "fat_g": 79.05708838800425,
+        "calories": 2518.5
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_e7f13148f121",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 61.69999999999999,
+        "carb_g": 104.0,
+        "fat_g": 12.799999999999997,
+        "calories": 940.0,
+        "overall": 82.85
+      },
+      "percentage_error": {
+        "protein_g": 21.653064443929583,
+        "carb_g": 23.004473830357448,
+        "fat_g": 20.178211157689216,
+        "calories": 22.653229944764792,
+        "overall": 12.186705963545887
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 130.0,
+        "carb_g": 115.0,
+        "fat_g": 48.0,
+        "calories": 1250.0
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_545b8de2e09c",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-27T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 43.389375,
+        "carb_g": 268.80470625,
+        "fat_g": 170.97589375,
+        "calories": 2628.539999999999,
+        "overall": 219.8903
+      },
+      "percentage_error": {
+        "protein_g": 20.429850286879212,
+        "carb_g": 26.303702060798678,
+        "fat_g": 29.18401046145133,
+        "calories": 26.225923838469782,
+        "overall": 12.18287882158164
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 235.089375,
+        "carb_g": 487.80470625,
+        "fat_g": 231.77589375,
+        "calories": 4818.539999999999
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "898812d6-bd00-49e0-98f6-e2443890c8e6_plan_14e061bd5fc5",
+        "source": "MealPlan",
+        "plan_type": "day",
+        "plan_date": "2025-12-05T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 1302.3586989583337,
+        "carb_g": 1387.0294033749997,
+        "fat_g": 668.0095654999998,
+        "calories": 14591.231249999997,
+        "overall": 1344.6940511666667
+      },
+      "percentage_error": {
+        "protein_g": 30.899451221313793,
+        "carb_g": 30.801956983019743,
+        "fat_g": 31.567517140551193,
+        "calories": 30.872377055844286,
+        "overall": 10.159105126598721
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 1494.0586989583337,
+        "carb_g": 1606.0294033749997,
+        "fat_g": 728.8095654999997,
+        "calories": 16781.231249999997
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-14",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-14T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 130.60256249999998,
+        "carb_g": 54.30393750000002,
+        "fat_g": 4.967124999999996,
+        "calories": 269.15625,
+        "overall": 92.45325
+      },
+      "percentage_error": {
+        "protein_g": 24.258396716774385,
+        "carb_g": 20.746857682331747,
+        "fat_g": 8.169613486842099,
+        "calories": 12.290239726027398,
+        "overall": 7.8347318316430545
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 61.0974375,
+        "carb_g": 273.3039375,
+        "fat_g": 65.767125,
+        "calories": 1920.84375
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2026-01-02",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2026-01-02T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 361.6276208333334,
+        "carb_g": 1493.3806033333335,
+        "fat_g": 773.680705,
+        "calories": 15257.268750000003,
+        "overall": 1133.5306541666669
+      },
+      "percentage_error": {
+        "protein_g": 27.796875884793447,
+        "carb_g": 30.904628466310704,
+        "fat_g": 31.77161021147698,
+        "calories": 30.934408594236277,
+        "overall": 10.462408219739485
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 553.3276208333334,
+        "carb_g": 1712.3806033333335,
+        "fat_g": 834.480705,
+        "calories": 17447.268750000003
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-06",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-06T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 421.862,
+        "carb_g": 2222.057501666667,
+        "fat_g": 490.699095,
+        "calories": 15297.926666666666,
+        "overall": 1356.3782983333335
+      },
+      "percentage_error": {
+        "protein_g": 28.332146389782594,
+        "carb_g": 31.456899784878892,
+        "fat_g": 31.138821382631637,
+        "calories": 30.93810708550174,
+        "overall": 10.184117641445225
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 613.562,
+        "carb_g": 2441.057501666667,
+        "fat_g": 551.499095,
+        "calories": 17487.926666666666
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-07",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-07T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 83.31677896875,
+        "carb_g": 93.24644435624998,
+        "fat_g": 19.813074312500007,
+        "calories": 29.980774999999994,
+        "overall": 56.648776984375
+      },
+      "percentage_error": {
+        "protein_g": 22.69664290567749,
+        "carb_g": 22.62526535930673,
+        "fat_g": 21.696146348020566,
+        "calories": 1.3689851598173512,
+        "overall": 1.3689851598173512
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 108.38322103124999,
+        "carb_g": 312.24644435625,
+        "fat_g": 80.6130743125,
+        "calories": 2160.019225
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-31",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-31T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 89.774,
+        "carb_g": 41.77924999999999,
+        "fat_g": 89.06824999999999,
+        "calories": 264.1125000000002,
+        "overall": 89.42112499999999
+      },
+      "percentage_error": {
+        "protein_g": 22.95598774112728,
+        "carb_g": 19.077283105022826,
+        "fat_g": 26.918314756064856,
+        "calories": 12.059931506849324,
+        "overall": 10.39056988342663
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 101.92599999999999,
+        "carb_g": 177.22075,
+        "fat_g": 149.86825,
+        "calories": 2454.1125
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-22",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-22T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 65.07292999999999,
+        "carb_g": 15.885482500000023,
+        "fat_g": 15.815057500000009,
+        "calories": 28.479749999999967,
+        "overall": 22.182616249999995
+      },
+      "percentage_error": {
+        "protein_g": 21.837986026804987,
+        "carb_g": 7.25364497716896,
+        "fat_g": 20.913097602521376,
+        "calories": 1.3004452054794506,
+        "overall": 1.3004452054794506
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 126.62707,
+        "carb_g": 234.88548250000002,
+        "fat_g": 76.6150575,
+        "calories": 2161.52025
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-27",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-27T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 165.64886700000005,
+        "carb_g": 142.20522104999998,
+        "fat_g": 68.56810605,
+        "calories": 2474.201290000001,
+        "overall": 153.92704402500001
+      },
+      "percentage_error": {
+        "protein_g": 25.08429088969697,
+        "carb_g": 24.091531450075227,
+        "fat_g": 26.009508630834063,
+        "calories": 26.015687347932555,
+        "overall": 11.753414888735175
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 357.34886700000004,
+        "carb_g": 361.20522105,
+        "fat_g": 129.36810605,
+        "calories": 4664.201290000001
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-16",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-16T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 73.70883749999999,
+        "carb_g": 4.657887500000015,
+        "fat_g": 18.8104,
+        "calories": 356.58500000000004,
+        "overall": 46.259618749999994
+      },
+      "percentage_error": {
+        "protein_g": 22.270939625839922,
+        "carb_g": 2.1268892694063997,
+        "fat_g": 21.515715647289188,
+        "calories": 16.2824200913242,
+        "overall": 2.1268892694063997
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 117.9911625,
+        "carb_g": 214.34211249999998,
+        "fat_g": 79.6104,
+        "calories": 1833.415
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-28",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-28T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 129.35,
+        "carb_g": 22.5,
+        "fat_g": 21.119999999999997,
+        "calories": 602.24,
+        "overall": 75.925
+      },
+      "percentage_error": {
+        "protein_g": 24.224914596084147,
+        "carb_g": 10.273972602739725,
+        "fat_g": 21.91808271140047,
+        "calories": 21.106363895256358,
+        "overall": 9.346813035591417
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 62.35,
+        "carb_g": 196.5,
+        "fat_g": 39.68,
+        "calories": 1587.76
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-21",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-21T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 20.04227819999997,
+        "carb_g": 89.0440524,
+        "fat_g": 4.484042599999995,
+        "calories": 522.6765799999998,
+        "overall": 54.543165299999984
+      },
+      "percentage_error": {
+        "protein_g": 10.455022535211253,
+        "carb_g": 22.465046448315412,
+        "fat_g": 7.3750700657894654,
+        "calories": 20.6140714419126,
+        "overall": 7.187038138542492
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 171.65772180000002,
+        "carb_g": 129.9559476,
+        "fat_g": 56.3159574,
+        "calories": 1667.3234200000002
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-20",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-20T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 81.91956250000001,
+        "carb_g": 12.437812500000007,
+        "fat_g": 18.963124999999998,
+        "calories": 441.16625,
+        "overall": 50.44134375
+      },
+      "percentage_error": {
+        "protein_g": 22.637884125606053,
+        "carb_g": 5.679366438356167,
+        "fat_g": 21.543810663013527,
+        "calories": 20.025025361898287,
+        "overall": 5.663981813104009
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 109.78043749999998,
+        "carb_g": 206.5621875,
+        "fat_g": 41.836875,
+        "calories": 1748.83375
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-19",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-19T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 64.04222708333333,
+        "carb_g": 2.54532416666666,
+        "fat_g": 30.655246666666656,
+        "calories": 355.35333333333347,
+        "overall": 47.34873687499999
+      },
+      "percentage_error": {
+        "protein_g": 21.782514541275066,
+        "carb_g": 1.1622484779299815,
+        "fat_g": 23.21256992064125,
+        "calories": 16.2261796042618,
+        "overall": 1.1622484779299815
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 127.65777291666666,
+        "carb_g": 216.45467583333334,
+        "fat_g": 91.45524666666665,
+        "calories": 1834.6466666666665
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-18",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-18T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 80.13162500000001,
+        "carb_g": 38.940499999999986,
+        "fat_g": 28.100875000000002,
+        "calories": 106.25,
+        "overall": 59.5360625
+      },
+      "percentage_error": {
+        "protein_g": 22.56121473123599,
+        "carb_g": 17.781050228310498,
+        "fat_g": 22.91029014530002,
+        "calories": 4.851598173515981,
+        "overall": 4.851598173515981
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 111.56837499999997,
+        "carb_g": 257.9405,
+        "fat_g": 88.900875,
+        "calories": 2083.75
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-30",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-30T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 7.6425415833333545,
+        "carb_g": 57.08088225,
+        "fat_g": 0.5286909999999878,
+        "calories": 190.12950833333343,
+        "overall": 32.36171191666668
+      },
+      "percentage_error": {
+        "protein_g": 3.986719657450889,
+        "carb_g": 20.920132532047052,
+        "fat_g": 0.8695575657894536,
+        "calories": 8.681712709284632,
+        "overall": 0.8695575657894536
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 199.34254158333334,
+        "carb_g": 276.08088225,
+        "fat_g": 60.27130900000001,
+        "calories": 2380.1295083333334
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-17",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-17T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 74.66156437499998,
+        "carb_g": 56.917423625000026,
+        "fat_g": 20.825240750000006,
+        "calories": 13.16845000000012,
+        "overall": 38.871332187500016
+      },
+      "percentage_error": {
+        "protein_g": 22.315559814919276,
+        "carb_g": 20.91016898362932,
+        "fat_g": 21.869251646627255,
+        "calories": 0.6012990867579964,
+        "overall": 0.6012990867579964
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 117.038435625,
+        "carb_g": 275.917423625,
+        "fat_g": 81.62524075,
+        "calories": 2176.83155
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2026-01-01",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2026-01-01T00:00:00+00:00"
+      }
+    },
+    {
+      "mae": {
+        "protein_g": 75.817915625,
+        "carb_g": 101.15556687499998,
+        "fat_g": 0.4197462500000029,
+        "calories": 73.28825000000052,
+        "overall": 74.55308281250026
+      },
+      "percentage_error": {
+        "protein_g": 22.368957857219065,
+        "carb_g": 22.908125421645703,
+        "fat_g": 0.6903721217105311,
+        "calories": 3.346495433789978,
+        "overall": 0.6903721217105311
+      },
+      "target_values": {
+        "protein_g": 191.7,
+        "carb_g": 219.0,
+        "fat_g": 60.8,
+        "calories": 2190.0
+      },
+      "actual_values": {
+        "protein_g": 115.88208437499999,
+        "carb_g": 320.155566875,
+        "fat_g": 61.21974625,
+        "calories": 2116.7117499999995
+      },
+      "metadata": {
+        "user_id": "898812d6-bd00-49e0-98f6-e2443890c8e6",
+        "plan_id": "meal_logs_898812d6-bd00-49e0-98f6-e2443890c8e6_2025-12-29",
+        "source": "MealLogEntry",
+        "plan_type": "day",
+        "plan_date": "2025-12-29T00:00:00+00:00"
+      }
+    }
+  ],
+  "aggregated": {
+    "count": 46,
+    "mae": {
+      "protein_g": {
+        "mean": 113.75568494081567,
+        "std": 192.2904829876145,
+        "min": 1.6736500000000092,
+        "max": 1302.3586989583337
+      },
+      "carb_g": {
+        "mean": 209.37254408964,
+        "std": 413.2510264045532,
+        "min": 2.54532416666666,
+        "max": 2222.057501666667
+      },
+      "fat_g": {
+        "mean": 107.53508115579254,
+        "std": 164.04919098999167,
+        "min": 0.4197462500000029,
+        "max": 773.680705
+      },
+      "calories": {
+        "mean": 1868.68480058178,
+        "std": 3604.385517239324,
+        "min": 2.2703800000003866,
+        "max": 15297.926666666666
+      },
+      "overall": {
+        "mean": 181.6305407483845,
+        "std": 296.9903243074296,
+        "min": 22.182616249999995,
+        "max": 1356.3782983333335
+      }
+    },
+    "percentage_error": {
+      "protein_g": {
+        "mean": 20.716097929251585,
+        "median": 22.37015045719403,
+        "std": 6.199173480146466,
+        "min": 0.8730568596765829,
+        "max": 30.899451221313793,
+        "p25": 20.782102154850445,
+        "p75": 23.504858592823137
+      },
+      "carb_g": {
+        "mean": 20.823324547328838,
+        "median": 22.54515590381107,
+        "std": 6.781638164061671,
+        "min": 1.1622484779299815,
+        "max": 31.456899784878892,
+        "p25": 19.51056524923018,
+        "p75": 24.68319502004135
+      },
+      "fat_g": {
+        "mean": 22.51974090130001,
+        "median": 23.061430032970634,
+        "std": 7.847560924886911,
+        "min": 0.6903721217105311,
+        "max": 31.77161021147698,
+        "p25": 21.34518605158319,
+        "p75": 28.477725641887105
+      },
+      "calories": {
+        "mean": 17.218812822807333,
+        "median": 21.14329786645479,
+        "std": 9.740915337148962,
+        "min": 0.10367031963472086,
+        "max": 30.93810708550174,
+        "p25": 9.030805079908685,
+        "p75": 25.785948480254174
+      },
+      "overall": {
+        "mean": 7.618761564666732,
+        "median": 9.517756269862218,
+        "std": 4.528871112279704,
+        "min": 0.10367031963472086,
+        "max": 12.187494695037097,
+        "p25": 1.9227141013891689,
+        "p75": 11.778137013572035
+      }
+    }
+  }
+}
