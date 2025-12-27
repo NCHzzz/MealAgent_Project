@@ -26,16 +26,17 @@ export async function addFeedback(
       }),
     });
 
+    const data: BasePayload = await response.json();
+
     if (!response.ok) {
       console.error(
         `Add Feedback error! status: ${response.status} ${response.statusText}`
       );
       return {
-        error: "Failed to add feedback",
+        error: data.error || "Failed to add feedback",
       };
     }
 
-    const data: BasePayload = await response.json();
     return data;
   } catch (error) {
     console.error("Add Feedback error:", error);

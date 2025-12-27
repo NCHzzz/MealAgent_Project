@@ -70,7 +70,7 @@ const ShoppingListPage: React.FC = () => {
 
   const fetchShoppingLists = async () => {
     if (!id) {
-      setError("User ID không tồn tại");
+      setError("User ID does not exist");
       setLoading(false);
       return;
     }
@@ -97,11 +97,11 @@ const ShoppingListPage: React.FC = () => {
           setItems([]);
         }
       } else {
-        setError("Không thể tải dữ liệu danh sách mua sắm");
+        setError("Unable to load shopping list data");
       }
     } catch (err) {
       console.error("Error fetching shopping lists:", err);
-      setError("Đã xảy ra lỗi khi tải dữ liệu danh sách mua sắm");
+      setError("An error occurred while loading shopping list data");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -138,7 +138,7 @@ const ShoppingListPage: React.FC = () => {
 
   const handleAddItem = () => {
     if (!selectedListId) {
-      setError("Vui lòng chọn một danh sách mua sắm trước");
+      setError("Please select a shopping list first");
       return;
     }
     setEditingItem(null);
@@ -165,7 +165,7 @@ const ShoppingListPage: React.FC = () => {
   };
 
   const handleDeleteItem = async (item: ShoppingItem) => {
-    if (!id || !selectedListId || !confirm(`Bạn có chắc muốn xóa "${item.ingredient_name}"?`)) {
+    if (!id || !selectedListId || !confirm(`Are you sure you want to delete "${item.ingredient_name}"?`)) {
       return;
     }
 
@@ -174,11 +174,11 @@ const ShoppingListPage: React.FC = () => {
       if (result) {
         await fetchShoppingLists();
       } else {
-        setError("Không thể xóa vật phẩm");
+        setError("Unable to delete item");
       }
     } catch (err) {
       console.error("Error deleting item:", err);
-      setError("Đã xảy ra lỗi khi xóa vật phẩm");
+      setError("An error occurred while deleting item");
     }
   };
 
@@ -194,7 +194,7 @@ const ShoppingListPage: React.FC = () => {
       }
     } catch (err) {
       console.error("Error toggling purchased:", err);
-      setError("Đã xảy ra lỗi khi cập nhật trạng thái");
+      setError("An error occurred while updating status");
     }
   };
 
@@ -203,12 +203,12 @@ const ShoppingListPage: React.FC = () => {
     if (!id || !selectedListId) return;
 
     if (!formData.ingredient_name.trim()) {
-      setError("Tên nguyên liệu không được để trống");
+      setError("Ingredient name cannot be empty");
       return;
     }
 
     if (formData.quantity <= 0) {
-      setError("Số lượng phải lớn hơn 0");
+      setError("Quantity must be greater than 0");
       return;
     }
 
@@ -233,11 +233,11 @@ const ShoppingListPage: React.FC = () => {
         setIsDialogOpen(false);
         await fetchShoppingLists();
       } else {
-        setError(editingItem ? "Không thể cập nhật vật phẩm" : "Không thể thêm vật phẩm");
+        setError(editingItem ? "Unable to update item" : "Unable to add item");
       }
     } catch (err) {
       console.error("Error saving item:", err);
-      setError("Đã xảy ra lỗi khi lưu vật phẩm");
+      setError("An error occurred while saving item");
     }
   };
 
@@ -245,7 +245,7 @@ const ShoppingListPage: React.FC = () => {
     return (
       <div className="w-full h-full flex items-center justify-center">
         <p className="text-secondary">
-          Vui lòng đăng nhập để quản lý danh sách mua sắm của bạn.
+          Please log in to manage your shopping lists.
         </p>
       </div>
     );
@@ -254,7 +254,7 @@ const ShoppingListPage: React.FC = () => {
   if (loading && lists.length === 0) {
     return (
       <div className="w-full h-full flex items-center justify-center">
-        <p className="text-secondary">Đang tải danh sách mua sắm...</p>
+        <p className="text-secondary">Loading shopping lists...</p>
       </div>
     );
   }
@@ -294,7 +294,7 @@ const ShoppingListPage: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent to-accent mb-3"
           >
-            Danh sách mua sắm
+            Shopping List
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 10 }}
@@ -302,7 +302,7 @@ const ShoppingListPage: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.3 }}
             className="text-secondary max-w-2xl mx-auto text-base md:text-lg"
           >
-            Quản lý danh sách nguyên liệu cần mua cho các bữa ăn của bạn. Đánh dấu các mục đã mua khi bạn hoàn thành việc mua sắm.
+            Manage the list of ingredients you need to buy for your meals. Mark items as purchased when you complete your shopping.
           </motion.p>
         </motion.div>
 
@@ -320,29 +320,29 @@ const ShoppingListPage: React.FC = () => {
             <DialogTrigger asChild>
               <Button onClick={handleAddItem} className="gap-2 h-11 px-6 bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 shadow-lg text-white font-medium" disabled={!selectedListId}>
                 <IoAdd className="h-5 w-5" />
-                Thêm mục
+                Add Item
               </Button>
             </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>{editingItem ? "Sửa mục" : "Thêm mục mới"}</DialogTitle>
+                  <DialogTitle>{editingItem ? "Edit Item" : "Add New Item"}</DialogTitle>
                   <DialogDescription>
-                    {editingItem ? "Cập nhật thông tin mục trong danh sách" : "Thêm mục mới vào danh sách mua sắm"}
+                    {editingItem ? "Update item information in the list" : "Add a new item to your shopping list"}
                   </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
-                    <Label>Tên nguyên liệu *</Label>
+                    <Label>Ingredient Name *</Label>
                     <Input
                       value={formData.ingredient_name}
                       onChange={(e) => setFormData({ ...formData, ingredient_name: e.target.value })}
-                      placeholder="Ví dụ: Gạo, Thịt gà, Rau cải..."
+                      placeholder="e.g., Rice, Chicken, Vegetables..."
                       required
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Số lượng *</Label>
+                      <Label>Quantity *</Label>
                       <Input
                         type="number"
                         min="0"
@@ -353,7 +353,7 @@ const ShoppingListPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <Label>Đơn vị *</Label>
+                      <Label>Unit *</Label>
                       <Input
                         value={formData.unit}
                         onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
@@ -363,21 +363,21 @@ const ShoppingListPage: React.FC = () => {
                     </div>
                   </div>
                   <div>
-                    <Label>Danh mục</Label>
+                    <Label>Category</Label>
                     <Select
                       value={formData.category}
                       onValueChange={(value) => setFormData({ ...formData, category: value })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Chọn danh mục" />
+                        <SelectValue placeholder="Select category" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="general">Khác</SelectItem>
-                        <SelectItem value="Thịt & Hải sản">Thịt & Hải sản</SelectItem>
-                        <SelectItem value="Sữa & Phô mai">Sữa & Phô mai</SelectItem>
-                        <SelectItem value="Rau củ & Thảo mộc">Rau củ & Thảo mộc</SelectItem>
-                        <SelectItem value="Ngũ cốc & Tinh bột">Ngũ cốc & Tinh bột</SelectItem>
-                        <SelectItem value="Gia vị & Đồ khô">Gia vị & Đồ khô</SelectItem>
+                        <SelectItem value="general">Other</SelectItem>
+                        <SelectItem value="Thịt & Hải sản">Meat & Seafood</SelectItem>
+                        <SelectItem value="Sữa & Phô mai">Dairy & Cheese</SelectItem>
+                        <SelectItem value="Rau củ & Thảo mộc">Vegetables & Herbs</SelectItem>
+                        <SelectItem value="Ngũ cốc & Tinh bột">Grains & Starches</SelectItem>
+                        <SelectItem value="Gia vị & Đồ khô">Spices & Dried Goods</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -386,10 +386,10 @@ const ShoppingListPage: React.FC = () => {
                   )}
                   <div className="flex justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                      Hủy
+                      Cancel
                     </Button>
                     <Button type="submit">
-                      {editingItem ? "Cập nhật" : "Thêm"}
+                      {editingItem ? "Update" : "Add"}
                     </Button>
                   </div>
                 </form>
@@ -407,10 +407,10 @@ const ShoppingListPage: React.FC = () => {
             <Card className="mb-6 shadow-xl bg-background_alt border-secondary/20 backdrop-blur-sm">
               <CardContent className="pt-6">
                 <div className="flex flex-col md:flex-row md:items-center gap-4">
-                  <Label className="text-sm font-semibold">Chọn danh sách:</Label>
+                  <Label className="text-sm font-semibold">Select list:</Label>
                 <Select value={selectedListId || ""} onValueChange={handleListChange}>
                   <SelectTrigger className="w-[300px]">
-                    <SelectValue placeholder="Chọn danh sách" />
+                    <SelectValue placeholder="Select list" />
                   </SelectTrigger>
                   <SelectContent>
                     {lists.map((list) => {
@@ -423,9 +423,9 @@ const ShoppingListPage: React.FC = () => {
                           const planDate = new Date(list.plan_start_date);
                           if (!isNaN(planDate.getTime())) {
                             dateForSorting = planDate;
-                            // Format: "Plan: Thứ X, DD/MM/YYYY"
-                            const dayName = planDate.toLocaleDateString("vi-VN", { weekday: "long" });
-                            const dateStr = planDate.toLocaleDateString("vi-VN");
+                            // Format: "Plan: Day, MM/DD/YYYY"
+                            const dayName = planDate.toLocaleDateString("en-US", { weekday: "long" });
+                            const dateStr = planDate.toLocaleDateString("en-US");
                             dateLabel = ` - Plan: ${dayName}, ${dateStr}`;
                           }
                         } catch (e) {
@@ -439,7 +439,7 @@ const ShoppingListPage: React.FC = () => {
                           const createdDate = new Date(list.created_at);
                           if (!isNaN(createdDate.getTime())) {
                             dateForSorting = createdDate;
-                            dateLabel = ` - Tạo: ${createdDate.toLocaleDateString("vi-VN")}`;
+                            dateLabel = ` - Created: ${createdDate.toLocaleDateString("en-US")}`;
                           }
                         } catch (e) {
                           console.warn("Invalid created_at:", list.created_at, e);
@@ -451,7 +451,7 @@ const ShoppingListPage: React.FC = () => {
                         ? list.plan_id.length > 20 
                           ? `${list.plan_id.substring(0, 20)}...` 
                           : list.plan_id
-                        : "Không có plan";
+                        : "No plan";
                       
                       return (
                         <SelectItem key={list.list_id} value={list.list_id || ""}>
@@ -473,7 +473,7 @@ const ShoppingListPage: React.FC = () => {
                           planDateOnly.setHours(0, 0, 0, 0);
                           
                           const diffDays = Math.round((planDateOnly.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                          let dateLabel = planDate.toLocaleDateString("vi-VN", {
+                          let dateLabel = planDate.toLocaleDateString("en-US", {
                             weekday: "long",
                             year: "numeric",
                             month: "long",
@@ -483,18 +483,18 @@ const ShoppingListPage: React.FC = () => {
                           // Add relative date indicator
                           let badgeClass = "bg-blue-500/20 text-blue-300 border border-blue-500/40 font-medium";
                           if (diffDays === 0) {
-                            dateLabel = `📅 Hôm nay - ${dateLabel}`;
+                            dateLabel = `📅 Today - ${dateLabel}`;
                             badgeClass = "bg-green-500/20 text-green-300 border border-green-500/40 font-medium";
                           } else if (diffDays === 1) {
-                            dateLabel = `📅 Ngày mai - ${dateLabel}`;
+                            dateLabel = `📅 Tomorrow - ${dateLabel}`;
                             badgeClass = "bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 font-medium";
                           } else if (diffDays === -1) {
-                            dateLabel = `📅 Hôm qua - ${dateLabel}`;
+                            dateLabel = `📅 Yesterday - ${dateLabel}`;
                             badgeClass = "bg-gray-500/20 text-gray-300 border border-gray-500/40 font-medium";
                           } else if (diffDays > 1) {
-                            dateLabel = `📅 Trong ${diffDays} ngày - ${dateLabel}`;
+                            dateLabel = `📅 In ${diffDays} days - ${dateLabel}`;
                           } else {
-                            dateLabel = `📅 ${Math.abs(diffDays)} ngày trước - ${dateLabel}`;
+                            dateLabel = `📅 ${Math.abs(diffDays)} days ago - ${dateLabel}`;
                           }
                           
                           return (
@@ -509,13 +509,13 @@ const ShoppingListPage: React.FC = () => {
                       }
                     })()}
                     <Badge variant="outline" className="font-medium">
-                      {selectedList.item_count || 0} mục
+                      {selectedList.item_count || 0} items
                     </Badge>
                     <Badge className="bg-green-500/20 text-green-300 border border-green-500/40 font-medium">
-                      Đã mua: {purchasedCount}
+                      Purchased: {purchasedCount}
                     </Badge>
                     <Badge className="bg-orange-500/20 text-orange-300 border border-orange-500/40 font-medium">
-                      Còn lại: {remainingCount}
+                      Remaining: {remainingCount}
                     </Badge>
                   </div>
                 )}
@@ -547,12 +547,12 @@ const ShoppingListPage: React.FC = () => {
                   <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                   </svg>
-                  Danh sách mục ({items.length})
+                  Item List ({items.length})
                 </CardTitle>
                 <CardDescription className="text-sm mt-1">
                   {items.length === 0 
-                    ? "Danh sách này hiện đang trống. Hãy thêm mục để bắt đầu."
-                    : "Quản lý các mục trong danh sách mua sắm của bạn"}
+                    ? "This list is currently empty. Add items to get started."
+                    : "Manage items in your shopping list"}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -569,10 +569,10 @@ const ShoppingListPage: React.FC = () => {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
                         </svg>
                       </div>
-                      <p className="text-secondary mb-4 text-lg">Chưa có mục nào trong danh sách</p>
+                      <p className="text-secondary mb-4 text-lg">No items in the list yet</p>
                       <Button onClick={handleAddItem} className="gap-2 bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 shadow-lg">
                         <IoAdd className="h-5 w-5" />
-                        Thêm mục đầu tiên
+                        Add First Item
                       </Button>
                     </motion.div>
                   </div>
@@ -581,12 +581,12 @@ const ShoppingListPage: React.FC = () => {
                     <Table>
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
-                          <TableHead className="w-12 font-semibold">Đã mua</TableHead>
-                          <TableHead className="font-semibold">Tên nguyên liệu</TableHead>
-                          <TableHead className="font-semibold">Số lượng</TableHead>
-                          <TableHead className="font-semibold">Đơn vị</TableHead>
-                          <TableHead className="font-semibold">Danh mục</TableHead>
-                          <TableHead className="text-right font-semibold">Thao tác</TableHead>
+                          <TableHead className="w-12 font-semibold">Purchased</TableHead>
+                          <TableHead className="font-semibold">Ingredient Name</TableHead>
+                          <TableHead className="font-semibold">Quantity</TableHead>
+                          <TableHead className="font-semibold">Unit</TableHead>
+                          <TableHead className="font-semibold">Category</TableHead>
+                          <TableHead className="text-right font-semibold">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -668,8 +668,8 @@ const ShoppingListPage: React.FC = () => {
                     </div>
                     <p className="text-secondary mb-4 text-lg">
                       {lists.length === 0 
-                        ? "Bạn chưa có danh sách mua sắm nào. Hãy tạo kế hoạch bữa ăn để tự động tạo danh sách mua sắm."
-                        : "Vui lòng chọn một danh sách mua sắm"}
+                        ? "You don't have any shopping lists yet. Create a meal plan to automatically generate a shopping list."
+                        : "Please select a shopping list"}
                     </p>
                   </motion.div>
                 </div>
