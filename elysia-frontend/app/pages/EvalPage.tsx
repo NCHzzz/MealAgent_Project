@@ -122,7 +122,7 @@ export default function Home() {
     >
       <div className="flex flex-col gap-8 items-start justify-start w-full">
         <div className="flex-1">
-          <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Evaluation Dashboard</h1>
+          <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Bảng điều khiển đánh giá</h1>
         </div>
         {loading.current && (
           <div className="w-full flex flex-col items-start justify-start gap-2 fade-in">
@@ -135,18 +135,18 @@ export default function Home() {
               <CardHeader>
                 <CardTitle>
                   <div className="w-full flex items-start justify-between">
-                    <p>Feedback Evaluation</p>
+                    <p>Đánh giá phản hồi</p>
                     <Button
                       onClick={handleBrowseFeedback}
                       className="text-primary"
                     >
                       <MdOutlineFeedback />
-                      Browse Feedback
+                      Duyệt phản hồi
                     </Button>
                   </div>
                 </CardTitle>
                 <CardDescription>
-                  Feedback received over the last 30 days
+                  Phản hồi nhận được trong 30 ngày qua
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex lg:flex-row flex-col gap-2">
@@ -171,26 +171,26 @@ export default function Home() {
                 </ChartContainer>
                 <div className="w-full lg:w-1/3 flex flex-col border border-secondary rounded-md h-full">
                   <div className="flex flex-col flex-1 items-start justify-start gap-2 p-4 w-full border-b border-secondary">
-                    <p className="text-secondary text-sm">Total Feedback</p>
+                    <p className="text-secondary text-sm">Tổng phản hồi</p>
                     <p className="text-primary text-3xl font-bold">
                       {feedbackMetadata.total_feedback}
                     </p>
                   </div>
                   <div className="flex items-start justify-start w-full flex-1">
                     <div className="flex flex-col items-start justify-start border-r border-secondary gap-2 w-1/3 p-2">
-                      <p className="text-secondary text-sm">Very Positive</p>
+                      <p className="text-secondary text-sm">Rất tích cực</p>
                       <p className="text-highlight text-3xl font-bold">
                         {feedbackMetadata.feedback_by_value.superpositive}
                       </p>
                     </div>
                     <div className="flex flex-col items-start justify-start border-r border-secondary gap-2 w-1/3 p-2">
-                      <p className="text-secondary text-sm">Positive</p>
+                      <p className="text-secondary text-sm">Tích cực</p>
                       <p className="text-accent text-3xl font-bold">
                         {feedbackMetadata.feedback_by_value.positive}
                       </p>
                     </div>
                     <div className="flex flex-col items-start justify-start gap-2 w-1/3 p-2">
-                      <p className="text-secondary text-sm">Negative</p>
+                      <p className="text-secondary text-sm">Tiêu cực</p>
                       <p className="text-error text-3xl font-bold">
                         {feedbackMetadata.feedback_by_value.negative}
                       </p>

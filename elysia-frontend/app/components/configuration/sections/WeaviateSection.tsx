@@ -61,9 +61,9 @@ export default function WeaviateSection({
       <SettingHeader
         icon={<FaDatabase />}
         className="bg-accent"
-        header="Weaviate Cluster"
+        header="Cụm Weaviate"
         buttonIcon={<BsDatabaseFillAdd />}
-        buttonText="Create Cluster"
+        buttonText="Tạo cụm"
         onClick={() => {
           window.open("https://console.weaviate.cloud/", "_blank");
         }}
@@ -72,7 +72,7 @@ export default function WeaviateSection({
       {/* Warning Card for Weaviate Issues */}
       {weaviateIssues.length > 0 && (
         <WarningCard
-          title="Weaviate Configuration Required"
+          title="Cần cấu hình Weaviate"
           issues={weaviateIssues}
         />
       )}
@@ -80,8 +80,8 @@ export default function WeaviateSection({
       <SettingGroup>
         <SettingItem>
           <SettingTitle
-            title="Cluster Type"
-            description="Choose between cloud-hosted, local, or custom Weaviate instance."
+            title="Loại cụm"
+            description="Chọn giữa cụm đám mây, cục bộ hoặc tùy chỉnh Weaviate."
           />
           <SettingToggle
             value={isLocal ? "Local" : isCustom ? "Custom" : "Cloud"}
@@ -115,7 +115,7 @@ export default function WeaviateSection({
           <SettingItem>
             <SettingTitle
               title="URL"
-              description="The URL of your Weaviate cluster."
+              description="Địa chỉ URL của cụm Weaviate của bạn."
             />
             <SettingInput
               isProtected={false}
@@ -131,8 +131,8 @@ export default function WeaviateSection({
           <>
             <SettingItem>
               <SettingTitle
-                title="GRPC Port"
-                description="The GRPCport of the local Weaviate cluster."
+                title="Cổng GRPC"
+                description="Cổng GRPC của cụm Weaviate cục bộ."
               />
               <SettingInput
                 isProtected={false}
@@ -147,8 +147,8 @@ export default function WeaviateSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="Port"
-                description="The port of the local Weaviate cluster."
+                title="Cổng"
+                description="Cổng của cụm Weaviate cục bộ."
               />
               <SettingInput
                 isProtected={false}
@@ -166,8 +166,8 @@ export default function WeaviateSection({
           <>
             <SettingItem>
               <SettingTitle
-                title="HTTP Host"
-                description="The HTTP host of your custom Weaviate instance."
+                title="Máy chủ HTTP"
+                description="Máy chủ HTTP của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -183,8 +183,8 @@ export default function WeaviateSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="HTTP Port"
-                description="The GRPC host of your custom Weaviate instance."
+                title="Cổng HTTP"
+                description="Cổng HTTP của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -199,8 +199,8 @@ export default function WeaviateSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="HTTP Secure"
-                description="Whether the HTTP connection is secure."
+                title="HTTP bảo mật"
+                description="Kết nối HTTP có bảo mật hay không."
               />
               <SettingCheckbox
                 value={
@@ -214,8 +214,8 @@ export default function WeaviateSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="GRPC Host"
-                description="The GRPC host of your custom Weaviate instance."
+                title="Máy chủ GRPC"
+                description="Máy chủ GRPC của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -231,8 +231,8 @@ export default function WeaviateSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="GRPC Port"
-                description="The GRPC port of your custom Weaviate instance."
+                title="Cổng GRPC"
+                description="Cổng GRPC của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -248,8 +248,8 @@ export default function WeaviateSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="GRPC Secure"
-                description="Whether the GRPC connection is secure."
+                title="GRPC bảo mật"
+                description="Kết nối GRPC có bảo mật hay không."
               />
               <SettingCheckbox
                 value={
@@ -266,13 +266,13 @@ export default function WeaviateSection({
 
         <SettingItem>
           <SettingTitle
-            title="API Key"
+            title="Khóa API"
             description={
               isLocal
-                ? "The API key of your local Weaviate cluster. Needs to be configured in the local Weaviate cluster."
+                ? "Khóa API của cụm Weaviate cục bộ. Cần được cấu hình trong cụm Weaviate cục bộ."
                 : isCustom
-                  ? "The API key of your custom Weaviate instance."
-                  : "The API key of your Weaviate cluster."
+                  ? "Khóa API của Weaviate tùy chỉnh của bạn."
+                  : "Khóa API của cụm Weaviate của bạn."
             }
           />
           <SettingInput
@@ -287,8 +287,8 @@ export default function WeaviateSection({
 
         <SettingItem>
           <SettingTitle
-            title="Tree Timeout"
-            description="The timeout for the tree."
+            title="Thời gian chờ cây"
+            description="Thời gian chờ cho cây quyết định."
           />
           <SettingInput
             isProtected={false}
@@ -301,8 +301,8 @@ export default function WeaviateSection({
 
         <SettingItem>
           <SettingTitle
-            title="Client Timeout"
-            description="The timeout for the client."
+            title="Thời gian chờ máy khách"
+            description="Thời gian chờ cho máy khách."
           />
           <SettingInput
             isProtected={false}

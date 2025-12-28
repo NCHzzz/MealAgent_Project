@@ -231,7 +231,7 @@ export default function Home() {
                   className="cursor-pointer text-lg flex items-center gap-2"
                   onClick={backToDashboard}
                 >
-                  Evaluation
+                  Đánh giá
                 </BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
@@ -240,7 +240,7 @@ export default function Home() {
                   <div className="flex items-center justify-center shrink-0 w-8 h-8 bg-highlight rounded-md">
                     <MdFeedback size={18} />
                   </div>
-                  Feedback
+                  Phản hồi
                 </BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
@@ -254,9 +254,9 @@ export default function Home() {
             <SettingHeader
               icon={<MdFeedback />}
               className="bg-highlight"
-              header="User Feedback"
+              header="Phản hồi người dùng"
               buttonIcon={<LuRefreshCw />}
-              buttonText="Refresh"
+              buttonText="Làm mới"
               onClick={() => fetchFeedbackData()}
             />
 
@@ -267,10 +267,10 @@ export default function Home() {
                     <DropdownMenuTrigger asChild>
                       <Button size={"sm"} variant={"outline"}>
                         {feedbackSortOn === "feedback_date"
-                          ? "Date"
+                          ? "Ngày"
                           : feedbackSortOn === "time_taken_seconds"
-                            ? "Query Time"
-                            : "Sort By"}
+                            ? "Thời gian truy vấn"
+                            : "Sắp xếp theo"}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent>
@@ -279,10 +279,10 @@ export default function Home() {
                         onValueChange={setFeedbackSortOn}
                       >
                         <DropdownMenuRadioItem value="feedback_date">
-                          Date
+                          Ngày
                         </DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="time_taken_seconds">
-                          Query Time
+                          Thời gian truy vấn
                         </DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
@@ -291,7 +291,7 @@ export default function Home() {
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button size={"sm"} variant={"outline"}>
-                        {feedbackAscending ? "Ascending" : "Descending"}
+                        {feedbackAscending ? "Tăng dần" : "Giảm dần"}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent>
@@ -300,10 +300,10 @@ export default function Home() {
                         onValueChange={handleSortOrderChange}
                       >
                         <DropdownMenuRadioItem value="ascending">
-                          Ascending
+                          Tăng dần
                         </DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="descending">
-                          Descending
+                          Giảm dần
                         </DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
@@ -312,7 +312,7 @@ export default function Home() {
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button size={"sm"} variant={"outline"}>
-                        Filter by {feedbackFilter}
+                        Lọc theo {feedbackFilter === "all" ? "tất cả" : feedbackFilter === "very_positive" ? "rất tích cực" : feedbackFilter === "positive" ? "tích cực" : "tiêu cực"}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent>
@@ -321,16 +321,16 @@ export default function Home() {
                         onValueChange={setFeedbackFilter}
                       >
                         <DropdownMenuRadioItem value="all">
-                          All
+                          Tất cả
                         </DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="very_positive">
-                          Very Positive
+                          Rất tích cực
                         </DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="positive">
-                          Positive
+                          Tích cực
                         </DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="negative">
-                          Negative
+                          Tiêu cực
                         </DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
@@ -371,11 +371,11 @@ export default function Home() {
                           className="flex items-center gap-2"
                         >
                           <MdOutlineKeyboardArrowLeft size={16} />
-                          Previous
+                          Trước
                         </Button>
                         <div className="flex items-center gap-2 px-3">
                           <span className="text-primary text-sm font-medium">
-                            Page {feedbackPage} of {maxPage + 1}
+                            Trang {feedbackPage} / {maxPage + 1}
                           </span>
                         </div>
                         <Button
@@ -385,7 +385,7 @@ export default function Home() {
                           disabled={feedbackPage + 1 > maxPage}
                           className="flex items-center gap-2"
                         >
-                          Next
+                          Sau
                           <MdOutlineKeyboardArrowRight size={16} />
                         </Button>
                       </div>
@@ -435,7 +435,7 @@ export default function Home() {
                                       className="text-error focus:text-error focus:bg-error/10"
                                     >
                                       <GoTrash size={14} />
-                                      <span>Delete</span>
+                                      <span>Xóa</span>
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
@@ -449,17 +449,17 @@ export default function Home() {
                                 </Badge>
                                 {item.feedback === 2 && (
                                   <Badge className="text-highlight bg-highlight/10 border-highlight/20 text-xs">
-                                    Very Positive
+                                    Rất tích cực
                                   </Badge>
                                 )}
                                 {item.feedback === 1 && (
                                   <Badge className="text-accent bg-accent/10 border-accent/20 text-xs">
-                                    Positive
+                                    Tích cực
                                   </Badge>
                                 )}
                                 {item.feedback === 0 && (
                                   <Badge className="text-error bg-error/10 border-error/20 text-xs">
-                                    Negative
+                                    Tiêu cực
                                   </Badge>
                                 )}
                               </div>
@@ -484,11 +484,11 @@ export default function Home() {
                         <div className="flex flex-col items-center gap-3 text-secondary">
                           <MdFeedback size={48} className="opacity-50" />
                           <p className="text-lg font-medium">
-                            Select feedback to view details
+                            Chọn phản hồi để xem chi tiết
                           </p>
                           <p className="text-sm text-center max-w-md">
-                            Choose a feedback item from the list to see the full
-                            conversation and details.
+                            Chọn một mục phản hồi từ danh sách để xem toàn bộ
+                            cuộc trò chuyện và chi tiết.
                           </p>
                         </div>
                       </div>

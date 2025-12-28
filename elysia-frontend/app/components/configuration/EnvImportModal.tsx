@@ -35,17 +35,17 @@ export default function EnvImportModal({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Import API Keys from .env</DialogTitle>
+          <DialogTitle>Nhập khóa API từ .env</DialogTitle>
           <DialogDescription>
-            Paste your .env file content below. We&apos;ll automatically parse
-            and add your API keys. Supports both <code>KEY=value</code> and{" "}
-            <code>KEY=&quot;value&quot;</code> formats.
+            Dán nội dung file .env của bạn bên dưới. Chúng tôi sẽ tự động phân tích
+            và thêm khóa API của bạn. Hỗ trợ cả định dạng <code>KEY=value</code> và{" "}
+            <code>KEY=&quot;value&quot;</code>.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="space-y-2">
             <label htmlFor="env-content" className="text-sm font-medium">
-              .env Content
+              Nội dung .env
             </label>
             <textarea
               id="env-content"
@@ -58,20 +58,20 @@ GOOGLE_API_KEY=your_key_here`}
               rows={8}
             />
             <p className="text-xs text-muted-foreground">
-              Comments (lines starting with #) will be ignored
+              Các chú thích (dòng bắt đầu bằng #) sẽ bị bỏ qua
             </p>
           </div>
         </div>
         <div className="flex justify-end gap-3">
           <Button variant="outline" onClick={onCancel}>
-            Cancel
+            Hủy
           </Button>
           <Button
             onClick={onSubmit}
             disabled={!envContent.trim()}
             className="bg-accent/10 text-accent hover:bg-accent/20"
           >
-            Import Keys
+            Nhập khóa
           </Button>
         </div>
       </DialogContent>

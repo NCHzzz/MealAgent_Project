@@ -67,7 +67,7 @@ export default function ModelsSection({
         className="bg-alt_color_a"
         header={title}
         buttonIcon={showDocumentation ? <FaRobot /> : undefined}
-        buttonText={showDocumentation ? "Available Models" : undefined}
+        buttonText={showDocumentation ? "Mô hình có sẵn" : undefined}
         onClick={
           showDocumentation
             ? () => {
@@ -80,7 +80,7 @@ export default function ModelsSection({
       {/* Warning Card for Models Issues */}
       {modelsIssues.length > 0 && (
         <WarningCard
-          title="Model Configuration Required"
+          title="Cần cấu hình mô hình"
           issues={modelsIssues}
         />
       )}
@@ -90,17 +90,17 @@ export default function ModelsSection({
         <div className="flex flex-col gap-3">
           <div className="flex flex-col w-full">
             <div className="flex items-center justify-start gap-2">
-              <p className="text-primary font-bold">Base Model</p>
+              <p className="text-primary font-bold">Mô hình cơ bản</p>
             </div>
             <p className="text-sm text-secondary">
-              Used for the decision agent, as well as any tools requiring
-              simpler tasks that require speed over precision. Can be the same
-              as complex model for consistency at the cost of performance.
+              Được sử dụng cho agent quyết định, cũng như bất kỳ công cụ nào yêu cầu
+              tác vụ đơn giản cần tốc độ hơn độ chính xác. Có thể giống với
+              mô hình phức tạp để đảm bảo tính nhất quán nhưng giảm hiệu suất.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:gap-4 w-full">
             <div className="w-full">
-              <p className="text-sm text-secondary mb-2">Provider</p>
+              <p className="text-sm text-secondary mb-2">Nhà cung cấp</p>
               <SettingCombobox
                 value={currentUserConfig?.settings.BASE_PROVIDER || ""}
                 values={modelsData ? Object.keys(modelsData) : []}
@@ -119,16 +119,16 @@ export default function ModelsSection({
                   }
                 }}
                 placeholder={
-                  loadingModels ? "Loading providers..." : "Select provider..."
+                  loadingModels ? "Đang tải nhà cung cấp..." : "Chọn nhà cung cấp..."
                 }
-                searchPlaceholder="Search providers..."
+                searchPlaceholder="Tìm nhà cung cấp..."
                 isInvalid={!baseProviderValid}
               />
             </div>
             {currentUserConfig?.settings.BASE_PROVIDER && (
               <div className="w-full">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-                  <p className="text-sm text-secondary">Model</p>
+                  <p className="text-sm text-secondary">Mô hình</p>
                   <ModelBadges
                     modelsData={modelsData}
                     provider={currentUserConfig?.settings.BASE_PROVIDER || ""}
@@ -150,9 +150,9 @@ export default function ModelsSection({
                     onUpdateSettings("BASE_MODEL", value);
                   }}
                   placeholder={
-                    loadingModels ? "Loading models..." : "Select model..."
+                    loadingModels ? "Đang tải mô hình..." : "Chọn mô hình..."
                   }
-                  searchPlaceholder="Search models..."
+                  searchPlaceholder="Tìm mô hình..."
                   isInvalid={!baseModelValid}
                 />
               </div>
@@ -164,18 +164,18 @@ export default function ModelsSection({
         <div className="flex flex-col gap-3">
           <div className="flex flex-col w-full">
             <div className="flex items-center justify-start gap-2">
-              <p className="text-primary font-bold">Complex Model</p>
+              <p className="text-primary font-bold">Mô hình phức tạp</p>
             </div>
             <p className="text-sm text-secondary">
-              Used in tools that require complex tasks requiring higher
-              precision and reasoning, such as the query and aggregate tools.
-              Speed may be slower but quality is higher. Can be the same as base
-              model.
+              Được sử dụng trong các công cụ yêu cầu tác vụ phức tạp cần độ chính xác
+              và suy luận cao, như công cụ truy vấn và tổng hợp.
+              Tốc độ có thể chậm hơn nhưng chất lượng cao hơn. Có thể giống với
+              mô hình cơ bản.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:gap-4 w-full">
             <div className="w-full">
-              <p className="text-sm text-secondary mb-2">Provider</p>
+              <p className="text-sm text-secondary mb-2">Nhà cung cấp</p>
               <SettingCombobox
                 value={currentUserConfig?.settings.COMPLEX_PROVIDER || ""}
                 values={modelsData ? Object.keys(modelsData) : []}
@@ -194,16 +194,16 @@ export default function ModelsSection({
                   }
                 }}
                 placeholder={
-                  loadingModels ? "Loading providers..." : "Select provider..."
+                  loadingModels ? "Đang tải nhà cung cấp..." : "Chọn nhà cung cấp..."
                 }
-                searchPlaceholder="Search providers..."
+                searchPlaceholder="Tìm nhà cung cấp..."
                 isInvalid={!complexProviderValid}
               />
             </div>
             {currentUserConfig?.settings.COMPLEX_PROVIDER && (
               <div className="w-full">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-                  <p className="text-sm text-secondary">Model</p>
+                  <p className="text-sm text-secondary">Mô hình</p>
                   <ModelBadges
                     modelsData={modelsData}
                     provider={
@@ -227,9 +227,9 @@ export default function ModelsSection({
                     onUpdateSettings("COMPLEX_MODEL", value);
                   }}
                   placeholder={
-                    loadingModels ? "Loading models..." : "Select model..."
+                    loadingModels ? "Đang tải mô hình..." : "Chọn mô hình..."
                   }
-                  searchPlaceholder="Search models..."
+                  searchPlaceholder="Tìm mô hình..."
                   isInvalid={!complexModelValid}
                 />
               </div>
@@ -239,8 +239,8 @@ export default function ModelsSection({
 
         <SettingItem>
           <SettingTitle
-            title="API Base URL"
-            description="Use this to specify custom endpoints for accessing models, such as self-hosted or private models"
+            title="URL cơ sở API"
+            description="Sử dụng để chỉ định điểm cuối tùy chỉnh để truy cập mô hình, như mô hình tự lưu trữ hoặc riêng tư"
           />
           <SettingInput
             isProtected={false}
@@ -255,24 +255,23 @@ export default function ModelsSection({
         <div className="flex flex-col gap-2 bg-highlight/10 rounded-lg p-3 text-sm text-highlight">
           <div className="flex flex-row gap-1 items-center">
             <IoInformationCircle className="text-highlight" />
-            <p className="font-bold text-highlight">Note</p>
+            <p className="font-bold text-highlight">Lưu ý</p>
           </div>
           <p>
-            You can use the same model for both base and complex tasks. Using
-            different models allows you to balance speed vs quality - faster
-            models for simple tasks and more capable models for complex
-            reasoning.
+            Bạn có thể sử dụng cùng một mô hình cho cả tác vụ cơ bản và phức tạp. Sử dụng
+            các mô hình khác nhau cho phép bạn cân bằng tốc độ và chất lượng - mô hình nhanh hơn
+            cho tác vụ đơn giản và mô hình mạnh hơn cho suy luận phức tạp.
           </p>
         </div>
 
         <div className="flex flex-col gap-2 bg-alt_color_b/10 rounded-lg p-3 text-sm text-alt_color_b">
           <div className="flex flex-row gap-1 items-center">
             <IoInformationCircle className="text-alt_color_b" />
-            <p className="font-bold text-alt_color_b">Recommendation</p>
+            <p className="font-bold text-alt_color_b">Đề xuất</p>
           </div>
           <p>
-            Elysia is optimized for Gemini models. We recommend using Gemini
-            models over OpenAI models for the best performance if possible.
+            Elysia được tối ưu hóa cho mô hình Gemini. Chúng tôi khuyên dùng mô hình Gemini
+            thay vì mô hình OpenAI để có hiệu suất tốt nhất nếu có thể.
           </p>
         </div>
 
@@ -281,9 +280,9 @@ export default function ModelsSection({
           <div className="flex w-full items-center justify-center pt-4">
             <DeleteButton
               onClick={onResetConfig}
-              text="Reset Config"
+              text="Đặt lại cấu hình"
               icon={<TbArrowBackUp />}
-              confirmText="Are you sure?"
+              confirmText="Bạn có chắc không?"
             />
           </div>
         )}

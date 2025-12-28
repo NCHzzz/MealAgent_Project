@@ -68,7 +68,7 @@ export default function ConfigActions({
             onSaveAsDefaultChange(checked as boolean);
           }}
         />
-        <p className="text-sm text-secondary">Save as default</p>
+        <p className="text-sm text-secondary">Lưu làm mặc định</p>
       </div>
 
       {/* Action buttons */}
@@ -101,7 +101,7 @@ export default function ConfigActions({
               }}
             >
               <FaSave />
-              Save
+              Lưu
             </Button>
           )}
 
@@ -112,7 +112,7 @@ export default function ConfigActions({
               className="bg-accent/10 text-accent hover:bg-accent/20 w-full sm:w-auto"
             >
               <FaCircle scale={0.2} className="text-lg pulsing_color" />
-              Saving...
+              Đang lưu...
             </Button>
           )}
 
@@ -126,7 +126,7 @@ export default function ConfigActions({
               }}
             >
               <FaStar />
-              Set as default
+              Đặt làm mặc định
             </Button>
           )}
         </motion.div>
@@ -138,7 +138,7 @@ export default function ConfigActions({
           disabled={matchingConfig}
           className="w-full sm:w-auto"
         >
-          Cancel
+          Hủy
         </Button>
 
         {/* Delete Button */}
@@ -148,8 +148,8 @@ export default function ConfigActions({
           classNameConfirm="w-full sm:w-auto text-secondary hover:text-error border border-foreground "
           icon={<TiDelete />}
           disabled={isNewConfig || !userConfigId}
-          text="Delete"
-          confirmText="Are you sure?"
+          text="Xóa"
+          confirmText="Bạn có chắc không?"
           onClick={onDeleteConfig}
         />
       </div>

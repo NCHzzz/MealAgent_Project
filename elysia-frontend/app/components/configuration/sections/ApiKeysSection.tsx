@@ -42,10 +42,10 @@ export default function ApiKeysSection({
     <SettingCard>
       <SettingHeader
         icon={<IoKeyOutline />}
-        buttonText="Import .env"
+        buttonText="Nhập .env"
         buttonIcon={<FaFileImport />}
         className="bg-alt_color_b"
-        header="API Keys"
+        header="Khóa API"
         onClick={onOpenEnvModal}
       />
 
@@ -59,9 +59,9 @@ export default function ApiKeysSection({
           <IoWarning className="text-warning flex-shrink-0 mt-0.5" size={20} />
           <div className="flex flex-col gap-3 flex-1">
             <div className="flex flex-col gap-1">
-              <h3 className="text-warning font-medium">API Keys Required</h3>
+              <h3 className="text-warning font-medium">Cần khóa API</h3>
               <p className="text-sm text-secondary">
-                The following API keys are required for your selected models:
+                Các khóa API sau được yêu cầu cho mô hình bạn đã chọn:
               </p>
               <ul className="text-sm text-secondary list-disc list-inside space-y-1">
                 {apiKeysIssues.map((issue, index) => (
@@ -79,7 +79,7 @@ export default function ApiKeysSection({
                 className="bg-accent/10 text-accent hover:bg-accent/20 border-accent/30 flex items-center gap-2 w-full sm:w-auto"
               >
                 <IoAdd size={16} />
-                <span className="whitespace-nowrap">Add Missing Keys</span>
+                <span className="whitespace-nowrap">Thêm khóa thiếu</span>
               </Button>
             </div>
           </div>
@@ -135,7 +135,7 @@ export default function ApiKeysSection({
             className="bg-accent/10 hover:bg-accent/20 border-accent/30 text-accent hover:text-accent-foreground flex items-center gap-2 w-full sm:w-auto"
           >
             <IoAdd size={16} />
-            <span className="whitespace-nowrap">Add API Key</span>
+            <span className="whitespace-nowrap">Thêm khóa API</span>
           </Button>
         </div>
       </SettingGroup>

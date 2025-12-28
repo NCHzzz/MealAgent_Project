@@ -55,7 +55,7 @@ export default function StorageSection({
           <div className="h-7 w-7 bg-background rounded-md flex items-center justify-center">
             <MdStorage />
           </div>
-          <p className="text-primary text-lg">Elysia Storage</p>
+          <p className="text-primary text-lg">Lưu trữ Elysia</p>
         </div>
         <div className="flex items-center justify-end w-full sm:w-auto">
           <div>
@@ -69,7 +69,7 @@ export default function StorageSection({
               }`}
             >
               <IoCopy />
-              <span className="text-sm font-base">Use Same Cluster</span>
+              <span className="text-sm font-base">Dùng cùng cụm</span>
             </Button>
           </div>
         </div>
@@ -78,7 +78,7 @@ export default function StorageSection({
       {/* Warning Card for Storage Issues */}
       {storageIssues.length > 0 && (
         <WarningCard
-          title="Storage Configuration Required"
+          title="Cần cấu hình lưu trữ"
           issues={storageIssues}
         />
       )}
@@ -86,8 +86,8 @@ export default function StorageSection({
       <SettingGroup>
         <SettingItem>
           <SettingTitle
-            title="Storage Type"
-            description="Choose between local or remote Weaviate storage."
+            title="Loại lưu trữ"
+            description="Chọn giữa lưu trữ Weaviate cục bộ hoặc từ xa."
           />
           <SettingToggle
             value={isLocal ? "Local" : isCustom ? "Custom" : "Cloud"}
@@ -121,7 +121,7 @@ export default function StorageSection({
           <SettingItem>
             <SettingTitle
               title="URL"
-              description="The URL of your Weaviate cluster to save configs and conversations to."
+              description="Địa chỉ URL của cụm Weaviate để lưu cấu hình và cuộc trò chuyện."
             />
             <SettingInput
               key="elysia-storage-url"
@@ -143,8 +143,8 @@ export default function StorageSection({
           <>
             <SettingItem>
               <SettingTitle
-                title="HTTP Host"
-                description="The HTTP host of your custom Weaviate instance."
+                title="Máy chủ HTTP"
+                description="Máy chủ HTTP của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -159,8 +159,8 @@ export default function StorageSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="HTTP Port"
-                description="The HTTP port of your custom Weaviate instance."
+                title="Cổng HTTP"
+                description="Cổng HTTP của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -174,8 +174,8 @@ export default function StorageSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="HTTP Secure"
-                description="Whether the HTTP connection is secure."
+                title="HTTP bảo mật"
+                description="Kết nối HTTP có bảo mật hay không."
               />
               <SettingCheckbox
                 value={
@@ -189,8 +189,8 @@ export default function StorageSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="GRPC Host"
-                description="The GRPC host of your custom Weaviate instance."
+                title="Máy chủ GRPC"
+                description="Máy chủ GRPC của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -205,8 +205,8 @@ export default function StorageSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="GRPC Port"
-                description="The GRPC port of your custom Weaviate instance."
+                title="Cổng GRPC"
+                description="Cổng GRPC của Weaviate tùy chỉnh của bạn."
               />
               <SettingInput
                 isProtected={false}
@@ -220,8 +220,8 @@ export default function StorageSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="GRPC Secure"
-                description="Whether the GRPC connection is secure."
+                title="GRPC bảo mật"
+                description="Kết nối GRPC có bảo mật hay không."
               />
               <SettingCheckbox
                 value={
@@ -240,8 +240,8 @@ export default function StorageSection({
           <>
             <SettingItem>
               <SettingTitle
-                title="GRPC Port"
-                description="The GRPCport of the local Weaviate cluster."
+                title="Cổng GRPC"
+                description="Cổng GRPC của cụm Weaviate cục bộ."
               />
               <SettingInput
                 isProtected={false}
@@ -257,8 +257,8 @@ export default function StorageSection({
             </SettingItem>
             <SettingItem>
               <SettingTitle
-                title="Port"
-                description="The port of the local Weaviate cluster."
+                title="Cổng"
+                description="Cổng của cụm Weaviate cục bộ."
               />
               <SettingInput
                 isProtected={false}
@@ -276,11 +276,11 @@ export default function StorageSection({
 
         <SettingItem>
           <SettingTitle
-            title="API Key"
+            title="Khóa API"
             description={
               isLocal
-                ? "The API key of your local Weaviate cluster. Needs to be configured in the local Weaviate cluster."
-                : "The API key of your Weaviate cluster to save configs and conversations to."
+                ? "Khóa API của cụm Weaviate cục bộ. Cần được cấu hình trong cụm Weaviate cục bộ."
+                : "Khóa API của cụm Weaviate để lưu cấu hình và cuộc trò chuyện."
             }
           />
           <SettingInput
@@ -302,8 +302,8 @@ export default function StorageSection({
 
         <SettingItem>
           <SettingTitle
-            title="Save Conversations"
-            description="Save conversations to Weaviate."
+            title="Lưu cuộc trò chuyện"
+            description="Lưu cuộc trò chuyện vào Weaviate."
           />
           <SettingCheckbox
             value={currentFrontendConfig?.save_trees_to_weaviate || false}
@@ -315,8 +315,8 @@ export default function StorageSection({
 
         <SettingItem>
           <SettingTitle
-            title="Save Configs"
-            description="Save configs to Weaviate."
+            title="Lưu cấu hình"
+            description="Lưu cấu hình vào Weaviate."
           />
           <SettingCheckbox
             value={currentFrontendConfig?.save_configs_to_weaviate || false}
