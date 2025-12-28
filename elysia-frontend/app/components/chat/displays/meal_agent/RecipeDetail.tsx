@@ -202,7 +202,7 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
             {recipe.serving_size && (
               <Badge className="text-sm border border-secondary/20">
                 <Users className="w-3 h-3 mr-1" />
-                Serves {recipe.serving_size}
+                Khẩu phần: {recipe.serving_size}
               </Badge>
             )}
           </div>
@@ -221,7 +221,7 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
           {/* Allergens */}
           {allergens.length > 0 && (
             <div className="mb-4">
-              <p className="text-sm font-semibold text-secondary mb-2">⚠️ Allergens</p>
+              <p className="text-sm font-semibold text-secondary mb-2">⚠️ Dị ứng</p>
               <div className="flex flex-wrap gap-2">
                 {allergens.map((allergen) => (
                   <Badge
@@ -240,10 +240,10 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
           {/* Nutrition Information */}
           {hasMacros && macros && (
             <div>
-              <h3 className="text-lg font-semibold mb-3">📊 Nutrition (Per Serving)</h3>
+              <h3 className="text-lg font-semibold mb-3">📊 Dinh dưỡng (Mỗi phần ăn)</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-primary/5 rounded-lg p-4 text-center">
-                  <p className="text-xs text-secondary mb-1">Calories</p>
+                  <p className="text-xs text-secondary mb-1">Năng lượng</p>
                   <p className="text-xl font-bold text-primary">
                     {formatKcal(macros.kcal)}
                   </p>
@@ -255,13 +255,13 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
                   </p>
                 </div>
                 <div className="bg-primary/5 rounded-lg p-4 text-center">
-                  <p className="text-xs text-secondary mb-1">Fat</p>
+                  <p className="text-xs text-secondary mb-1">Chất béo</p>
                   <p className="text-xl font-bold text-primary">
                     {formatMacro(macros.fat_g)}
                   </p>
                 </div>
                 <div className="bg-primary/5 rounded-lg p-4 text-center">
-                  <p className="text-xs text-secondary mb-1">Carbs</p>
+                  <p className="text-xs text-secondary mb-1">Tinh bột</p>
                   <p className="text-xl font-bold text-primary">
                     {formatMacro(macros.carb_g)}
                   </p>
@@ -273,7 +273,7 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
           {/* Ingredients */}
           {ingredientList.length > 0 && (
             <div>
-              <h3 className="text-lg font-semibold mb-3">🥘 Ingredients</h3>
+              <h3 className="text-lg font-semibold mb-3">🥘 Nguyên liệu</h3>
               <div className="bg-secondary/5 rounded-lg p-4">
                 <ul className="space-y-2">
                   {ingredientList.map((ingredient, idx) => (
@@ -311,8 +311,8 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
           {!hasMacros && (
             <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
               <p className="text-sm text-yellow-600 dark:text-yellow-400">
-                ⚠️ Nutrition information is not available for this recipe. 
-                The system will calculate it automatically when needed.
+                ⚠️ Thông tin dinh dưỡng không khả dụng cho công thức này. 
+                Hệ thống sẽ tự động tính toán khi cần thiết.
               </p>
             </div>
           )}

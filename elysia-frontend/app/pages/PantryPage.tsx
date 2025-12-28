@@ -58,7 +58,7 @@ const PantryPage: React.FC = () => {
 
   const fetchPantry = async () => {
     if (!id) {
-      setError("User ID does not exist");
+      setError("ID người dùng không tồn tại");
       setLoading(false);
       return;
     }
@@ -76,11 +76,11 @@ const PantryPage: React.FC = () => {
           setItems([]);
         }
       } else {
-        setError("Unable to load pantry data");
+        setError("Không thể tải dữ liệu tủ lạnh");
       }
     } catch (err) {
       console.error("Error fetching pantry:", err);
-      setError("An error occurred while loading pantry data");
+      setError("Đã xảy ra lỗi khi tải dữ liệu tủ lạnh");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -117,7 +117,7 @@ const PantryPage: React.FC = () => {
   };
 
   const handleDeleteItem = async (item: PantryItem) => {
-    if (!id || !confirm(`Are you sure you want to delete "${item.ingredient_name}"?`)) {
+    if (!id || !confirm(`Bạn có chắc chắn muốn xóa "${item.ingredient_name}"?`)) {
       return;
     }
 
@@ -126,11 +126,11 @@ const PantryPage: React.FC = () => {
       if (result) {
         await fetchPantry();
       } else {
-        setError("Unable to delete item");
+        setError("Không thể xóa mục");
       }
     } catch (err) {
       console.error("Error deleting item:", err);
-      setError("An error occurred while deleting item");
+      setError("Đã xảy ra lỗi khi xóa mục");
     }
   };
 
@@ -139,12 +139,12 @@ const PantryPage: React.FC = () => {
     if (!id) return;
 
     if (!formData.ingredient_name.trim()) {
-      setError("Ingredient name cannot be empty");
+      setError("Tên nguyên liệu không được để trống");
       return;
     }
 
     if (formData.quantity <= 0) {
-      setError("Quantity must be greater than 0");
+      setError("Số lượng phải lớn hơn 0");
       return;
     }
 
@@ -164,11 +164,11 @@ const PantryPage: React.FC = () => {
         setIsDialogOpen(false);
         await fetchPantry();
       } else {
-        setError(editingItem ? "Unable to update item" : "Unable to add item");
+        setError(editingItem ? "Không thể cập nhật mục" : "Không thể thêm mục");
       }
     } catch (err) {
       console.error("Error saving item:", err);
-      setError("An error occurred while saving item");
+      setError("Đã xảy ra lỗi khi lưu mục");
     }
   };
 
@@ -176,7 +176,7 @@ const PantryPage: React.FC = () => {
     return (
       <div className="w-full h-full flex items-center justify-center">
         <p className="text-secondary">
-          Please log in to manage your pantry.
+          Vui lòng đăng nhập để quản lý tủ lạnh của bạn.
         </p>
       </div>
     );
@@ -185,7 +185,7 @@ const PantryPage: React.FC = () => {
   if (loading && items.length === 0) {
     return (
       <div className="w-full h-full flex items-center justify-center">
-        <p className="text-secondary">Loading pantry data...</p>
+        <p className="text-secondary">Đang tải dữ liệu tủ lạnh...</p>
       </div>
     );
   }
@@ -221,7 +221,7 @@ const PantryPage: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent to-accent mb-3"
           >
-            Pantry Management
+            Quản lý tủ lạnh
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 10 }}
@@ -229,7 +229,7 @@ const PantryPage: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.3 }}
             className="text-secondary max-w-2xl mx-auto text-base md:text-lg"
           >
-            Add, edit, and delete items in your pantry so MealAgent can create more suitable meal plans.
+            Thêm, sửa và xóa các mục trong tủ lạnh để MealAgent tạo kế hoạch bữa ăn phù hợp hơn.
           </motion.p>
         </motion.div>
 
@@ -254,29 +254,29 @@ const PantryPage: React.FC = () => {
               <DialogTrigger asChild>
                 <Button onClick={handleAddItem} className="gap-2 h-11 px-6 bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 shadow-lg text-white font-medium">
                   <IoAdd className="h-5 w-5" />
-                  Add Item
+                  Thêm mục
                 </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>{editingItem ? "Edit Item" : "Add New Item"}</DialogTitle>
+                  <DialogTitle>{editingItem ? "Sửa mục" : "Thêm mục mới"}</DialogTitle>
                   <DialogDescription>
-                    {editingItem ? "Update item information in the pantry" : "Add a new item to your pantry"}
+                    {editingItem ? "Cập nhật thông tin mục trong tủ lạnh" : "Thêm mục mới vào tủ lạnh của bạn"}
                   </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
-                    <Label>Ingredient Name *</Label>
+                    <Label>Tên nguyên liệu *</Label>
                     <Input
                       value={formData.ingredient_name}
                       onChange={(e) => setFormData({ ...formData, ingredient_name: e.target.value })}
-                      placeholder="e.g., Rice, Chicken, Vegetables..."
+                      placeholder="Ví dụ: Gạo, Thịt gà, Rau củ..."
                       required
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Quantity *</Label>
+                      <Label>Số lượng *</Label>
                       <Input
                         type="number"
                         min="0"
@@ -287,7 +287,7 @@ const PantryPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <Label>Unit *</Label>
+                      <Label>Đơn vị *</Label>
                       <Input
                         value={formData.unit}
                         onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
@@ -298,16 +298,16 @@ const PantryPage: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>FDC ID (optional)</Label>
+                      <Label>FDC ID (tùy chọn)</Label>
                       <Input
                         type="number"
                         value={formData.fdc_id || ""}
                         onChange={(e) => setFormData({ ...formData, fdc_id: e.target.value ? parseInt(e.target.value) : undefined })}
-                        placeholder="Food Data Central ID"
+                        placeholder="Mã Food Data Central"
                       />
                     </div>
                     <div>
-                      <Label>Expiry Date (optional)</Label>
+                      <Label>Ngày hết hạn (tùy chọn)</Label>
                       <Input
                         type="date"
                         value={formData.expiry_date ? formData.expiry_date.split("T")[0] : ""}
@@ -320,10 +320,10 @@ const PantryPage: React.FC = () => {
                   )}
                   <div className="flex justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                      Cancel
+                      Hủy
                     </Button>
                     <Button type="submit">
-                      {editingItem ? "Update" : "Add"}
+                      {editingItem ? "Cập nhật" : "Thêm"}
                     </Button>
                   </div>
                 </form>
@@ -364,12 +364,12 @@ const PantryPage: React.FC = () => {
                 <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
-                Item List ({items.length})
+                Danh sách mục ({items.length})
               </CardTitle>
               <CardDescription className="text-sm mt-1">
                 {items.length === 0 
-                  ? "Your pantry is currently empty. Add items to get started."
-                  : "Manage items in your pantry"}
+                  ? "Tủ lạnh của bạn hiện đang trống. Thêm mục để bắt đầu."
+                  : "Quản lý các mục trong tủ lạnh của bạn"}
               </CardDescription>
             </CardHeader>
           <CardContent>
@@ -386,10 +386,10 @@ const PantryPage: React.FC = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                     </svg>
                   </div>
-                  <p className="text-secondary mb-4 text-lg">No items in the pantry yet</p>
+                  <p className="text-secondary mb-4 text-lg">Chưa có mục nào trong tủ lạnh</p>
                   <Button onClick={handleAddItem} className="gap-2 bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 shadow-lg">
                     <IoAdd className="h-5 w-5" />
-                    Add First Item
+                    Thêm mục đầu tiên
                   </Button>
                 </motion.div>
               </div>
@@ -398,12 +398,12 @@ const PantryPage: React.FC = () => {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="font-semibold">Ingredient Name</TableHead>
-                      <TableHead className="font-semibold">Quantity</TableHead>
-                      <TableHead className="font-semibold">Unit</TableHead>
+                      <TableHead className="font-semibold">Tên nguyên liệu</TableHead>
+                      <TableHead className="font-semibold">Số lượng</TableHead>
+                      <TableHead className="font-semibold">Đơn vị</TableHead>
                       <TableHead className="font-semibold">FDC ID</TableHead>
-                      <TableHead className="font-semibold">Expiry Date</TableHead>
-                      <TableHead className="text-right font-semibold">Actions</TableHead>
+                      <TableHead className="font-semibold">Ngày hết hạn</TableHead>
+                      <TableHead className="text-right font-semibold">Thao tác</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -418,7 +418,7 @@ const PantryPage: React.FC = () => {
                           <TableCell className="text-secondary">{item.fdc_id || "—"}</TableCell>
                           <TableCell>
                             {item.expiry_date 
-                              ? new Date(item.expiry_date).toLocaleDateString("en-US")
+                              ? new Date(item.expiry_date).toLocaleDateString("vi-VN")
                               : "—"}
                           </TableCell>
                           <TableCell className="text-right">

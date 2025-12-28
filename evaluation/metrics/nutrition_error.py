@@ -10,7 +10,10 @@ Tính toán MAE (Mean Absolute Error) và % Error cho các chỉ số dinh dư�
 
 from typing import Dict, List, Any, Optional
 import numpy as np
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,6 +88,73 @@ class NutritionErrorEvaluator:
     def __init__(self):
         """Initialize the nutrition error evaluator."""
         pass
+    
+    def _expand_week_plans_to_days(
+        self,
+        meal_plans: List[Dict[str, Any]],
+        user_profiles: List[Dict[str, Any]]
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[int]]:
+        """
+        Expand week plans thành các day plans riêng biệt.
+        
+        Args:
+            meal_plans: List of meal plan dictionaries
+            user_profiles: List of user profile dictionaries
+        
+        Returns:
+            Tuple of (expanded_meal_plans, expanded_user_profiles, original_indices)
+        """
+        expanded_plans = []
+        expanded_profiles = []
+        original_indices = []  # Map từ expanded index về original index
+        
+        for i, (plan, profile) in enumerate(zip(meal_plans, user_profiles)):
+            plan_type = plan.get("plan_type", "day")
+            
+            if plan_type == "week":
+                days = plan.get("days", {})
+                if days:
+                    for day_key, day_data in days.items():
+                        day_plan = {
+                            "plan_id": f"{plan.get('plan_id', 'unknown')}_day_{day_key}",
+                            "user_id": plan.get("user_id"),
+                            "plan_type": "day",
+                            "start_date": day_data.get("date", day_key),
+                            "created_at": plan.get("created_at"),
+                            "meals": day_data.get("meals", {}),
+                            "total_macros": self._calculate_day_macros(day_data.get("meals", {})),
+                            "source": plan.get("source", "MealPlan"),
+                            "original_plan_id": plan.get("plan_id"),
+                            "day_key": day_key,
+                        }
+                        expanded_plans.append(day_plan)
+                        expanded_profiles.append(profile)
+                        original_indices.append(i)
+                else:
+                    # Week plan không có days structure: bỏ qua (giống LLM judge)
+                    logger.warning(
+                        f"Week plan {plan.get('plan_id')} không có 'days' structure, bỏ qua"
+                    )
+            else:
+                expanded_plans.append(plan)
+                expanded_profiles.append(profile)
+                original_indices.append(i)
+        
+        return expanded_plans, expanded_profiles, original_indices
+    
+    def _calculate_day_macros(self, meals: Dict[str, Any]) -> Dict[str, float]:
+        """Tính tổng macros từ meals dict của một ngày."""
+        total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+        
+        for meal_type, meal_data in meals.items():
+            meal_macros = meal_data.get("macros", {})
+            if isinstance(meal_macros, dict):
+                total_macros["kcal"] += float(meal_macros.get("kcal", 0.0))
+                total_macros["protein_g"] += float(meal_macros.get("protein_g", 0.0))
+                total_macros["fat_g"] += float(meal_macros.get("fat_g", 0.0))
+                total_macros["carb_g"] += float(meal_macros.get("carb_g", 0.0))
+        
+        return total_macros
     
     def extract_nutrition_from_plan(
         self, 
@@ -356,6 +426,7 @@ class NutritionErrorEvaluator:
     ) -> List[NutritionErrorResult]:
         """
         Đánh giá sai số dinh dưỡng cho nhiều meal plans.
+        Week plans sẽ được expand thành các day plans riêng biệt và đánh giá từng ngày.
         
         Args:
             meal_plans: List of meal plan dictionaries
@@ -363,6 +434,7 @@ class NutritionErrorEvaluator:
         
         Returns:
             List of NutritionErrorResult objects
+            - Mỗi day plan (bao gồm cả day plans từ week plans) sẽ có 1 result riêng
         """
         if len(meal_plans) != len(user_profiles):
             raise ValueError(
@@ -370,8 +442,26 @@ class NutritionErrorEvaluator:
                 f"({len(user_profiles)}) must have the same length"
             )
         
+        if not meal_plans:
+            return []
+        
+        # Expand week plans thành day plans
+        expanded_plans, expanded_profiles, original_indices = self._expand_week_plans_to_days(
+            meal_plans, user_profiles
+        )
+        
+        # Validate: Tất cả expanded plans phải có plan_type="day" (trừ khi không có days structure)
+        for plan in expanded_plans:
+            if plan.get("plan_type") == "week":
+                # Week plan không có days structure, sẽ được normalize trong extract_nutrition_from_plan
+                pass
+        
+        if len(expanded_plans) > len(meal_plans):
+            print(f"   📅 Expanded {len(meal_plans)} plans to {len(expanded_plans)} day plans (week plans split into days)")
+        
+        # Đánh giá expanded plans
         results = []
-        for meal_plan, user_profile in zip(meal_plans, user_profiles):
+        for meal_plan, user_profile in zip(expanded_plans, expanded_profiles):
             result = self.evaluate(meal_plan, user_profile)
             results.append(result)
         

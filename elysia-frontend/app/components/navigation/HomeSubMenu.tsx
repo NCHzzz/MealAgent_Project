@@ -50,22 +50,22 @@ const HomeSubMenu: React.FC = () => {
               <FaCircle className="text-secondary pulsing mr-2" />
             )}
             {loadingConversations ||
-              (loadingConversation && <p>Loading conversations...</p>)}
+              (loadingConversation && <p>Đang tải cuộc trò chuyện...</p>)}
             {!loadingConversations && !loadingConversation && (
               <p>
                 {creatingNewConversation
-                  ? "Initializing conversation..."
-                  : "Conversations"}
+                  ? "Đang khởi tạo cuộc trò chuyện..."
+                  : "Cuộc trò chuyện"}
               </p>
             )}
           </div>
         </SidebarGroupLabel>
         <SidebarGroupAction
-          title="Add Conversation"
+          title="Thêm cuộc trò chuyện"
           onClick={() => startNewConversation()}
           disabled={creatingNewConversation}
         >
-          <FaPlus /> <span className="sr-only">Add Conversation</span>
+          <FaPlus /> <span className="sr-only">Thêm cuộc trò chuyện</span>
         </SidebarGroupAction>
       </div>
       <SidebarGroupContent>
@@ -93,7 +93,7 @@ const HomeSubMenu: React.FC = () => {
                 <DropdownMenuContent side="right" align="start">
                   <DropdownMenuItem onClick={() => removeConversation(key)}>
                     <GoTrash className="text-error" />
-                    <span className="text-error">Delete</span>
+                    <span className="text-error">Xóa</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

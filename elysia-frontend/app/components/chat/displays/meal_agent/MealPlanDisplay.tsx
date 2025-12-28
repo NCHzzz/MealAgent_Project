@@ -181,7 +181,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
     return (
       <div className="mt-3 border-t border-secondary/10 pt-3 space-y-1">
         <p className="text-xs font-semibold uppercase text-secondary tracking-wide">
-          Sides & extras
+          Món phụ
         </p>
         {items.map((item, idx) => (
           <div
@@ -200,15 +200,15 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
               )}
               <div className="flex flex-col">
                 <span className="text-primary font-medium capitalize">
-                  {item.type || "extra"}
+                  {item.type || "khác"}
                 </span>
                 <span className="text-secondary">
-                  {item.recipe?.dish_name || "Unknown dish"}
+                  {item.recipe?.dish_name || "Món chưa xác định"}
                 </span>
                 <div className="flex items-center gap-2 text-secondary text-[11px]">
                   {item.servings && (
                     <span>
-                      {item.servings} serving{item.servings !== 1 ? "s" : ""}
+                      {item.servings} khẩu phần
                     </span>
                   )}
                   {item.servings && <span className="text-secondary/50">•</span>}
@@ -236,14 +236,14 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
       <Card className="w-full bg-background_alt border-secondary/10">
         <CardHeader>
           <div className="flex justify-between items-center gap-2">
-            <CardTitle className="text-lg">Daily Meal Plan</CardTitle>
+            <CardTitle className="text-lg">Kế hoạch ăn hàng ngày</CardTitle>
             <Button
               size="sm"
               variant="default"
               onClick={() => handleAcceptPlan(plan)}
               disabled={acceptingPlanId === plan.plan_id}
             >
-              {acceptingPlanId === plan.plan_id ? "Đang lưu..." : "Accept plan"}
+              {acceptingPlanId === plan.plan_id ? "Đang lưu..." : "Chấp nhận kế hoạch"}
             </Button>
           </div>
           {(acceptMessage || acceptError) && (
@@ -272,7 +272,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                         {meal.meal_type === "breakfast" ? "🌅" : meal.meal_type === "lunch" ? "🍽️" : "🌙"} {meal.meal_type}
                       </h4>
                       <Badge variant="outline" className="text-xs">
-                        {meal.servings}x serving{meal.servings !== 1 ? "s" : ""}
+                        {meal.servings} khẩu phần
                       </Badge>
                     </div>
                     <p className="text-sm font-medium text-primary mt-1">
@@ -298,7 +298,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                     return (
                       <div className="space-y-1">
                         <div className="flex items-center gap-3 text-xs">
-                          <span className="text-secondary/80 font-medium">Nutrition:</span>
+                          <span className="text-secondary/80 font-medium">Dinh dưỡng:</span>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="px-2 py-0.5 bg-primary/10 text-primary rounded font-medium">
                               {formatKcal(macros.main?.kcal ?? macros.kcal)}
@@ -316,7 +316,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                         </div>
                         {showTotal && (
                           <div className="text-[11px] text-secondary/70 pl-16">
-                            Total with sides:{" "}
+                            Tổng cộng với món phụ:{" "}
                             <span className="font-medium text-primary">
                               {formatKcal(macros.total?.kcal || macros.kcal)}
                             </span>
@@ -335,11 +335,11 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           <div className="pt-4 border-t border-secondary/10 bg-background/50 rounded-lg p-4">
             <h5 className="font-semibold text-sm mb-3 flex items-center gap-2">
               <span className="text-lg">📊</span>
-              Total Daily Macros
+              Tổng dinh dưỡng hàng ngày
             </h5>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="flex flex-col items-center p-3 bg-primary/5 rounded-lg border border-primary/10">
-                <p className="text-secondary text-xs mb-1 font-medium">Calories</p>
+                <p className="text-secondary text-xs mb-1 font-medium">Năng lượng</p>
                 <p className="font-bold text-lg text-primary">
                   {formatKcal(plan.total_macros.kcal)}
                 </p>
@@ -351,13 +351,13 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 </p>
               </div>
               <div className="flex flex-col items-center p-3 bg-yellow-500/5 rounded-lg border border-yellow-500/10">
-                <p className="text-secondary text-xs mb-1 font-medium">Fat</p>
+                <p className="text-secondary text-xs mb-1 font-medium">Chất béo</p>
                 <p className="font-bold text-lg text-yellow-600 dark:text-yellow-400">
                   {formatMacro(plan.total_macros.fat_g)}
                 </p>
               </div>
               <div className="flex flex-col items-center p-3 bg-green-500/5 rounded-lg border border-green-500/10">
-                <p className="text-secondary text-xs mb-1 font-medium">Carbs</p>
+                <p className="text-secondary text-xs mb-1 font-medium">Tinh bột</p>
                 <p className="font-bold text-lg text-green-600 dark:text-green-400">
                   {formatMacro(plan.total_macros.carb_g)}
                 </p>
@@ -372,19 +372,19 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                 <div className="space-y-1">
                   {plan.validation.macro_validation && !plan.validation.macro_validation.valid && (
                     <div className="text-xs text-destructive">
-                      ⚠ Macro violations: {plan.validation.macro_validation.violations?.length || 0} issue(s)
+                      ⚠ Vi phạm macro: {plan.validation.macro_validation.violations?.length || 0} vấn đề
                     </div>
                   )}
                   {plan.validation.constraint_validation && !plan.validation.constraint_validation.valid && (
                     <div className="text-xs text-destructive">
-                      ⚠ Constraint violations: {plan.validation.constraint_validation.violations?.length || 0} issue(s)
+                      ⚠ Vi phạm ràng buộc: {plan.validation.constraint_validation.violations?.length || 0} vấn đề
                     </div>
                   )}
                 </div>
               )}
               {plan.validation.macro_validation?.warnings && plan.validation.macro_validation.warnings.length > 0 && (
                 <div className="text-xs text-yellow-600 dark:text-yellow-400">
-                  ℹ️ {plan.validation.macro_validation.warnings.length} minor deviation(s) detected
+                  ℹ️ Phát hiện {plan.validation.macro_validation.warnings.length} sai lệch nhỏ
                 </div>
               )}
             </div>
@@ -406,14 +406,14 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
       <Card className="w-full bg-background_alt border-secondary/10">
         <CardHeader>
           <div className="flex justify-between items-center gap-2">
-            <CardTitle className="text-lg">Weekly Meal Plan</CardTitle>
+            <CardTitle className="text-lg">Kế hoạch ăn hàng tuần</CardTitle>
             <Button
               size="sm"
               variant="default"
               onClick={() => handleAcceptPlan(plan)}
               disabled={acceptingPlanId === plan.plan_id}
             >
-              {acceptingPlanId === plan.plan_id ? "Đang lưu..." : "Accept plan"}
+              {acceptingPlanId === plan.plan_id ? "Đang lưu..." : "Chấp nhận kế hoạch"}
             </Button>
           </div>
           {(acceptMessage || acceptError) && (
@@ -433,7 +433,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
               >
                 <div className="flex justify-between items-center mb-2">
                   <h4 className="font-semibold text-primary">
-                    Day {idx + 1} {day.date && `(${day.date})`}
+                    Ngày {idx + 1} {day.date && `(${day.date})`}
                   </h4>
                   <div className="text-xs text-secondary">
                     {formatKcal(day.total_macros.kcal)}
@@ -503,17 +503,17 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
 
           {/* Summary */}
           <div className="pt-3 border-t border-secondary/10">
-            <h5 className="font-semibold text-sm mb-2">Weekly Summary</h5>
+            <h5 className="font-semibold text-sm mb-2">Tổng kết tuần</h5>
             <div className="grid grid-cols-2 gap-4 text-sm mb-3">
               <div>
-                <p className="text-secondary text-xs">Total Calories</p>
+                <p className="text-secondary text-xs">Tổng năng lượng</p>
                 <p className="font-semibold text-primary">
                   {formatKcal(plan.total_macros.kcal)}
                 </p>
               </div>
               {plan.average_daily_macros && (
                 <div>
-                  <p className="text-secondary text-xs">Avg Daily Calories</p>
+                  <p className="text-secondary text-xs">Năng lượng TB/ngày</p>
                   <p className="font-semibold text-primary">
                     {formatKcal(plan.average_daily_macros.kcal)}
                   </p>
@@ -530,13 +530,13 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                   </p>
                 </div>
                 <div>
-                  <p className="text-secondary">Fat</p>
+                  <p className="text-secondary">Chất béo</p>
                   <p className="font-semibold text-primary">
                     {formatMacro(plan.average_daily_macros.fat_g)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-secondary">Carbs</p>
+                  <p className="text-secondary">Tinh bột</p>
                   <p className="font-semibold text-primary">
                     {formatMacro(plan.average_daily_macros.carb_g)}
                   </p>

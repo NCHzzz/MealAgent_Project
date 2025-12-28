@@ -81,37 +81,37 @@ const SidebarComponent: React.FC = () => {
   useEffect(() => {
     const _items = [
       {
-        title: "Chat",
+        title: "Trò chuyện",
         mode: ["chat"],
         icon: <MdChatBubbleOutline />,
         onClick: () => changePage("chat", {}, true, unsavedChanges),
       },
       {
-        title: "Profile",
+        title: "Hồ sơ",
         mode: ["profile"],
         icon: <FiUser />,
         onClick: () => changePage("profile", {}, true, unsavedChanges),
       },
       {
-        title: "Calendar",
+        title: "Lịch",
         mode: ["mealHistory"],
         icon: <RiCalendarTodoLine />,
         onClick: () => changePage("mealHistory", {}, true, unsavedChanges),
       },
       {
-        title: "Pantry",
+        title: "Tủ lạnh",
         mode: ["pantry"],
         icon: <GiMeal />,
         onClick: () => changePage("pantry", {}, true, unsavedChanges),
       },
       {
-        title: "Shopping List",
+        title: "Mua sắm",
         mode: ["shopping"],
         icon: <HiOutlineShoppingCart />,
         onClick: () => changePage("shopping", {}, true, unsavedChanges),
       },
       {
-        title: "Data",
+        title: "Dữ liệu",
         mode: ["data", "collection"],
         icon: !collections?.some((c) => c.processed === true) ? (
           <IoIosWarning className="text-warning" />
@@ -123,14 +123,14 @@ const SidebarComponent: React.FC = () => {
         onClick: () => changePage("data", {}, true, unsavedChanges),
       },
       {
-        title: "Settings",
+        title: "Cài đặt",
         mode: ["settings", "elysia"],
         icon: <MdOutlineSettingsInputComponent />,
         onClick: () => changePage("settings", {}, true, unsavedChanges),
       },
       
       {
-        title: "Evaluation",
+        title: "Đánh giá",
         mode: ["eval", "feedback", "display"],
         icon: <AiOutlineExperiment />,
         onClick: () => changePage("eval", {}, true, unsavedChanges),
@@ -155,12 +155,12 @@ const SidebarComponent: React.FC = () => {
             {socketOnline ? (
               <div className="flex items-center gap-1.5">
                 <FaCircle className="text-xs text-emerald-400 animate-pulse" />
-                <span className="text-xs text-gray-500 font-small">Online</span>
+                <span className="text-xs text-gray-500 font-small">Trực tuyến</span>
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
                 <FaCircle className="text-xs text-red-400 animate-pulse" />
-                <span className="text-xs text-gray-500 font-small">Offline</span>
+                <span className="text-xs text-gray-500 font-small">Ngoại tuyến</span>
               </div>
             )}
             <div className="flex flex-col items-end">
@@ -246,7 +246,7 @@ const SidebarComponent: React.FC = () => {
               onClick={logout}
             >
               <FaSignOutAlt />
-              <span>Log Out</span>
+              <span>Đăng xuất</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           )}

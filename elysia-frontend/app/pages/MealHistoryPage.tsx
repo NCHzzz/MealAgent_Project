@@ -43,7 +43,7 @@ export default function MealHistoryPage() {
 
   const fetchMealHistory = async () => {
     if (!id) {
-      setError("User ID does not exist");
+      setError("ID người dùng không tồn tại");
       setLoading(false);
       return;
     }
@@ -65,11 +65,11 @@ export default function MealHistoryPage() {
       if (data) {
         setHistoryData(data);
       } else {
-        setError("Unable to load meal history");
+        setError("Không thể tải lịch sử bữa ăn");
       }
     } catch (err) {
       console.error("Error fetching meal history:", err);
-      setError("An error occurred while loading meal history");
+      setError("Đã xảy ra lỗi khi tải lịch sử bữa ăn");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -220,7 +220,7 @@ export default function MealHistoryPage() {
       setActiveRecipeIndex(0);
     } catch (e) {
       console.error("Error fetching recipe from collection:", e);
-      setRecipeError("Unable to load recipe from Recipe collection");
+      setRecipeError("Không thể tải công thức từ bộ sưu tập Recipe");
     } finally {
       setLoadingRecipe(false);
     }
@@ -311,7 +311,7 @@ export default function MealHistoryPage() {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent to-accent mb-3"
           >
-            Meal History
+            Lịch sử bữa ăn
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 10 }}
@@ -319,7 +319,7 @@ export default function MealHistoryPage() {
             transition={{ duration: 0.5, delay: 0.3 }}
             className="text-secondary max-w-2xl mx-auto text-base md:text-lg"
           >
-            Review your logged meals and daily nutritional totals.
+            Xem lại các bữa ăn đã ghi nhận và tổng dinh dưỡng hàng ngày.
           </motion.p>
         </motion.div>
 
@@ -346,9 +346,9 @@ export default function MealHistoryPage() {
                 <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
-                Last 30 Days
+                30 ngày gần nhất
               </CardTitle>
-              <CardDescription className="text-sm mt-1">Browse through your logged meals and daily nutritional totals.</CardDescription>
+              <CardDescription className="text-sm mt-1">Duyệt qua các bữa ăn đã ghi nhận và tổng dinh dưỡng hàng ngày.</CardDescription>
             </CardHeader>
             <CardContent>
               <Separator className="mb-6" />
@@ -368,7 +368,7 @@ export default function MealHistoryPage() {
                       </svg>
                     </Button>
                     <div className="text-base font-semibold px-4 min-w-[200px] text-center">
-                      {currentMonth.toLocaleString("en-US", { month: 'long', year: 'numeric' })}
+                      {currentMonth.toLocaleString("vi-VN", { month: 'long', year: 'numeric' })}
                     </div>
                     <Button 
                       size="icon" 
@@ -388,19 +388,19 @@ export default function MealHistoryPage() {
                       onClick={() => setSelectedDate(null)}
                       className="bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70"
                     >
-                      Show All
+                      Hiển thị tất cả
                     </Button>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-7 gap-1 text-xs font-semibold text-secondary mb-2 px-1">
-                  <div className="text-center py-2">Sun</div>
-                  <div className="text-center py-2">Mon</div>
-                  <div className="text-center py-2">Tue</div>
-                  <div className="text-center py-2">Wed</div>
-                  <div className="text-center py-2">Thu</div>
-                  <div className="text-center py-2">Fri</div>
-                  <div className="text-center py-2">Sat</div>
+                  <div className="text-center py-2">CN</div>
+                  <div className="text-center py-2">T2</div>
+                  <div className="text-center py-2">T3</div>
+                  <div className="text-center py-2">T4</div>
+                  <div className="text-center py-2">T5</div>
+                  <div className="text-center py-2">T6</div>
+                  <div className="text-center py-2">T7</div>
                 </div>
 
                 <div className="grid grid-cols-7 gap-2">
@@ -446,7 +446,7 @@ export default function MealHistoryPage() {
                     animate={{ opacity: 1 }}
                     className="text-center"
                   >
-                    <p className="text-primary text-lg shine">Loading meal history...</p>
+                    <p className="text-primary text-lg shine">Đang tải lịch sử bữa ăn...</p>
                   </motion.div>
                 </div>
               )}
@@ -469,7 +469,7 @@ export default function MealHistoryPage() {
                   </Card>
                   <Button onClick={handleRefresh} variant="outline" size="sm" className="gap-2">
                     <IoRefresh className="h-4 w-4" />
-                    Try Again
+                    Thử lại
                   </Button>
                 </motion.div>
               )}
@@ -487,7 +487,7 @@ export default function MealHistoryPage() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
                       </div>
-                      <p className="text-secondary text-lg">No meals found in the selected time period.</p>
+                      <p className="text-secondary text-lg">Không tìm thấy bữa ăn nào trong khoảng thời gian đã chọn.</p>
                     </motion.div>
                   ) : (
                     <div className="w-full">
@@ -561,7 +561,7 @@ export default function MealHistoryPage() {
 
             {loadingRecipe && (
               <p className="text-sm text-secondary">
-                Loading ingredients and recipe from Recipe collection...
+                Đang tải nguyên liệu và công thức từ bộ sưu tập...
               </p>
             )}
 

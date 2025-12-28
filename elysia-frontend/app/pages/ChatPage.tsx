@@ -217,7 +217,7 @@ export default function ChatPage() {
             />
           </div>
         </div>
-        <p className="text-primary text-xl shine">Loading MealAgent...</p>
+        <p className="text-primary text-xl shine">Đang tải MealAgent...</p>
       </div>
     );
   }
@@ -232,22 +232,22 @@ export default function ChatPage() {
                 {mode === "chat" ? (
                   <>
                     <BsChatFill size={14} className="text-accent" />
-                    <p className="text-accent">Chat</p>
+                    <p className="text-accent">Trò chuyện</p>
                   </>
                 ) : mode === "flow" ? (
                   <>
                     <RiFlowChart size={14} className="text-accent" />
-                    <p className="text-accent">Tree</p>
+                    <p className="text-accent">Cây quyết định</p>
                   </>
                 ) : mode === "debug" ? (
                   <>
                     <CgDebug size={14} className="text-accent" />
-                    <p className="text-accent">Debug</p>
+                    <p className="text-accent">Gỡ lỗi</p>
                   </>
                 ) : mode === "settings" ? (
                   <>
                     <TbSettings size={14} className="text-accent" />
-                    <p className="text-accent">Settings</p>
+                    <p className="text-accent">Cài đặt</p>
                   </>
                 ) : null}
                 <LuChevronDown size={14} className="text-accent" />
@@ -256,20 +256,20 @@ export default function ChatPage() {
             <DropdownMenuContent>
               <DropdownMenuItem onClick={() => setMode("chat")}>
                 <BsChatFill size={14} />
-                Chat
+                Trò chuyện
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setMode("flow")}>
                 <RiFlowChart size={14} />
-                Tree
+                Cây quyết định
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setMode("settings")}>
                 <TbSettings size={14} />
-                Settings
+                Cài đặt
               </DropdownMenuItem>
               {process.env.NODE_ENV === "development" && (
                 <DropdownMenuItem onClick={() => setMode("debug")}>
                   <CgDebug size={14} />
-                  Debug
+                  Gỡ lỗi
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -286,7 +286,7 @@ export default function ChatPage() {
       {currentConversation != null && <Separator className="w-full" />}
       {loadingConversation && (
         <div className="flex w-full h-screen justify-center items-center">
-          <p className="text-primary text-xl shine">Loading Conversation...</p>
+          <p className="text-primary text-xl shine">Đang tải cuộc trò chuyện...</p>
         </div>
       )}
       {mode === "chat" && !loadingConversation ? (
@@ -352,7 +352,7 @@ export default function ChatPage() {
             <div className="absolute flex flex-col justify-center items-center w-full h-full gap-3 fade-in">
               <div className="flex items-center gap-4">
                 <p className="text-primary text-3xl font-semibold">
-                  Ask MealAgent
+                  Hỏi MealAgent
                 </p>
                 <Button
                   variant="default"

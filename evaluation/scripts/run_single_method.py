@@ -29,6 +29,257 @@ from datetime import datetime, timezone
 import numpy as np
 
 
+def generate_nutrition_error_summary(output: Dict[str, Any], output_file: Path) -> None:
+    """
+    Tạo file markdown summary report cho nutrition error evaluation.
+    
+    Args:
+        output: Dictionary chứa kết quả evaluation từ run_nutrition_error_test
+        output_file: Path đến file JSON output (để tạo summary cùng thư mục)
+    """
+    individual_results = output.get("individual_results", [])
+    aggregated = output.get("aggregated", {})
+    metadata = output.get("metadata", {})
+    
+    # Phân loại plans theo source
+    meal_plan_results = [r for r in individual_results if r.get("metadata", {}).get("source") == "MealPlan"]
+    meal_log_results = [r for r in individual_results if r.get("metadata", {}).get("source") == "MealLogEntry"]
+    
+    # Phân loại theo overall_pct_error ranges (tương tự llm_judge với score ranges)
+    excellent = [r for r in individual_results if r.get("percentage_error", {}).get("overall", 100) < 10]
+    good = [r for r in individual_results if 10 <= r.get("percentage_error", {}).get("overall", 100) < 15]
+    fair = [r for r in individual_results if 15 <= r.get("percentage_error", {}).get("overall", 100) < 20]
+    poor = [r for r in individual_results if r.get("percentage_error", {}).get("overall", 100) >= 20]
+    
+    # Phân tích các vấn đề phổ biến dựa trên macro differences
+    common_issues = {
+        "low_protein": [],
+        "high_protein": [],
+        "low_calories": [],
+        "high_calories": [],
+        "high_carb": [],
+        "high_fat": [],
+    }
+    
+    for result in individual_results:
+        target = result.get("target_values", {})
+        actual = result.get("actual_values", {})
+        pct_error = result.get("percentage_error", {})
+        
+        # Calculate differences
+        protein_diff = actual.get("protein_g", 0) - target.get("protein_g", 0)
+        carb_diff = actual.get("carb_g", 0) - target.get("carb_g", 0)
+        fat_diff = actual.get("fat_g", 0) - target.get("fat_g", 0)
+        calorie_diff = actual.get("calories", 0) - target.get("calories", 0)
+        
+        plan_id = result.get("metadata", {}).get("plan_id", "unknown")
+        overall_error = pct_error.get("overall", 0)
+        
+        # Low protein (<50g below target)
+        if protein_diff < -50:
+            common_issues["low_protein"].append({
+                "plan_id": plan_id,
+                "protein_diff": protein_diff,
+                "overall_error": overall_error,
+            })
+        
+        # High protein (>50g above target)
+        if protein_diff > 50:
+            common_issues["high_protein"].append({
+                "plan_id": plan_id,
+                "protein_diff": protein_diff,
+                "overall_error": overall_error,
+            })
+        
+        # Low calories (<500kcal below target)
+        if calorie_diff < -500:
+            common_issues["low_calories"].append({
+                "plan_id": plan_id,
+                "calorie_diff": calorie_diff,
+                "overall_error": overall_error,
+            })
+        
+        # High calories (>500kcal above target)
+        if calorie_diff > 500:
+            common_issues["high_calories"].append({
+                "plan_id": plan_id,
+                "calorie_diff": calorie_diff,
+                "overall_error": overall_error,
+            })
+        
+        # High carb (>100g above target)
+        if carb_diff > 100:
+            common_issues["high_carb"].append({
+                "plan_id": plan_id,
+                "carb_diff": carb_diff,
+                "overall_error": overall_error,
+            })
+        
+        # High fat (>50g above target)
+        if fat_diff > 50:
+            common_issues["high_fat"].append({
+                "plan_id": plan_id,
+                "fat_diff": fat_diff,
+                "overall_error": overall_error,
+            })
+    
+    # Tìm best và worst plans (dựa trên overall_pct_error - thấp hơn = tốt hơn)
+    best_plans = sorted(individual_results, key=lambda x: x.get("percentage_error", {}).get("overall", 100))[:5]
+    worst_plans = sorted(individual_results, key=lambda x: x.get("percentage_error", {}).get("overall", 100), reverse=True)[:5]
+    
+    # Tạo markdown report
+    total_evaluations = len(individual_results)
+    report = f"""# Nutrition Error Evaluation Summary Report
+
+Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+## Overview
+
+- **Total Evaluations**: {total_evaluations}
+- **Meal Plans (Suggested)**: {len(meal_plan_results)}
+- **Meal Logs (Accepted/Actual)**: {len(meal_log_results)}
+
+## Performance Distribution
+
+- **Excellent (<10%)**: {len(excellent)} ({len(excellent)/total_evaluations*100:.1f}%)
+- **Good (10-15%)**: {len(good)} ({len(good)/total_evaluations*100:.1f}%)
+- **Fair (15-20%)**: {len(fair)} ({len(fair)/total_evaluations*100:.1f}%)
+- **Poor (≥20%)**: {len(poor)} ({len(poor)/total_evaluations*100:.1f}%)
+
+## Aggregated Metrics
+
+### Overall Percentage Error
+- Mean: {aggregated.get('percentage_error', {}).get('overall', {}).get('mean', 0):.2f}%
+- Median: {aggregated.get('percentage_error', {}).get('overall', {}).get('median', 0):.2f}%
+- Std: {aggregated.get('percentage_error', {}).get('overall', {}).get('std', 0):.2f}%
+- Range: {aggregated.get('percentage_error', {}).get('overall', {}).get('min', 0):.2f}% - {aggregated.get('percentage_error', {}).get('overall', {}).get('max', 0):.2f}%
+
+### Protein Error
+- Mean: {aggregated.get('percentage_error', {}).get('protein_g', {}).get('mean', 0):.2f}%
+- Median: {aggregated.get('percentage_error', {}).get('protein_g', {}).get('median', 0):.2f}%
+- Std: {aggregated.get('percentage_error', {}).get('protein_g', {}).get('std', 0):.2f}%
+
+### Carb Error
+- Mean: {aggregated.get('percentage_error', {}).get('carb_g', {}).get('mean', 0):.2f}%
+- Median: {aggregated.get('percentage_error', {}).get('carb_g', {}).get('median', 0):.2f}%
+- Std: {aggregated.get('percentage_error', {}).get('carb_g', {}).get('std', 0):.2f}%
+
+### Fat Error
+- Mean: {aggregated.get('percentage_error', {}).get('fat_g', {}).get('mean', 0):.2f}%
+- Median: {aggregated.get('percentage_error', {}).get('fat_g', {}).get('median', 0):.2f}%
+- Std: {aggregated.get('percentage_error', {}).get('fat_g', {}).get('std', 0):.2f}%
+
+### Calories Error
+- Mean: {aggregated.get('percentage_error', {}).get('calories', {}).get('mean', 0):.2f}%
+- Median: {aggregated.get('percentage_error', {}).get('calories', {}).get('median', 0):.2f}%
+- Std: {aggregated.get('percentage_error', {}).get('calories', {}).get('std', 0):.2f}%
+
+## Aggregated MAE (Mean Absolute Error)
+
+### Overall MAE
+- Mean: {aggregated.get('mae', {}).get('overall', {}).get('mean', 0):.2f}
+- Std: {aggregated.get('mae', {}).get('overall', {}).get('std', 0):.2f}
+- Range: {aggregated.get('mae', {}).get('overall', {}).get('min', 0):.2f} - {aggregated.get('mae', {}).get('overall', {}).get('max', 0):.2f}
+
+### Protein MAE
+- Mean: {aggregated.get('mae', {}).get('protein_g', {}).get('mean', 0):.2f}g
+- Std: {aggregated.get('mae', {}).get('protein_g', {}).get('std', 0):.2f}g
+
+### Carb MAE
+- Mean: {aggregated.get('mae', {}).get('carb_g', {}).get('mean', 0):.2f}g
+- Std: {aggregated.get('mae', {}).get('carb_g', {}).get('std', 0):.2f}g
+
+### Fat MAE
+- Mean: {aggregated.get('mae', {}).get('fat_g', {}).get('mean', 0):.2f}g
+- Std: {aggregated.get('mae', {}).get('fat_g', {}).get('std', 0):.2f}g
+
+### Calories MAE
+- Mean: {aggregated.get('mae', {}).get('calories', {}).get('mean', 0):.2f}kcal
+- Std: {aggregated.get('mae', {}).get('calories', {}).get('std', 0):.2f}kcal
+
+## Common Issues
+
+### Low Protein (<50g below target)
+**Count**: {len(common_issues['low_protein'])} plans
+
+### High Protein (>50g above target)
+**Count**: {len(common_issues['high_protein'])} plans
+
+### Low Calories (<500kcal below target)
+**Count**: {len(common_issues['low_calories'])} plans
+
+### High Calories (>500kcal above target)
+**Count**: {len(common_issues['high_calories'])} plans
+
+### High Carb (>100g above target)
+**Count**: {len(common_issues['high_carb'])} plans
+
+### High Fat (>50g above target)
+**Count**: {len(common_issues['high_fat'])} plans
+
+## Top 5 Best Plans (Lowest Error)
+
+"""
+    
+    for i, result in enumerate(best_plans, 1):
+        plan_id = result.get("metadata", {}).get("plan_id", "unknown")
+        source = result.get("metadata", {}).get("source", "MealPlan")
+        overall_error = result.get("percentage_error", {}).get("overall", 0)
+        report += f"{i}. Plan ID: `{plan_id}` - Error: {overall_error:.2f}% ({source})\n"
+    
+    report += "\n## Top 5 Worst Plans (Highest Error)\n\n"
+    
+    for i, result in enumerate(worst_plans, 1):
+        plan_id = result.get("metadata", {}).get("plan_id", "unknown")
+        source = result.get("metadata", {}).get("source", "MealPlan")
+        overall_error = result.get("percentage_error", {}).get("overall", 0)
+        report += f"{i}. Plan ID: `{plan_id}` - Error: {overall_error:.2f}% ({source})\n"
+    
+    report += "\n## Recommendations\n\n"
+    report += "### For Meal Plan Generation:\n"
+    
+    # Dynamic recommendations based on common issues
+    if len(common_issues['low_protein']) > len(common_issues['high_protein']):
+        report += "1. **Increase Protein**: Many plans lack sufficient protein. Consider adding more lean protein sources.\n"
+    elif len(common_issues['high_protein']) > 0:
+        report += "1. **Reduce Protein**: Some plans exceed protein targets. Adjust portion sizes.\n"
+    else:
+        report += "1. **Maintain Protein Balance**: Protein levels are generally appropriate.\n"
+    
+    if len(common_issues['high_calories']) > len(common_issues['low_calories']):
+        report += "2. **Control Calories**: Many plans exceed calorie targets. Reduce portion sizes or choose lower-calorie options.\n"
+    elif len(common_issues['low_calories']) > 0:
+        report += "2. **Increase Calories**: Some plans are below calorie targets. Add more nutrient-dense foods.\n"
+    else:
+        report += "2. **Maintain Calorie Balance**: Calorie levels are generally appropriate.\n"
+    
+    if len(common_issues['high_fat']) > 0:
+        report += "3. **Reduce Fat**: High-fat plans are common. Use cooking methods that reduce fat (steaming, grilling).\n"
+    else:
+        report += "3. **Maintain Fat Balance**: Fat levels are generally appropriate.\n"
+    
+    if len(common_issues['high_carb']) > 0:
+        report += "4. **Control Carbs**: Some plans exceed carb targets. Consider reducing portion sizes of carb-rich foods.\n"
+    else:
+        report += "4. **Maintain Carb Balance**: Carb levels are generally appropriate.\n"
+    
+    report += "5. **Improve Overall Accuracy**: Focus on better macro distribution and portion size estimation.\n"
+    
+    report += "\n### For System Improvement:\n"
+    report += "- Review and fix data quality issues (especially MealLogEntry with unrealistic macros)\n"
+    report += "- Implement better macro validation before saving plans\n"
+    report += "- Improve portion size estimation algorithms\n"
+    report += "- Consider user feedback and adjust targets accordingly\n"
+    report += "- Monitor and reduce outliers in nutrition calculations\n"
+    
+    # Save report
+    summary_file = output_file.parent / "nutrition_error_summary.md"
+    with open(summary_file, "w", encoding="utf-8") as f:
+        f.write(report)
+    
+    print(f"💾 Summary report saved to: {summary_file}")
+
+
 # OPENROUTER_API_KEY='your-api-key'
 async def run_nutrition_error_test(
     use_weaviate: bool = True, 
@@ -102,7 +353,7 @@ async def run_nutrition_error_test(
         print("   Please ensure Weaviate is configured or use --use-mock flag is removed.")
         return None
     
-    # Phân loại meal plans theo source và plan_type
+    # Phân loại meal plans theo source và plan_type (sử dụng original plans trước khi expand)
     # MealPlan: Suggested plans (chưa được user chấp nhận)
     # MealLogEntry: Accepted/Actual plans (đã được user chấp nhận hoặc thực sự ăn)
     suggested_plans = [p for p in meal_plans if p.get("source") != "MealLogEntry"]
@@ -111,7 +362,7 @@ async def run_nutrition_error_test(
     meal_plan_count = len(suggested_plans)
     meal_log_count = len(accepted_plans)
     
-    # Chỉ đếm day/week trong MealPlan collection (suggested plans)
+    # Chỉ đếm day/week trong MealPlan collection (suggested plans) - original plans
     day_plan_count = sum(1 for p in suggested_plans if p.get("plan_type") == "day")
     week_plan_count = sum(1 for p in suggested_plans if p.get("plan_type") == "week")
     
@@ -125,9 +376,21 @@ async def run_nutrition_error_test(
         print(f"     ✅ These are plans users accepted or actually consumed")
     
     # Run evaluation
+    # Note: evaluate_batch sẽ expand week plans thành day plans
     print(f"\n⏳ Calculating nutrition errors...")
+    print("⏳ Week plans will be split into individual day plans for evaluation...")
     results = evaluator.evaluate_batch(meal_plans, user_profiles)
     print(f"✅ Completed {len(results)} evaluations")
+    
+    # Get expanded plans để match với results
+    # evaluate_batch đã expand week plans, nên ta cần expand lại để có đúng mapping
+    expanded_plans, expanded_profiles, original_indices = evaluator._expand_week_plans_to_days(
+        meal_plans, user_profiles
+    )
+    
+    # Sử dụng expanded_plans và expanded_profiles cho output
+    output_plans = expanded_plans
+    output_profiles = expanded_profiles
     
     # Aggregate
     aggregated = evaluator.aggregate_results(results)
@@ -140,8 +403,8 @@ async def run_nutrition_error_test(
     # Print detailed plan-by-plan results for debugging
     print(f"\n📋 Detailed Plan Results (for debugging):")
     for i, result in enumerate(results, 1):
-        plan = meal_plans[i-1]
-        profile = user_profiles[i-1]
+        plan = output_plans[i-1] if i-1 < len(output_plans) else {}
+        profile = output_profiles[i-1] if i-1 < len(output_profiles) else {}
         source = plan.get("source", "MealPlan")
         plan_type = plan.get("plan_type", "day")
         user_id = profile.get("user_id", "unknown")
@@ -152,14 +415,12 @@ async def run_nutrition_error_test(
         elif isinstance(plan_date, datetime):
             plan_date = plan_date.date().isoformat()
         
-        # Get raw values before normalization to show if it's week plan
-        total_macros = plan.get("total_macros", {})
-        raw_protein = float(total_macros.get("protein_g", 0.0))
-        raw_calories = float(total_macros.get("kcal", 0.0))
-        
-        # Show if normalized (for week plans)
-        is_normalized = plan_type == "week"
-        normalized_note = " (normalized to daily)" if is_normalized else ""
+        # Nếu là day plan từ week plan, hiển thị thông tin
+        original_plan_id = plan.get("original_plan_id")
+        if original_plan_id:
+            plan_id_display = f"{plan_id} (from week plan {original_plan_id})"
+        else:
+            plan_id_display = plan_id
         
         # Determine plan category
         if source == "MealLogEntry":
@@ -167,12 +428,10 @@ async def run_nutrition_error_test(
         else:
             category = "⚠️  Suggested"
         
-        print(f"\n   [{i:2d}] Plan ID: {plan_id}")
+        print(f"\n   [{i:2d}] Plan ID: {plan_id_display}")
         print(f"       {category} | User: {user_id[:36]}... | Type: {plan_type} | Date: {plan_date}")
-        if is_normalized:
-            print(f"       ⚠️  Week plan - values normalized to daily (raw total: P={raw_protein:.1f}g, Cal={raw_calories:.0f}kcal)")
         print(f"       Target:  P={result.target_protein:6.1f}g  C={result.target_carb:6.1f}g  F={result.target_fat:6.1f}g  Cal={result.target_calories:6.0f}kcal")
-        print(f"       Actual{normalized_note}:  P={result.actual_protein:6.1f}g  C={result.actual_carb:6.1f}g  F={result.actual_fat:6.1f}g  Cal={result.actual_calories:6.0f}kcal")
+        print(f"       Actual:  P={result.actual_protein:6.1f}g  C={result.actual_carb:6.1f}g  F={result.actual_fat:6.1f}g  Cal={result.actual_calories:6.0f}kcal")
         print(f"       % Error: P={result.pct_error_protein:5.1f}%  C={result.pct_error_carb:5.1f}%  F={result.pct_error_fat:5.1f}%  Cal={result.pct_error_calories:5.1f}%")
         print(f"       Overall Error: {result.overall_pct_error:5.1f}% | MAE: {result.overall_mae:6.1f}")
     
@@ -203,19 +462,17 @@ async def run_nutrition_error_test(
     suggested_results = []
     accepted_results = []
     day_plan_results = []
-    week_plan_results = []
     
     for i, result in enumerate(results):
-        plan = meal_plans[i]
+        plan = output_plans[i] if i < len(output_plans) else {}
         if plan.get("source") == "MealLogEntry":
             accepted_results.append(result)
         else:
             suggested_results.append(result)
             plan_type = plan.get("plan_type", "day")
-            if plan_type == "week":
-                week_plan_results.append(result)
-            else:
-                day_plan_results.append(result)
+            # Week plans đã được expand thành day plans, nên không còn week_plan_results
+            # Tất cả đều là day plans bây giờ
+            day_plan_results.append(result)
     
     if suggested_results:
         suggested_agg = evaluator.aggregate_results(suggested_results)
@@ -225,9 +482,11 @@ async def run_nutrition_error_test(
         if day_plan_results:
             day_agg = evaluator.aggregate_results(day_plan_results)
             print(f"      - Day Plans ({len(day_plan_results)}): {day_agg['percentage_error']['overall']['mean']:.2f}%")
-        if week_plan_results:
-            week_agg = evaluator.aggregate_results(week_plan_results)
-            print(f"      - Week Plans ({len(week_plan_results)}): {week_agg['percentage_error']['overall']['mean']:.2f}%")
+            # Đếm số day plans từ week plans
+            week_day_count = sum(1 for i, p in enumerate(output_plans[:len(results)]) 
+                               if i < len(results) and p.get("original_plan_id"))
+            if week_day_count > 0:
+                print(f"        (including {week_day_count} days from week plans)")
     
     if accepted_results:
         accepted_agg = evaluator.aggregate_results(accepted_results)
@@ -259,15 +518,23 @@ async def run_nutrition_error_test(
         best_idx = results.index(best_result)
         worst_idx = results.index(worst_result)
         
-        best_plan = meal_plans[best_idx]
-        worst_plan = meal_plans[worst_idx]
+        best_plan = output_plans[best_idx] if best_idx < len(output_plans) else {}
+        worst_plan = output_plans[worst_idx] if worst_idx < len(output_plans) else {}
+        
+        best_plan_id = best_plan.get('plan_id', '')
+        if best_plan.get('original_plan_id'):
+            best_plan_id = f"{best_plan_id} (from week plan {best_plan.get('original_plan_id')})"
+        
+        worst_plan_id = worst_plan.get('plan_id', '')
+        if worst_plan.get('original_plan_id'):
+            worst_plan_id = f"{worst_plan_id} (from week plan {worst_plan.get('original_plan_id')})"
         
         print(f"\n🎯 Key Highlights:")
         print(f"   Best Performance:  {best_result.overall_pct_error:.2f}%")
-        print(f"      Plan: {best_plan.get('plan_id', '')[:50]}...")
+        print(f"      Plan: {best_plan_id[:50]}...")
         print(f"      Type: {best_plan.get('plan_type', 'day')} | Source: {best_plan.get('source', 'MealPlan')}")
         print(f"   Worst Performance: {worst_result.overall_pct_error:.2f}%")
-        print(f"      Plan: {worst_plan.get('plan_id', '')[:50]}...")
+        print(f"      Plan: {worst_plan_id[:50]}...")
         print(f"      Type: {worst_plan.get('plan_type', 'day')} | Source: {worst_plan.get('source', 'MealPlan')}")
     
     # Save results with detailed metadata
@@ -293,10 +560,12 @@ async def run_nutrition_error_test(
             return obj.isoformat()
         raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
     
+    # Add individual results with metadata
+    # Sử dụng output_plans và output_profiles (đã được expand)
     for i, result in enumerate(results):
         result_dict = result.to_dict()
-        plan = meal_plans[i] if i < len(meal_plans) else {}
-        profile = user_profiles[i] if i < len(user_profiles) else {}
+        plan = output_plans[i] if i < len(output_plans) else {}
+        profile = output_profiles[i] if i < len(output_profiles) else {}
         
         # Convert datetime to string if present
         plan_date = plan.get("start_date")
@@ -315,6 +584,12 @@ async def run_nutrition_error_test(
             "plan_type": plan.get("plan_type"),
             "plan_date": plan_date,
         }
+        
+        # Nếu là day plan từ week plan, thêm thông tin original_plan_id
+        if plan.get("original_plan_id"):
+            result_dict["metadata"]["original_plan_id"] = plan.get("original_plan_id")
+            result_dict["metadata"]["day_key"] = plan.get("day_key")
+        
         output["individual_results"].append(result_dict)
     
     output_file = Path("evaluation/results/nutrition_error_test.json")
@@ -323,6 +598,11 @@ async def run_nutrition_error_test(
         json.dump(output, f, indent=2, ensure_ascii=False, default=serialize_datetime)
     
     print(f"\n💾 Results saved to: {output_file}")
+    
+    # Generate summary report
+    print("\n📝 Generating summary report...")
+    generate_nutrition_error_summary(output, output_file)
+    
     print("=" * 80)
     
     return output

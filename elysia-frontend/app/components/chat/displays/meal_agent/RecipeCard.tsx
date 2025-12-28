@@ -107,10 +107,10 @@ const RecipeCardItem: React.FC<{
           {/* Macros */}
           {recipe.macros_per_serving && (
             <div>
-              <p className="text-xs text-secondary mb-1">Per Serving</p>
+              <p className="text-xs text-secondary mb-1">Mỗi phần ăn</p>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
-                  <p className="text-secondary">Calories</p>
+                  <p className="text-secondary">Năng lượng</p>
                   <p className="font-semibold text-primary">
                     {formatKcal(recipe.macros_per_serving.kcal)}
                   </p>
@@ -122,13 +122,13 @@ const RecipeCardItem: React.FC<{
                   </p>
                 </div>
                 <div>
-                  <p className="text-secondary">Fat</p>
+                  <p className="text-secondary">Chất béo</p>
                   <p className="font-semibold text-primary">
                     {formatMacro(recipe.macros_per_serving.fat_g)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-secondary">Carbs</p>
+                  <p className="text-secondary">Tinh bột</p>
                   <p className="font-semibold text-primary">
                     {formatMacro(recipe.macros_per_serving.carb_g)}
                   </p>
@@ -140,7 +140,7 @@ const RecipeCardItem: React.FC<{
           {/* Allergens */}
           {recipe.allergens && recipe.allergens.length > 0 && (
             <div>
-              <p className="text-xs text-secondary mb-1">Allergens</p>
+              <p className="text-xs text-secondary mb-1">Dị ứng</p>
               <div className="flex flex-wrap gap-1">
                 {recipe.allergens.map((allergen) => (
                   <Badge
@@ -157,7 +157,7 @@ const RecipeCardItem: React.FC<{
           {/* Serving Size */}
           {recipe.serving_size && (
             <p className="text-xs text-secondary">
-              Serves: {recipe.serving_size}
+              Khẩu phần: {recipe.serving_size}
             </p>
           )}
         </CardContent>

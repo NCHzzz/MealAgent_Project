@@ -109,7 +109,7 @@ const ProfilePage: React.FC = () => {
     return (
       <div className="w-full h-full flex items-center justify-center">
         <p className="text-secondary">
-          Please login or register to configure your MealAgent profile.
+          Vui lòng đăng nhập hoặc đăng ký để cấu hình hồ sơ MealAgent của bạn.
         </p>
       </div>
     );
@@ -118,7 +118,7 @@ const ProfilePage: React.FC = () => {
   if (loading && !profile) {
     return (
       <div className="w-full h-full flex items-center justify-center">
-        <p className="text-secondary">Loading profile...</p>
+        <p className="text-secondary">Đang tải hồ sơ...</p>
       </div>
     );
   }
@@ -154,7 +154,7 @@ const ProfilePage: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent to-accent mb-3"
           >
-            Personal Profile
+            Hồ sơ cá nhân
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 10 }}
@@ -162,7 +162,7 @@ const ProfilePage: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.3 }}
             className="text-secondary max-w-2xl mx-auto text-base md:text-lg"
           >
-            Provide your health metrics and preferences to generate tailored meal plans and accurate macro targets.
+            Cung cấp các chỉ số sức khỏe và sở thích của bạn để tạo kế hoạch bữa ăn phù hợp và mục tiêu dinh dưỡng chính xác.
           </motion.p>
         </motion.div>
 
@@ -181,10 +181,10 @@ const ProfilePage: React.FC = () => {
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                       </svg>
-                      Complete Your Profile
+                      Hoàn thiện hồ sơ của bạn
                     </CardTitle>
                     <CardDescription className="text-warning/90">
-                      Add these details so MealAgent can calculate macros correctly: {missingFields.join(", ")}
+                      Vui lòng bổ sung các thông tin sau để MealAgent tính toán dinh dưỡng chính xác: {missingFields.join(", ")}
                     </CardDescription>
                   </CardHeader>
                 </Card>
@@ -202,118 +202,118 @@ const ProfilePage: React.FC = () => {
                   <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  Personal Details
+                  Thông tin cá nhân
                 </CardTitle>
-                <CardDescription className="text-sm mt-1">These values power TDEE and goal-based adjustments.</CardDescription>
+                <CardDescription className="text-sm mt-1">Các giá trị này được sử dụng để tính TDEE và điều chỉnh theo mục tiêu.</CardDescription>
               </CardHeader>
               <CardContent>
                 <form className="space-y-6" onSubmit={handleSubmit}>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <Label className="text-sm font-medium">Display name</Label>
+                      <Label className="text-sm font-medium">Tên hiển thị</Label>
                       <Input
                         value={form.display_name || ""}
                         onChange={(e) => setForm({ ...form, display_name: e.target.value })}
                         className="h-11"
-                        placeholder="Your name"
+                        placeholder="Nhập tên của bạn"
                       />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Diet type</Label>
+                      <Label className="text-sm font-medium">Chế độ ăn</Label>
                       <Input
                         value={form.diet_type || ""}
                         onChange={(e) => setForm({ ...form, diet_type: e.target.value })}
-                        placeholder="balanced, keto, vegetarian..."
+                        placeholder="cân bằng, keto, chay..."
                         className="h-11"
                       />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Age</Label>
+                      <Label className="text-sm font-medium">Tuổi</Label>
                       <Input type="number" min={1} value={form.age ?? ""} onChange={(e) => setForm({ ...form, age: Number(e.target.value) || undefined })} className="h-11" />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Gender</Label>
+                      <Label className="text-sm font-medium">Giới tính</Label>
                       <Select value={form.gender || ""} onValueChange={(value) => setForm({ ...form, gender: value || undefined })}>
                         <SelectTrigger className="h-11">
-                          <SelectValue placeholder="Select" />
+                          <SelectValue placeholder="Chọn" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="male">Male</SelectItem>
-                          <SelectItem value="female">Female</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
+                          <SelectItem value="male">Nam</SelectItem>
+                          <SelectItem value="female">Nữ</SelectItem>
+                          <SelectItem value="other">Khác</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Weight (kg)</Label>
+                      <Label className="text-sm font-medium">Cân nặng (kg)</Label>
                       <Input type="number" min={1} value={form.weight_kg ?? ""} onChange={(e) => setForm({ ...form, weight_kg: Number(e.target.value) || undefined })} className="h-11" />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Height (cm)</Label>
+                      <Label className="text-sm font-medium">Chiều cao (cm)</Label>
                       <Input type="number" min={30} value={form.height_cm ?? ""} onChange={(e) => setForm({ ...form, height_cm: Number(e.target.value) || undefined })} className="h-11" />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Activity level</Label>
+                      <Label className="text-sm font-medium">Mức độ vận động</Label>
                       <Select value={form.activity_level || ""} onValueChange={(value) => setForm({ ...form, activity_level: value as ProfileUpdatePayload["activity_level"] })}>
                         <SelectTrigger className="h-11">
-                          <SelectValue placeholder="Choose..." />
+                          <SelectValue placeholder="Chọn..." />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="sedentary">Sedentary</SelectItem>
-                          <SelectItem value="light">Light</SelectItem>
-                          <SelectItem value="moderate">Moderate</SelectItem>
-                          <SelectItem value="very_active">Very active</SelectItem>
-                          <SelectItem value="extra_active">Extra active</SelectItem>
+                          <SelectItem value="sedentary">Ít vận động</SelectItem>
+                          <SelectItem value="light">Nhẹ</SelectItem>
+                          <SelectItem value="moderate">Trung bình</SelectItem>
+                          <SelectItem value="very_active">Năng động</SelectItem>
+                          <SelectItem value="extra_active">Rất năng động</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Goal</Label>
+                      <Label className="text-sm font-medium">Mục tiêu</Label>
                       <Select value={form.goal || ""} onValueChange={(value) => setForm({ ...form, goal: (value as ProfileUpdatePayload["goal"]) || undefined })}>
                         <SelectTrigger className="h-11">
-                          <SelectValue placeholder="Select your goal..." />
+                          <SelectValue placeholder="Chọn mục tiêu..." />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="maintenance">Maintenance</SelectItem>
-                          <SelectItem value="weight_loss">Weight Loss</SelectItem>
-                          <SelectItem value="weight_gain">Weight Gain</SelectItem>
-                          <SelectItem value="muscle_gain">Muscle Gain</SelectItem>
-                          <SelectItem value="gym">Gym</SelectItem>
+                          <SelectItem value="maintenance">Duy trì cân nặng</SelectItem>
+                          <SelectItem value="weight_loss">Giảm cân</SelectItem>
+                          <SelectItem value="weight_gain">Tăng cân</SelectItem>
+                          <SelectItem value="muscle_gain">Tăng cơ</SelectItem>
+                          <SelectItem value="gym">Tập gym</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     {(form.goal === "weight_loss" || form.goal === "weight_gain") && (
                       <div>
-                        <Label className="text-sm font-medium">Timeline</Label>
+                        <Label className="text-sm font-medium">Thời gian thực hiện</Label>
                         <Select value={String(form.timeline_months || 3)} onValueChange={(value) => setForm({ ...form, timeline_months: Number(value) as 3 | 6 })}>
                           <SelectTrigger className="h-11">
-                            <SelectValue placeholder="Select timeline..." />
+                            <SelectValue placeholder="Chọn thời gian..." />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="3">3 months</SelectItem>
-                            <SelectItem value="6">6 months</SelectItem>
+                            <SelectItem value="3">3 tháng</SelectItem>
+                            <SelectItem value="6">6 tháng</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                     )}
                     <div>
-                      <Label className="text-sm font-medium">Max cooking time (min)</Label>
+                      <Label className="text-sm font-medium">Thời gian nấu tối đa (phút)</Label>
                       <Input type="number" min={10} value={form.max_cooking_time_min ?? ""} onChange={(e) => setForm({ ...form, max_cooking_time_min: Number(e.target.value) || undefined })} className="h-11" />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
-                      <Label className="text-sm font-medium">Allergens</Label>
-                      <Textarea value={allergensInput} onChange={(e) => setForm({ ...form, allergens: e.target.value ? e.target.value.split(",").map((i) => i.trim()) : [] })} className="min-h-[80px]" placeholder="nuts, dairy, gluten" />
+                      <Label className="text-sm font-medium">Dị ứng thực phẩm</Label>
+                      <Textarea value={allergensInput} onChange={(e) => setForm({ ...form, allergens: e.target.value ? e.target.value.split(",").map((i) => i.trim()) : [] })} className="min-h-[80px]" placeholder="hạt, sữa, gluten" />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Preferences</Label>
-                      <Textarea value={preferencesInput} onChange={(e) => setForm({ ...form, preferences: e.target.value ? e.target.value.split(",").map((i) => i.trim()) : [] })} className="min-h-[80px]" placeholder="organic, spicy" />
+                      <Label className="text-sm font-medium">Sở thích ẩm thực</Label>
+                      <Textarea value={preferencesInput} onChange={(e) => setForm({ ...form, preferences: e.target.value ? e.target.value.split(",").map((i) => i.trim()) : [] })} className="min-h-[80px]" placeholder="hữu cơ, cay" />
                     </div>
                     <div>
-                      <Label className="text-sm font-medium">Kitchen equipment</Label>
-                      <Textarea value={equipmentInput} onChange={(e) => setForm({ ...form, available_equipment: e.target.value ? e.target.value.split(",").map((i) => i.trim()) : [] })} className="min-h-[80px]" placeholder="oven, microwave" />
+                      <Label className="text-sm font-medium">Thiết bị nhà bếp</Label>
+                      <Textarea value={equipmentInput} onChange={(e) => setForm({ ...form, available_equipment: e.target.value ? e.target.value.split(",").map((i) => i.trim()) : [] })} className="min-h-[80px]" placeholder="lò nướng, lò vi sóng" />
                     </div>
                   </div>
 
@@ -329,14 +329,14 @@ const ProfilePage: React.FC = () => {
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                           </svg>
-                          Saving...
+                          Đang lưu...
                         </span>
                       ) : (
                         <span className="flex items-center gap-2">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                           </svg>
-                          Save Profile
+                          Lưu hồ sơ
                         </span>
                       )}
                     </Button>
@@ -361,9 +361,9 @@ const ProfilePage: React.FC = () => {
                       <svg className="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                       </svg>
-                      Your Targets
+                      Mục tiêu của bạn
                     </CardTitle>
-                    <CardDescription className="text-xs">Auto-calculated from your profile</CardDescription>
+                    <CardDescription className="text-xs">Tự động tính toán từ hồ sơ của bạn</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 gap-3">
