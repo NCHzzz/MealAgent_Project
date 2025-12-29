@@ -25,7 +25,7 @@ const DataSubMenu: React.FC = () => {
   return (
     <SidebarGroup>
       <SidebarGroupLabel>
-        <p>Data</p>
+        <p>Dữ liệu</p>
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenuItem className="list-none" key={"dashboard"}>
@@ -34,11 +34,11 @@ const DataSubMenu: React.FC = () => {
             onClick={toDashboard}
           >
             <MdOutlineSpaceDashboard />
-            <p>Dashboard</p>
+            <p>Bảng điều khiển</p>
           </SidebarMenuButton>
           <SidebarMenuButton variant="default">
             <TbPackageImport />
-            <p>Import Data (Coming Soon)</p>
+            <p>Nhập dữ liệu (Sắp ra mắt)</p>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarGroupContent>

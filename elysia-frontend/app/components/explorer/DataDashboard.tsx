@@ -138,7 +138,7 @@ const Dashboard: React.FC = () => {
     <div className="flex w-full flex-col gap-2 min-h-0 items-center justify-start h-full fade-in">
       {/* Title */}
       <div className="flex-1">
-        <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Data Dashboard</h1>
+        <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent mb-2">Bảng Điều Khiển Dữ Liệu</h1>
       </div>
       <div className="flex flex-col w-full md:w-[60vw] lg:w-[40vw] gap-6 h-full">
         {/* KPI */}
@@ -147,7 +147,7 @@ const Dashboard: React.FC = () => {
             <DataKPI
               loading={loading}
               value={processedCollections}
-              label="Data Sources"
+              label="Nguồn Dữ Liệu"
               icon={<LuDatabase size={20} />}
               color="accent"
               lines={false}
@@ -155,7 +155,7 @@ const Dashboard: React.FC = () => {
             <DataKPI
               loading={loading}
               value={processedObjects}
-              label="Data Objects"
+              label="Đối Tượng Dữ Liệu"
               icon={<RiFilePaperLine size={20} />}
               color="highlight"
               lines={false}
@@ -166,7 +166,7 @@ const Dashboard: React.FC = () => {
               <DataKPI
                 loading={loading}
                 value={unprocessedCollections}
-                label="Unknown Sources"
+                label="Nguồn Chưa Xác Định"
                 icon={<LuDatabase size={20} />}
                 color="muted"
                 lines={true}
@@ -174,7 +174,7 @@ const Dashboard: React.FC = () => {
               <DataKPI
                 loading={loading}
                 value={unprocessedObjects}
-                label="Unknown Objects"
+                label="Đối Tượng Chưa Xác Định"
                 icon={<RiFilePaperLine size={20} />}
                 color="muted"
                 lines={true}
@@ -195,7 +195,7 @@ const Dashboard: React.FC = () => {
             <div className="flex flex-col gap-3 flex-1 min-h-0">
               {/* Control Bar */}
               <div className="flex w-full items-center justify-between">
-                <p className="text-primary text-sm">Collections</p>
+                <p className="text-primary text-sm">Bộ Sưu Tập</p>
                 <motion.div
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -219,7 +219,7 @@ const Dashboard: React.FC = () => {
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Refresh collections</p>
+                        <p>Làm mới bộ sưu tập</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -240,7 +240,7 @@ const Dashboard: React.FC = () => {
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>
-                          Sort by name{" "}
+                          Sắp xếp theo tên{" "}
                           {sortBy === "name"
                             ? sortASC
                               ? "(A-Z)"
@@ -267,11 +267,11 @@ const Dashboard: React.FC = () => {
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>
-                          Sort by total objects{" "}
+                          Sắp xếp theo tổng số đối tượng{" "}
                           {sortBy === "total"
                             ? sortASC
-                              ? "(low to high)"
-                              : "(high to low)"
+                              ? "(thấp đến cao)"
+                              : "(cao đến thấp)"
                             : ""}
                         </p>
                       </TooltipContent>
@@ -286,11 +286,11 @@ const Dashboard: React.FC = () => {
                           classNameDefault={`border border-error text-error w-10 h-10`}
                           classNameConfirm={`border border-error text-error`}
                           icon={<IoTrash size={16} />}
-                          confirmText="Clear all metadata?"
+                          confirmText="Xóa tất cả siêu dữ liệu?"
                         />
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Clear all collection metadata</p>
+                        <p>Xóa tất cả siêu dữ liệu bộ sưu tập</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -309,7 +309,7 @@ const Dashboard: React.FC = () => {
                     <p
                       className={`${collapsedAvailableSources ? "text-secondary" : "text-primary"} text-sm font-medium`}
                     >
-                      Available Sources ({processedCollections})
+                      Nguồn Khả Dụng ({processedCollections})
                     </p>
                     {collapsedAvailableSources ? (
                       <IoChevronDown size={16} className="text-secondary" />
@@ -344,10 +344,10 @@ const Dashboard: React.FC = () => {
                       }}
                       className="text-warning text-sm"
                     >
-                      You currently have no data sources analyzed by Elysia. To
-                      use Elysia please analyze a data source from the list
-                      below. If no collections are available, please verify if
-                      your Weaviate instance contains any collections.
+                      Bạn hiện không có nguồn dữ liệu nào được Elysia phân tích. Để
+                      sử dụng Elysia, vui lòng phân tích một nguồn dữ liệu từ danh sách
+                      bên dưới. Nếu không có bộ sưu tập nào, vui lòng kiểm tra xem
+                      phiên bản Weaviate của bạn có chứa bất kỳ bộ sưu tập nào không.
                     </motion.p>
                   </motion.div>
                 )}
@@ -375,7 +375,7 @@ const Dashboard: React.FC = () => {
                         ))}
                       {processedCollections === 0 && (
                         <div className="flex items-center justify-center h-32 text-secondary text-sm">
-                          No available sources
+                          Không có nguồn khả dụng
                         </div>
                       )}
                     </div>
@@ -393,7 +393,7 @@ const Dashboard: React.FC = () => {
                     <p
                       className={`${collapsedUnknownSources ? "text-secondary" : "text-primary"} text-sm font-medium`}
                     >
-                      Analyzable Sources ({unprocessedCollections})
+                      Nguồn Có Thể Phân Tích ({unprocessedCollections})
                     </p>
                     {collapsedUnknownSources ? (
                       <IoChevronDown size={16} className="text-secondary" />
@@ -426,7 +426,7 @@ const Dashboard: React.FC = () => {
                         ))}
                       {unprocessedCollections === 0 && (
                         <div className="flex items-center justify-center h-32 text-secondary text-sm">
-                          No analyzable sources
+                          Không có nguồn có thể phân tích
                         </div>
                       )}
                     </div>

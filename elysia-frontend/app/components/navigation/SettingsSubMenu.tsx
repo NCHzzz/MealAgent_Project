@@ -24,7 +24,7 @@ const SettingsSubMenu: React.FC = () => {
   return (
     <SidebarGroup>
       <SidebarGroupLabel>
-        <p>Settings</p>
+        <p>Cài đặt</p>
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenuItem className="list-none" key={"settings"}>
@@ -33,7 +33,7 @@ const SettingsSubMenu: React.FC = () => {
             onClick={() => changePage("settings", {}, true, unsavedChanges)}
           >
             <IoSettingsOutline />
-            <p>Configuration</p>
+            <p>Cấu hình</p>
           </SidebarMenuButton>
           {/* <SidebarMenuButton
             variant={currentPage === "elysia" ? "active" : "default"}

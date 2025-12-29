@@ -217,10 +217,10 @@ const DataExplorer = () => {
         {collection && !collection.processed && !loadingCollection && (
           <div className="flex flex-row justify-between items-center w-full bg-warning/10 text-warning border border-warning p-2 rounded-md">
             <div className="flex flex-col gap-1 items-start justify-start">
-              <p className="text-sm font-bold text-warning">Warning</p>
+              <p className="text-sm font-bold text-warning">Cảnh báo</p>
               <p className="text-sm ">
-                This collection needs to be analyzed before it can be used in
-                Elysia and to access its metadata.
+                Bộ sưu tập này cần được phân tích trước khi có thể sử dụng trong
+                Elysia và để truy cập siêu dữ liệu của nó.
               </p>
             </div>
           </div>
@@ -248,7 +248,7 @@ const DataExplorer = () => {
             >
               <div className="flex flex-col gap-1 items-start justify-start">
                 <div className="flex flex-row gap-1 items-center justify-between w-full">
-                  <p className="text-sm font-bold text-highlight">Note</p>
+                  <p className="text-sm font-bold text-highlight">Lưu ý</p>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -260,11 +260,11 @@ const DataExplorer = () => {
                   </Button>
                 </div>
                 <p className="text-sm ">
-                  No vectorizers could be detected for this collection (neither
-                  global nor named vectors). Vector search might be limited
-                  which could lead to issues. Please verify that your collection
-                  is using one of Weaviate&apos;s supported embedding model
-                  providers.{" "}
+                  Không thể phát hiện vectorizer nào cho bộ sưu tập này (không có
+                  vectorizer toàn cục hoặc vector được đặt tên). Tìm kiếm vector có thể bị
+                  hạn chế và có thể dẫn đến các vấn đề. Vui lòng xác minh rằng bộ sưu tập
+                  của bạn đang sử dụng một trong các nhà cung cấp mô hình embedding
+                  được hỗ trợ của Weaviate.{" "}
                 </p>
                 <a
                   href="https://docs.weaviate.io/weaviate/model-providers"
@@ -272,7 +272,7 @@ const DataExplorer = () => {
                   rel="noopener noreferrer"
                   className="text-highlight underline hover:no-underline text-sm"
                 >
-                  View Weaviate documentation
+                  Xem tài liệu Weaviate
                 </a>
               </div>
             </motion.div>
@@ -294,7 +294,7 @@ const DataExplorer = () => {
                 >
                   <Input
                     type="text"
-                    placeholder={"Search " + (collection?.name || "collection")}
+                    placeholder={"Tìm kiếm " + (collection?.name || "bộ sưu tập")}
                     value={query}
                     className="text-sm placeholder:text-secondary placeholder:text-sm"
                     onChange={(e) => setQuery(e.target.value)}
@@ -322,11 +322,11 @@ const DataExplorer = () => {
                       </Button>
                       {!usingQuery ? (
                         <p className="text-primary text-xs font-light">
-                          {"Page " + page + " of " + maxPage}
+                          {"Trang " + page + " / " + maxPage}
                         </p>
                       ) : (
                         <p className="text-primary text-xs font-light">
-                          {"Page " + page}
+                          {"Trang " + page}
                         </p>
                       )}
                       <Button

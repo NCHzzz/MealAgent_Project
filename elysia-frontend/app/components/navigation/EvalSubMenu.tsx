@@ -62,7 +62,7 @@ const EvalSubMenu: React.FC = () => {
     <>
       <SidebarGroup>
         <SidebarGroupLabel>
-          <p>Evaluation</p>
+          <p>Đánh giá</p>
         </SidebarGroupLabel>
         <SidebarMenuItem className="list-none" key={"dashboard"}>
           <SidebarMenuButton
@@ -70,7 +70,7 @@ const EvalSubMenu: React.FC = () => {
             onClick={toDashboard}
           >
             <MdOutlineSpaceDashboard />
-            <p>Dashboard</p>
+            <p>Bảng điều khiển</p>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem className="list-none" key={"Feedback Button"}>
@@ -79,14 +79,14 @@ const EvalSubMenu: React.FC = () => {
             onClick={() => changePage("feedback", {}, true)}
           >
             <MdOutlineFeedback />
-            <p>Feedback</p>
+            <p>Phản hồi</p>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarGroup>
       {process.env.NODE_ENV === "development" && (
         <SidebarGroup>
           <SidebarGroupLabel>
-            <p>Displays</p>
+            <p>Hiển thị</p>
           </SidebarGroupLabel>
           <SidebarGroupContent>
             {displays.map((display) => (
