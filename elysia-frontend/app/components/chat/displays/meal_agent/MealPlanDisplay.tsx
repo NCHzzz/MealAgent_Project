@@ -368,20 +368,6 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
           {/* Validation Details */}
           {plan.validation && (
             <div className="pt-3 border-t border-secondary/10 space-y-2">
-              {!plan.validation.valid && (
-                <div className="space-y-1">
-                  {plan.validation.macro_validation && !plan.validation.macro_validation.valid && (
-                    <div className="text-xs text-destructive">
-                      ⚠ Vi phạm macro: {plan.validation.macro_validation.violations?.length || 0} vấn đề
-                    </div>
-                  )}
-                  {plan.validation.constraint_validation && !plan.validation.constraint_validation.valid && (
-                    <div className="text-xs text-destructive">
-                      ⚠ Vi phạm ràng buộc: {plan.validation.constraint_validation.violations?.length || 0} vấn đề
-                    </div>
-                  )}
-                </div>
-              )}
               {plan.validation.macro_validation?.warnings && plan.validation.macro_validation.warnings.length > 0 && (
                 <div className="text-xs text-yellow-600 dark:text-yellow-400">
                   ℹ️ Phát hiện {plan.validation.macro_validation.warnings.length} sai lệch nhỏ
