@@ -1,72 +1,35 @@
 ---
 phase: deployment
-title: Deployment Strategy
-description: Define deployment process, infrastructure, and release procedures
+title: Deployment Documentation
+description: Bộ tài liệu triển khai gọn cho hệ thống Elysia
 ---
 
-# Deployment Strategy
+# Deployment Documentation
 
-## Infrastructure
-**Where will the application run?**
+## Bộ tài liệu rút gọn (3 file)
 
-- Hosting platform (AWS, GCP, Azure, etc.)
-- Infrastructure components (servers, databases, etc.)
-- Environment separation (dev, staging, production)
+1) 📄 **[azure-vm-setup.md](./azure-vm-setup.md)**  
+   Tạo và cấu hình Azure VM, cài Docker, chạy Docker Compose, mở port.
 
-## Deployment Pipeline
-**How do we deploy changes?**
+2) 📄 **[cloudflare-nginx-setup.md](./cloudflare-nginx-setup.md)**  
+   Trỏ DNS Cloudflare, bật SSL, cấu hình Nginx reverse proxy (frontend + backend + WebSocket).
 
-### Build Process
-- Build steps and commands
-- Asset compilation/optimization
-- Environment configuration
+3) 📄 **[deployment-architecture.md](./deployment-architecture.md)**  
+   Kiến trúc triển khai tổng thể, luồng traffic và các thành phần chính.
 
-### CI/CD Pipeline
-- Automated testing gates
-- Build automation
-- Deployment automation
+## Quick start ngắn
 
-## Environment Configuration
-**What settings differ per environment?**
+```bash
+# 1) SSH vào VM
+ssh -i <key.pem> azureuser@<public-ip>
 
-### Development
-- Configuration details
-- Local setup
+# 2) Làm theo azure-vm-setup.md để cài Docker và chạy Docker Compose
+# 3) Làm theo cloudflare-nginx-setup.md để trỏ domain và bật HTTPS
+# 4) Kiểm tra kiến trúc và checklist trong deployment-architecture.md
+```
 
-### Staging
-- Configuration details
-- Testing environment
+## Liên quan
 
-### Production
-- Configuration details
-- Monitoring setup
-
-## Deployment Steps
-**What's the release process?**
-
-1. Pre-deployment checklist
-2. Deployment execution steps
-3. Post-deployment validation
-4. Rollback procedure (if needed)
-
-## Database Migrations
-**How do we handle schema changes?**
-
-- Migration strategy
-- Backup procedures
-- Rollback approach
-
-## Secrets Management
-**How do we handle sensitive data?**
-
-- Environment variables
-- Secret storage solution
-- Key rotation strategy
-
-## Rollback Plan
-**What if something goes wrong?**
-
-- Rollback triggers
-- Rollback steps
-- Communication plan
-
+- docker-compose.dev.yml: cấu hình chạy không GPU
+- docker-compose.prod.yml: cấu hình production (GPU/không GPU tùy chỉnh)
+- `.env`: cần điền đầy đủ API keys/secret trước khi start dịch vụ
