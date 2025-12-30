@@ -275,7 +275,12 @@ class UserManager:
         Check all clients in all ClientManagers across all users and run the restart_client() method (for sync and async clients).
         The restart_client() methods will check if the client has been inactive for the last client_timeout minutes (set in init).
         """
-        for user_id in self.users:
+        # Create a copy of keys to avoid RuntimeError if dictionary changes during iteration
+        user_ids = list(self.users.keys())
+        for user_id in user_ids:
+            # Skip if user was removed during iteration
+            if user_id not in self.users:
+                continue
             if (
                 "client_manager" in self.users[user_id]
                 and self.users[user_id]["client_manager"].is_client
@@ -287,7 +292,12 @@ class UserManager:
         """
         Close all clients in all ClientManagers across all users.
         """
-        for user_id in self.users:
+        # Create a copy of keys to avoid RuntimeError if dictionary changes during iteration
+        user_ids = list(self.users.keys())
+        for user_id in user_ids:
+            # Skip if user was removed during iteration
+            if user_id not in self.users:
+                continue
             if "client_manager" in self.users[user_id]:
                 await self.users[user_id]["client_manager"].close_clients()
 
@@ -326,12 +336,37 @@ class UserManager:
                 logger.debug(f"Tree {conversation_id} exists in Weaviate, loading for user {user_id}")
                 try:
                     await self.load_tree(user_id, conversation_id)
+                    # load_tree already updates hidden_environment, but ensure it's set here too
+                    tree = tree_manager.get_tree(conversation_id)
+                    if tree and hasattr(tree, 'tree_data') and hasattr(tree.tree_data, 'environment'):
+                        if not hasattr(tree.tree_data.environment, 'hidden_environment'):
+                            tree.tree_data.environment.hidden_environment = {}
+                        tree.tree_data.environment.hidden_environment["user_id"] = user_id
                 except Exception as e:
                     logger.warning(f"Failed to load tree {conversation_id} from Weaviate: {e}. Creating new tree.")
                     tree_manager.add_tree(conversation_id, low_memory)
+                    # Ensure user_id is set for newly created tree
+                    tree = tree_manager.get_tree(conversation_id)
+                    if tree and hasattr(tree, 'tree_data') and hasattr(tree.tree_data, 'environment'):
+                        if not hasattr(tree.tree_data.environment, 'hidden_environment'):
+                            tree.tree_data.environment.hidden_environment = {}
+                        tree.tree_data.environment.hidden_environment["user_id"] = user_id
             else:
                 # Tree doesn't exist anywhere - create new one
                 tree_manager.add_tree(conversation_id, low_memory)
+                # Ensure user_id is set for newly created tree (build_meal_agent_tree should set it, but ensure it's correct)
+                tree = tree_manager.get_tree(conversation_id)
+                if tree and hasattr(tree, 'tree_data') and hasattr(tree.tree_data, 'environment'):
+                    if not hasattr(tree.tree_data.environment, 'hidden_environment'):
+                        tree.tree_data.environment.hidden_environment = {}
+                    tree.tree_data.environment.hidden_environment["user_id"] = user_id
+        else:
+            # Tree exists in memory - ensure user_id is correct
+            tree = tree_manager.get_tree(conversation_id)
+            if tree and hasattr(tree, 'tree_data') and hasattr(tree.tree_data, 'environment'):
+                if not hasattr(tree.tree_data.environment, 'hidden_environment'):
+                    tree.tree_data.environment.hidden_environment = {}
+                tree.tree_data.environment.hidden_environment["user_id"] = user_id
         
         return tree_manager.get_tree(conversation_id)
 
@@ -447,9 +482,20 @@ class UserManager:
                 wcd_api_key=wcd_api_key,
             )
 
-        return await tree_manager.load_tree_weaviate(
+        result = await tree_manager.load_tree_weaviate(
             conversation_id, save_location_client_manager
         )
+        
+        # Ensure hidden_environment has correct user_id after loading tree from Weaviate
+        # This fixes the issue where loaded trees might have stale user_id from previous sessions
+        tree = tree_manager.get_tree(conversation_id)
+        if tree and hasattr(tree, 'tree_data') and hasattr(tree.tree_data, 'environment'):
+            if not hasattr(tree.tree_data.environment, 'hidden_environment'):
+                tree.tree_data.environment.hidden_environment = {}
+            tree.tree_data.environment.hidden_environment["user_id"] = user_id
+            logger.debug(f"Updated hidden_environment user_id to '{user_id}' after loading tree {conversation_id}")
+        
+        return result
 
     async def delete_tree(
         self,
@@ -606,6 +652,16 @@ class UserManager:
         await self.update_user_last_request(user_id)
 
         tree_manager: TreeManager = local_user["tree_manager"]
+        
+        # Ensure hidden_environment has correct user_id before processing query
+        # This is a safety measure to prevent using wrong user_id from stale hidden_environment
+        if tree_manager.tree_exists(conversation_id):
+            tree = tree_manager.get_tree(conversation_id)
+            if tree and hasattr(tree, 'tree_data') and hasattr(tree.tree_data, 'environment'):
+                if not hasattr(tree.tree_data.environment, 'hidden_environment'):
+                    tree.tree_data.environment.hidden_environment = {}
+                tree.tree_data.environment.hidden_environment["user_id"] = user_id
+                logger.debug(f"Updated hidden_environment user_id to '{user_id}' before processing query for conversation {conversation_id}")
 
         async for yielded_result in tree_manager.process_tree(
             query,
