@@ -7,13 +7,32 @@
  * - Prod (non-static): read from NEXT_PUBLIC_BACKEND_URL
  * - Static export: empty string → same origin as frontend
  *
- * Điều này giúp bạn deploy trên IP thật (vd: http://57.158.27.105)
- * mà không bị hard-code localhost trong frontend.
+ * QUAN TRỌNG: Khi dùng HTTPS qua Cloudflare, frontend PHẢI gọi qua cùng domain (qua Nginx proxy)
+ * Nếu không có NEXT_PUBLIC_BACKEND_URL và đang HTTPS → dùng relative path (empty string)
  */
-export const host =
-  process.env.NEXT_PUBLIC_IS_STATIC !== "true"
-    ? process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"
-    : "";
+export const host = (() => {
+  // Static mode: dùng relative path
+  if (process.env.NEXT_PUBLIC_IS_STATIC === "true") {
+    return "";
+  }
+
+  // Nếu có NEXT_PUBLIC_BACKEND_URL, dùng nó
+  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+    return process.env.NEXT_PUBLIC_BACKEND_URL;
+  }
+
+  // Nếu không có và đang chạy trên browser với HTTPS
+  // → dùng cùng domain (qua Nginx proxy) để tránh mixed content
+  // QUAN TRỌNG: Phải dùng full URL, không được dùng relative path
+  // Vì Next.js dev server không proxy các routes này đến backend
+  if (typeof window !== "undefined" && window.location.protocol === "https:") {
+    const currentHost = window.location.host;
+    return `${window.location.protocol}//${currentHost}`;
+  }
+
+  // Development với HTTP: dùng localhost
+  return "http://localhost:8000";
+})();
 
 export const public_path =
   process.env.NEXT_PUBLIC_IS_STATIC !== "true" ? "/" : "/static/";
