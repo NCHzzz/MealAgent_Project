@@ -16,21 +16,28 @@ export const host = (() => {
     return "";
   }
 
-  // Nếu có NEXT_PUBLIC_BACKEND_URL, dùng nó
+  // Nếu có NEXT_PUBLIC_BACKEND_URL, dùng nó (ưu tiên cao nhất)
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
     return process.env.NEXT_PUBLIC_BACKEND_URL;
   }
 
-  // Nếu không có và đang chạy trên browser với HTTPS
-  // → dùng cùng domain (qua Nginx proxy) để tránh mixed content
-  // QUAN TRỌNG: Phải dùng full URL, không được dùng relative path
-  // Vì Next.js dev server không proxy các routes này đến backend
-  if (typeof window !== "undefined" && window.location.protocol === "https:") {
-    const currentHost = window.location.host;
-    return `${window.location.protocol}//${currentHost}`;
+  // Nếu đang chạy trên browser (client-side)
+  if (typeof window !== "undefined") {
+    // Nếu đang HTTPS → dùng full URL qua Nginx proxy
+    if (window.location.protocol === "https:") {
+      const currentHost = window.location.host;
+      const fullUrl = `${window.location.protocol}//${currentHost}`;
+      // Debug log (chỉ trong development)
+      if (process.env.NODE_ENV === "development") {
+        console.log("[host.ts] Using HTTPS, host:", fullUrl);
+      }
+      return fullUrl;
+    }
+    // Nếu đang HTTP → dùng localhost cho development
+    return "http://localhost:8000";
   }
 
-  // Development với HTTP: dùng localhost
+  // Server-side rendering: dùng localhost
   return "http://localhost:8000";
 })();
 
