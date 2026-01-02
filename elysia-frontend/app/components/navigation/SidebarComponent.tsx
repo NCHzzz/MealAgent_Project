@@ -65,7 +65,7 @@ const SidebarComponent: React.FC = () => {
   const { changePage, currentPage } = useContext(RouterContext);
   const { collections, loadingCollections } = useContext(CollectionContext);
   const { unsavedChanges } = useContext(SessionContext);
-  const { authUser, logout } = useContext(AuthContext);
+  const { authUser, logout, isAdmin } = useContext(AuthContext);
 
   const [items, setItems] = useState<
     {
@@ -136,8 +136,17 @@ const SidebarComponent: React.FC = () => {
         onClick: () => changePage("eval", {}, true, unsavedChanges),
       },
     ];
-    setItems(_items);
-  }, [collections, unsavedChanges]);
+
+    // Filter items based on role
+    const filteredItems = _items.filter(item => {
+      if (["Dữ liệu", "Đánh giá", "Cài đặt"].includes(item.title)) {
+        return isAdmin;
+      }
+      return true;
+    });
+
+    setItems(filteredItems);
+  }, [collections, unsavedChanges, isAdmin]);
 
   const openNewTab = (url: string) => {
     window.open(url, "_blank");
@@ -211,13 +220,13 @@ const SidebarComponent: React.FC = () => {
         <Separator />
 
         {currentPage === "chat" && <HomeSubMenu />}
-        {(currentPage === "data" || currentPage === "collection") && (
+        {isAdmin && (currentPage === "data" || currentPage === "collection") && (
           <DataSubMenu />
         )}
-        {(currentPage === "eval" ||
+        {isAdmin && (currentPage === "eval" ||
           currentPage === "feedback" ||
           currentPage === "display") && <EvalSubMenu />}
-        {(currentPage === "settings" || currentPage === "elysia") && (
+        {isAdmin && (currentPage === "settings" || currentPage === "elysia") && (
           <SettingsSubMenu />
         )}
       </SidebarContent>

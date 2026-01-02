@@ -20,6 +20,7 @@ type AuthUser = {
   email: string;
   display_name?: string;
   token: string;
+  role?: string;
 };
 
 type AuthContextValue = {
@@ -33,6 +34,7 @@ type AuthContextValue = {
   saveProfile: (payload: ProfileUpdatePayload) => Promise<boolean>;
   refreshProfile: () => Promise<void>;
   activeUserId: string | null;
+  isAdmin: boolean;
 };
 
 const STORAGE_KEY = "elysia_auth_user";
@@ -48,6 +50,7 @@ export const AuthContext = createContext<AuthContextValue>({
   saveProfile: async () => false,
   refreshProfile: async () => {},
   activeUserId: null,
+  isAdmin: false,
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -118,6 +121,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         email: resp.email,
         display_name: resp.display_name,
         token: resp.token,
+        role: resp.role,
       };
       setAuthUser(user);
       setProfile(resp.profile || null);
@@ -131,7 +135,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     async (payload: RegisterPayload) => {
       const resp = await registerUser(payload);
       if ("user_id" in resp && resp.error === "") {
-        handleAuthSuccess(resp);
+        handleAuthSuccess(resp as AuthSuccessResponse);
         showSuccessToast("Account created", "Your MealAgent profile is ready.");
         return true;
       }
@@ -145,7 +149,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     async (payload: LoginPayload) => {
       const resp = await loginUser(payload);
       if ("user_id" in resp && resp.error === "") {
-        handleAuthSuccess(resp);
+        handleAuthSuccess(resp as AuthSuccessResponse);
         showSuccessToast("Welcome back!", "You are now signed in.");
         return true;
       }
@@ -216,6 +220,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       saveProfile,
       refreshProfile,
       activeUserId: authUser?.user_id || null,
+      isAdmin: authUser?.role === "admin" || profile?.role === "admin",
     }),
     [
       authUser,

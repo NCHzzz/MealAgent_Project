@@ -100,6 +100,27 @@ def _validate_token(authorization: Optional[str]) -> Tuple[str, str]:
     return session["user_id"], token
 
 
+async def admin_required(
+    authorization: Optional[str] = Header(default=None),
+):
+    """
+    Dependency to ensure the user has an admin role.
+    """
+    user_id, _ = _validate_token(authorization)
+    async with _client_manager.connect_to_async_client() as client:
+        _, properties = await _fetch_user_by_id(client, user_id)
+        if not properties:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
+        role = properties.get("role", "user")
+        if role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required"
+            )
+    return user_id
+
+
 async def _fetch_user_by_email(client, email: str) -> Tuple[Optional[str], Optional[dict]]:
     collection = client.collections.get("UserProfile")
     response = await collection.query.fetch_objects(
@@ -155,6 +176,7 @@ def _serialise_profile(properties: Optional[dict]) -> dict:
         "carb_g": properties.get("carb_g"),
         "max_cooking_time_min": properties.get("max_cooking_time_min"),
         "available_equipment": properties.get("available_equipment") or [],
+        "role": properties.get("role", "user"),
         "created_at": _to_iso(properties.get("created_at")),
         "updated_at": _to_iso(properties.get("updated_at")),
     }
@@ -190,6 +212,7 @@ async def register_user(payload: RegisterRequest, user_manager: UserManager = De
             "preferences": payload.preferences or [],
             "max_cooking_time_min": payload.max_cooking_time_min,
             "available_equipment": payload.available_equipment or [],
+            "role": "user",
             "created_at": now,
             "updated_at": now,
         }
@@ -216,6 +239,7 @@ async def register_user(payload: RegisterRequest, user_manager: UserManager = De
             "email": email,
             "display_name": payload.display_name,
             "token": token,
+            "role": "user",
             "profile": _serialise_profile(properties),
         }
     )
@@ -240,6 +264,7 @@ async def login_user(payload: LoginRequest):
             "email": email,
             "display_name": properties.get("display_name"),
             "token": token,
+            "role": properties.get("role", "user"),
             "profile": _serialise_profile(properties),
         }
     )

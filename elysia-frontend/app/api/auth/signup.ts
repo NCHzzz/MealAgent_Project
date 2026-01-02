@@ -1,4 +1,4 @@
-import { host } from "@/app/components/host";
+import { host } from "../../components/host";
 
 export type UserProfileResponse = {
   user_id?: string;
@@ -19,6 +19,7 @@ export type UserProfileResponse = {
   protein_g?: number;
   fat_g?: number;
   carb_g?: number;
+  role?: string;
   created_at?: string;
   updated_at?: string;
 };
@@ -29,6 +30,7 @@ export type AuthSuccessResponse = {
   email: string;
   display_name?: string;
   token: string;
+  role?: string;
   profile?: UserProfileResponse;
 };
 
