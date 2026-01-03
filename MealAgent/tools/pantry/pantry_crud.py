@@ -269,9 +269,10 @@ async def pantry_crud_tool(
             yield Result(
                 name="state",
                 objects=[state],
-                metadata={"action": "create", "user_id": user_id, "created_count": len(created_items)},
+                metadata={"action": "create", "user_id": user_id, "created_count": len(created_items), "task_complete": True},
                 payload_type="generic",
-                display=True,
+                display=False,
+                llm_message="Successfully created {created_count} items in pantry for user {user_id}. Task complete.",
             )
             yield Result(
                 name="items",
@@ -342,9 +343,10 @@ async def pantry_crud_tool(
             yield Result(
                 name="state",
                 objects=[state],
-                metadata={"action": "update", "user_id": user_id, "updated_count": updated_count},
+                metadata={"action": "update", "user_id": user_id, "updated_count": updated_count, "task_complete": True},
                 payload_type="generic",
-                display=True,
+                display=False,
+                llm_message="Successfully updated {updated_count} items in pantry for user {user_id}. Task complete.",
             )
             # For update, fetch latest items for table view (optional minimal change: skip fetch; no rows emitted)
             yield Response(f"✅ Updated {updated_count} pantry item(s)")
@@ -399,9 +401,10 @@ async def pantry_crud_tool(
             yield Result(
                 name="state",
                 objects=[state],
-                metadata={"action": "delete", "user_id": user_id, "deleted_count": deleted_count},
+                metadata={"action": "delete", "user_id": user_id, "deleted_count": deleted_count, "task_complete": True},
                 payload_type="generic",
-                display=True,
+                display=False,
+                llm_message="Successfully deleted {deleted_count} items from pantry for user {user_id}. Task complete.",
             )
             # For delete, we can also emit remaining items table on demand (skipped here to avoid extra fetch)
             yield Response(f"✅ Removed {deleted_count} item(s) from pantry")

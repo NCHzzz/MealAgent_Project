@@ -26,6 +26,13 @@ import ViewToggleMenu from "./components/ViewToggleMenu";
 import DataConfig from "./DataConfig";
 import DataMetadata from "./DataMetadata";
 import { motion } from "framer-motion";
+import { AuthContext } from "../contexts/AuthContext";
+import { ToastContext } from "../contexts/ToastContext";
+import { addObject } from "@/app/api/addObject";
+import { updateObject } from "@/app/api/updateObject";
+import { deleteObject } from "@/app/api/deleteObject";
+import DataEditorModal from "./components/DataEditorModal";
+import { IoAdd } from "react-icons/io5";
 
 const DataExplorer = () => {
   const searchParams = useSearchParams();
@@ -35,7 +42,81 @@ const DataExplorer = () => {
 
   const [collection, setCollection] = useState<Collection | null>(null);
   const { collections } = useContext(CollectionContext);
+
   const { id } = useContext(SessionContext);
+  const { isAdmin, activeUserId } = useContext(AuthContext);
+  const { showSuccessToast, showErrorToast } = useContext(ToastContext);
+
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<any>(null);
+
+  const handleAdd = () => {
+    setEditingItem(null);
+    setIsEditorOpen(true);
+  };
+
+  const handleEdit = (item: any) => {
+    setEditingItem(item);
+    setIsEditorOpen(true);
+  };
+
+  const handleDelete = async (item: any) => {
+    if (!collection) return;
+    if (!confirm("Are you sure you want to delete this item?")) return;
+
+    const response = await deleteObject(
+      activeUserId || "",
+      collection.name,
+      item.uuid
+    );
+    if (!response.error) {
+      showSuccessToast("Deleted object", "Object deleted successfully");
+      loadCollectionData();
+    } else {
+      showErrorToast("Error deleting object", response.error);
+    }
+  };
+
+  const handleSave = async (data: any) => {
+    if (!collection) return;
+
+    // Filter out null, undefined, and empty string values
+    const filteredData = Object.fromEntries(
+      Object.entries(data).filter(
+        ([_, v]) =>
+          v !== null &&
+          v !== undefined &&
+          v !== "" &&
+          String(v) !== "None" &&
+          String(v) !== "null"
+      )
+    );
+
+    let response;
+    if (editingItem) {
+      response = await updateObject(
+        activeUserId || "",
+        collection.name,
+        editingItem.uuid,
+        filteredData
+      );
+    } else {
+      // For adding, we might want to keep some defaults, but generally good to filter too
+      response = await addObject(
+        activeUserId || "",
+        collection.name,
+        filteredData
+      );
+    }
+
+    if (!response.error) {
+      showSuccessToast("Saved object", "Object saved successfully");
+      loadCollectionData();
+      setIsEditorOpen(false);
+    } else {
+      showErrorToast("Error saving object", response.error);
+    }
+  };
 
   const {
     collectionData,
@@ -305,6 +386,14 @@ const DataExplorer = () => {
                   >
                     <FaSearch className="text-accent" />
                   </Button>
+                  {isAdmin && (
+                    <Button
+                      className="bg-primary/10 border border-primary hover:bg-primary/20 w-9 h-9"
+                      onClick={handleAdd}
+                    >
+                      <IoAdd className="text-primary" />
+                    </Button>
+                  )}
                 </div>
                 {/* Bottom Menu */}
                 <div className="flex flex-col-reverse md:flex-row gap-2 md:gap-1 w-full">
@@ -369,10 +458,24 @@ const DataExplorer = () => {
                     sortOn={sortOn || ""}
                     stickyHeaders={true}
                     maxHeight="100%"
+
                     loadingData={loadingData}
+                    isAdmin={isAdmin}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
                   />
                 )}
               </motion.div>
+              {collection && (
+                <DataEditorModal
+                  isOpen={isEditorOpen}
+                  onClose={() => setIsEditorOpen(false)}
+                  onSave={handleSave}
+                  properties={collectionData?.properties || {}}
+                  initialData={editingItem}
+                  collectionName={collection.name}
+                />
+              )}
             </>
           )}
           {view === "metadata" && (

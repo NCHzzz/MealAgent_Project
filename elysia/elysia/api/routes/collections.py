@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Body
 from fastapi.responses import JSONResponse
 
 from elysia.api.api_types import (
@@ -719,3 +719,118 @@ async def delete_all_metadata(
         return JSONResponse(content={"error": str(e)}, status_code=200)
 
     return JSONResponse(content={"error": ""}, status_code=200)
+
+
+@router.post("/{user_id}/add_object/{collection_name}")
+async def add_object(
+    user_id: str,
+    collection_name: str,
+    data: dict = Body(...),
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    """
+    Add a new object to a collection.
+    """
+    logger.debug(f"/add_object API request received")
+    try:
+        print(f"DEBUG: /add_object raw data: {data}")
+        # Filter out None values, empty strings, and string literals "None" and "null"
+        data = {
+            k: v for k, v in data.items() 
+            if v is not None and v != "" and str(v).lower() != "none" and str(v).lower() != "null"
+        }
+        print(f"DEBUG: /add_object filtered properties: {data}")
+        
+        user_local = await user_manager.get_user_local(user_id)
+        client_manager = user_local["client_manager"]
+        async with client_manager.connect_to_async_client() as client:
+            collection = client.collections.get(collection_name)
+            
+            # Ensure we are not sending uuid in properties if it exists there
+            if "uuid" in data:
+                del data["uuid"]
+
+            uuid = await collection.data.insert(properties=data)
+            return JSONResponse(
+                content={"uuid": str(uuid), "error": ""},
+                status_code=200,
+            )
+    except Exception as e:
+        logger.exception(f"Error in /add_object API")
+        return JSONResponse(
+            content={"error": str(e)},
+            status_code=500,
+        )
+
+
+@router.patch("/{user_id}/update_object/{collection_name}/{uuid}")
+async def update_object(
+    user_id: str,
+    collection_name: str,
+    uuid: str,
+    data: dict = Body(...),
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    """
+    Update an object in a collection.
+    """
+    logger.debug(f"/update_object API request received")
+    try:
+        print(f"DEBUG: /update_object raw data: {data}")
+        # Filter out None values, empty strings, and string literals "None" and "null"
+        # Weaviate validation is strict.
+        data = {
+            k: v for k, v in data.items() 
+            if v is not None and v != "" and str(v).lower() != "none" and str(v).lower() != "null"
+        }
+        print(f"DEBUG: /update_object filtered properties: {data}")
+        
+        user_local = await user_manager.get_user_local(user_id)
+        client_manager = user_local["client_manager"]
+        async with client_manager.connect_to_async_client() as client:
+            collection = client.collections.get(collection_name)
+            
+            # Ensure we are not sending uuid in properties if it exists there
+            if "uuid" in data:
+                del data["uuid"]
+
+            await collection.data.update(uuid=uuid, properties=data)
+            return JSONResponse(
+                content={"error": ""},
+                status_code=200,
+            )
+    except Exception as e:
+        logger.exception(f"Error in /update_object API")
+        return JSONResponse(
+            content={"error": str(e)},
+            status_code=500,
+        )
+
+
+@router.delete("/{user_id}/delete_object/{collection_name}/{uuid}")
+async def delete_object(
+    user_id: str,
+    collection_name: str,
+    uuid: str,
+    user_manager: UserManager = Depends(get_user_manager),
+):
+    """
+    Delete an object from a collection.
+    """
+    logger.debug(f"/delete_object API request received")
+    try:
+        user_local = await user_manager.get_user_local(user_id)
+        client_manager = user_local["client_manager"]
+        async with client_manager.connect_to_async_client() as client:
+            collection = client.collections.get(collection_name)
+            await collection.data.delete_by_id(uuid)
+            return JSONResponse(
+                content={"error": ""},
+                status_code=200,
+            )
+    except Exception as e:
+        logger.exception(f"Error in /delete_object API")
+        return JSONResponse(
+            content={"error": str(e)},
+            status_code=500,
+        )

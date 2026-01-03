@@ -3,12 +3,13 @@
 import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 
-import { IoText } from "react-icons/io5";
+import { IoText, IoPencil, IoTrash } from "react-icons/io5";
 import { PiListNumbers } from "react-icons/pi";
 import { PiIdentificationBadge } from "react-icons/pi";
 import { TbToggleLeft } from "react-icons/tb";
 import DataCell from "./components/DataCell";
 import { FaBoxArchive } from "react-icons/fa6";
+import { Button } from "@/components/ui/button";
 
 interface DataTableProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -21,6 +22,9 @@ interface DataTableProps {
   stickyHeaders?: boolean;
   maxHeight?: string;
   loadingData?: boolean;
+  isAdmin?: boolean;
+  onEdit?: (item: any) => void;
+  onDelete?: (item: any) => void;
 }
 
 const DataTable: React.FC<DataTableProps> = ({
@@ -32,6 +36,9 @@ const DataTable: React.FC<DataTableProps> = ({
   stickyHeaders = false,
   maxHeight,
   loadingData,
+  isAdmin,
+  onEdit,
+  onDelete,
 }) => {
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
 
@@ -82,6 +89,7 @@ const DataTable: React.FC<DataTableProps> = ({
             >
               <tr className="text-left text-secondary text-sm">
                 <th className="p-2">#</th>
+                {isAdmin && <th className="p-2">Actions</th>}
                 {Object.keys(header).map((key) => (
                   <th
                     key={key}
@@ -121,6 +129,32 @@ const DataTable: React.FC<DataTableProps> = ({
                   <td className="px-2 py-2 text-sm text-secondary">
                     {rowIndex + 1}
                   </td>
+                  {isAdmin && (
+                    <td className="px-2 py-2 text-sm flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-secondary hover:text-primary"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEdit && onEdit(item);
+                        }}
+                      >
+                        <IoPencil className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-secondary hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDelete && onDelete(item);
+                        }}
+                      >
+                        <IoTrash className="w-4 h-4" />
+                      </Button>
+                    </td>
+                  )}
                   {Object.keys(header).map((key, colIndex) => {
                     const value = item[key];
                     const isBoolean = typeof value === "boolean";
