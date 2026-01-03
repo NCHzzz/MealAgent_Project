@@ -564,21 +564,29 @@ def _select_carb_with_validation(
             # Continue to select, but will reject white rice later
     
     # Prefer a plain white rice candidate up-front if available in search results
+    # CRITICAL: Always allow default white rice even if it's in recent_recipe_ids_set or used_today_ids_set
     for recipe in recipes:
         if (
             recipe not in excluded
-            and str(recipe.get("food_id", "")) not in recent_recipe_ids_set
-            and str(recipe.get("food_id", "")) not in used_today_ids_set
             and _is_rice_dish(recipe)
             and not _is_main_dish(recipe)
             and not _is_combined_dish(recipe)
         ):
+            rid = str(recipe.get("food_id", ""))
             name_lower = str(recipe.get("dish_name", "")).lower()
-            if "cơm trắng" in name_lower or "com trang" in name_lower or "white rice" in name_lower:
-                macros = recipe.get("macros_per_serving", {}) or {}
-                kcal = macros.get("kcal", 0)
-                if 80 <= kcal <= meal_max_kcal:
-                    return recipe, False, False
+            is_white_rice = (
+                rid == "default_white_rice" or
+                any(term in name_lower for term in ["cơm trắng", "com trang", "white rice"])
+            )
+            
+            if is_white_rice:
+                # Always allow white rice, even if it was used recently (it's a daily staple)
+                # Only check if it's already used in THIS plan (used_today_ids_set)
+                if rid not in used_today_ids_set:
+                    macros = recipe.get("macros_per_serving", {}) or {}
+                    kcal = macros.get("kcal", 0)
+                    if 80 <= kcal <= meal_max_kcal:
+                        return recipe, False, False
 
     # Try ALL LLM suggestions first (not just the first one) to avoid fallback
     carb_recipe = None
@@ -1918,6 +1926,15 @@ async def plan_day_e2e_tool(
                     rid = str(r.get("food_id", ""))
                     rname = str(r.get("dish_name", "")).lower().strip()
                     
+                    # CRITICAL: Never block default white rice - it's a daily staple
+                    is_white_rice = (
+                        rid == "default_white_rice" or
+                        any(term in rname for term in ["cơm trắng", "com trang", "white rice"])
+                    )
+                    if is_white_rice:
+                        filtered.append(r)
+                        continue
+                    
                     # Block by exact ID match
                     if rid in id_block:
                         continue
@@ -1929,11 +1946,13 @@ async def plan_day_e2e_tool(
                     # CRITICAL: Block by fuzzy name match (similar dishes)
                     # This prevents selecting "Thịt Kho Mắm Ruốc" when "Thịt Heo Kho Mắm Ruốc" was already used
                     # IMPROVED: Lower threshold to 0.6 (60%) to catch more similar dishes like "bún cá" vs "bún cá rô"
+                    # BUT: Never block white rice via fuzzy matching (it's a daily staple)
                     is_similar = False
-                    for blocked_name in name_block:
-                        if _dish_name_similar(rname, blocked_name, threshold=0.6):
-                            is_similar = True
-                            break
+                    if not is_white_rice:  # Skip fuzzy matching for white rice
+                        for blocked_name in name_block:
+                            if _dish_name_similar(rname, blocked_name, threshold=0.6):
+                                is_similar = True
+                                break
                     
                     if is_similar:
                         continue
@@ -1951,6 +1970,15 @@ async def plan_day_e2e_tool(
                 for r in pool:
                     rid = str(r.get("food_id", ""))
                     rname = str(r.get("dish_name", "")).lower().strip()
+                    
+                    # CRITICAL: Never block default white rice - it's a daily staple
+                    is_white_rice_relaxed = (
+                        rid == "default_white_rice" or
+                        any(term in rname for term in ["cơm trắng", "com trang", "white rice"])
+                    )
+                    if is_white_rice_relaxed:
+                        filtered.append(r)
+                        continue
                     
                     # Always block by exact ID match
                     if rid in id_block:
@@ -1985,6 +2013,22 @@ async def plan_day_e2e_tool(
             recipes = _apply_exclusion(recipes, recent_recipe_ids, recent_recipe_names)
             after = len(recipes)
             dropped = before - after
+            
+            # CRITICAL: Ensure default white rice is always available as a fallback option
+            # Check if white rice exists in filtered recipes
+            has_white_rice = False
+            for r in recipes:
+                rid = str(r.get("food_id", ""))
+                rname = str(r.get("dish_name", "")).lower().strip()
+                if rid == "default_white_rice" or any(term in rname for term in ["cơm trắng", "com trang", "white rice"]):
+                    has_white_rice = True
+                    break
+            
+            # If no white rice found, add default white rice to ensure it's always available
+            if not has_white_rice:
+                default_rice = _create_default_white_rice_recipe()
+                recipes.append(default_rice)
+                logging.debug("plan_day_e2e_tool: Added default white rice to recipes pool (not found in search results)")
             
             # Log detailed info about what was blocked
             if dropped > 0:
