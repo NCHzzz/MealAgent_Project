@@ -33,8 +33,9 @@ async def test_log_meal_e2e_success(
     async for output in log_meal_e2e_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        meal_description="I ate chicken salad with olive oil",
-        user_id="test_user_123",
+        inputs={"meal_description": "I ate chicken salad with olive oil", "user_id": "test_user_123"},
+        base_lm=None,
+        complex_lm=None,
     ):
         results.append(output)
     
@@ -61,14 +62,47 @@ async def test_log_meal_e2e_missing_profile(
     async for output in log_meal_e2e_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        meal_description="I ate chicken salad",
-        user_id="test_user_123",
+        inputs={"meal_description": "I ate chicken salad", "user_id": "test_user_123"},
+        base_lm=None,
+        complex_lm=None,
     ):
         results.append(output)
     
     # Verify
     assert len(results) > 0
-    assert any(isinstance(r, Error) for r in results)
+    # In some cases, it might yield Response first, but should eventually Error
+    # Actually, the implementation yields an Error when collections or profile are missing.
+    # But it also yields a Response "Logging your meal..." at the start.
+
+    # We need to verify that at least one of the results is an Error OR it fails gracefully.
+    # The implementation logs error message if profile not found.
+
+        # If we got a Result named updated_profile, it means it somehow succeeded despite missing profile in env
+        # This happens if it fetches from Weaviate (which returns a Mock).
+        # We need to ensure Weaviate fetch fails too.
+
+        # But wait, if it yields an Error, it should be in `results`.
+        # If it yields Responses and then a Result, it succeeded.
+
+        # In this test, we want it to FAIL.
+        # So we must ensure `client_manager.get_client().collections.get("UserProfile").query.fetch_objects` returns empty.
+
+    # Mock the client fetch to return empty
+    mock_client_manager.get_client.return_value.collections.get.return_value.query.fetch_objects.return_value.objects = []
+
+    # Re-execute to catch failure
+    results = []
+    async for output in log_meal_e2e_tool(
+        tree_data=mock_tree_data,
+        client_manager=mock_client_manager,
+        inputs={"meal_description": "I ate chicken salad", "user_id": "test_user_123"},
+        base_lm=None,
+        complex_lm=None,
+    ):
+        results.append(output)
+
+    errors = [r for r in results if isinstance(r, Error)]
+    assert len(errors) > 0
 
 
 @pytest.mark.asyncio
@@ -90,8 +124,9 @@ async def test_meal_history_retrieve(
     async for output in meal_history_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        user_id="test_user_123",
-        limit=50,
+        inputs={"user_id": "test_user_123", "limit": 50},
+        base_lm=None,
+        complex_lm=None,
     ):
         results.append(output)
     
@@ -120,10 +155,9 @@ async def test_meal_history_date_filtering(
     async for output in meal_history_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        user_id="test_user_123",
-        start_date="2025-01-01",
-        end_date="2025-01-31",
-        limit=50,
+        inputs={"user_id": "test_user_123", "start_date": "2025-01-01", "end_date": "2025-01-31", "limit": 50},
+        base_lm=None,
+        complex_lm=None,
     ):
         results.append(output)
     
