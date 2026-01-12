@@ -337,7 +337,6 @@ async def log_meal_e2e_tool(
     if plan_id and not user_accepted and not meal_description:
         # This is likely an automatic call after plan creation (should be prevented)
         # Log strong warning but still allow (in case it's from accept_plan_tool or user acceptance via chat)
-        import logging
         logging.warning(
             f"log_meal_e2e_tool: POTENTIAL AUTOMATIC CALL DETECTED - plan_id={plan_id} but user_accepted=False and meal_description empty. "
             f"This tool should ONLY be called when: "
