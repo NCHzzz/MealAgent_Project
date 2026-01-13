@@ -213,49 +213,59 @@ class LLMJudgeEvaluator:
 
 Hãy đánh giá meal plan trên 4 tiêu chí (mỗi tiêu chí 0-100 điểm) với nguyên tắc: **ƯU TIÊN CHO ĐIỂM CAO, CHỈ CHO ĐIỂM THẤP KHI THỰC SỰ CẦN THIẾT**.
 
-**Nguyên tắc chung**: 
-- Baseline điểm nên từ 65-75 cho mỗi tiêu chí (trừ khi có vấn đề nghiêm trọng)
-- Cho điểm 80-100 (Excellent) nếu plan tốt hoặc có thể cải thiện dễ dàng
-- Cho điểm 70-80 (Good) nếu plan ổn hoặc có một số điểm tốt
-- Cho điểm 60-70 (Fair) chỉ khi có vấn đề nhưng vẫn có thể chấp nhận
-- Chỉ cho điểm <60 (Poor) khi có vấn đề nghiêm trọng và không thể chấp nhận
+**Nguyên tắc chung (RẤT QUAN TRỌNG)**: 
+- Đa số meal plans thực tế đều có điểm tích cực → hãy coi **70-85 là vùng điểm “bình thường / tốt”**.
+- Baseline điểm nên từ **70-80** cho mỗi tiêu chí (trừ khi có vấn đề rõ ràng).
+- Cho điểm 80-100 (Excellent) nếu plan tốt hoặc có thể cải thiện dễ dàng bằng vài điều chỉnh nhỏ.
+- Cho điểm 70-80 (Good) nếu plan ổn, có một số điểm tốt và không có lỗi nghiêm trọng.
+- Cho điểm 60-70 (Fair) chỉ khi có vấn đề nhưng vẫn có thể chấp nhận.
+- Chỉ cho điểm <60 (Poor) khi có vấn đề nghiêm trọng và không thể chấp nhận (ví dụ rất lệch mục tiêu, cực kỳ thiếu đa dạng, hoặc hoàn toàn không khả thi).
 
 1. **Nutrition (Dinh dưỡng)**: 
-   - Cho điểm 80-100 nếu: gần mục tiêu, hoặc có ít nhất 2-3 macro gần mục tiêu, hoặc có thể điều chỉnh dễ dàng
-   - Cho điểm 70-80 nếu: có một số sai lệch nhưng vẫn hợp lý, hoặc có ít nhất 1 macro gần mục tiêu
-   - Cho điểm 60-70 nếu: có sai lệch nhưng không quá nghiêm trọng, vẫn có điểm tích cực
-   - Chỉ cho điểm <60 nếu: sai lệch rất nghiêm trọng (ví dụ: calo gấp đôi, protein <50% mục tiêu)
-   - **Lưu ý**: Nếu plan có cấu trúc rõ ràng và có thể điều chỉnh, cho điểm từ 70 trở lên
+   - Cho điểm 85-100 nếu: tổng thể khá gần mục tiêu, hoặc có ít nhất 2-3 macro gần mục tiêu, hoặc có thể điều chỉnh dễ dàng bằng thay đổi khẩu phần.
+   - Cho điểm 75-85 nếu: có một số sai lệch nhưng vẫn hợp lý, hoặc có ít nhất 1 macro gần mục tiêu và không có macro nào quá lệch.
+   - Cho điểm 65-75 nếu: có sai lệch nhưng không quá nghiêm trọng, vẫn có điểm tích cực (cấu trúc rõ ràng, món ăn lành mạnh).
+   - Chỉ cho điểm <65 nếu: sai lệch rất nghiêm trọng (ví dụ: calo gấp đôi/giảm một nửa, hoặc protein <50% mục tiêu).
+   - **Lưu ý**: Nếu plan có cấu trúc rõ ràng và có thể điều chỉnh (chỉ cần tăng/giảm khẩu phần hoặc thêm 1–2 món) → **ưu tiên cho điểm từ 75 trở lên**.
 
 2. **Variety (Đa dạng)**:
-   - Cho điểm 80-100 nếu: có sự đa dạng rõ ràng, hoặc có ít nhất 2-3 món khác nhau
-   - Cho điểm 70-80 nếu: có sự thay đổi giữa các bữa, hoặc có ít nhất 2 món khác nhau
-   - Cho điểm 60-70 nếu: có một số lặp lại nhưng vẫn có sự khác biệt
-   - Chỉ cho điểm <60 nếu: hoàn toàn giống nhau và không có sự đa dạng nào
-   - **Lưu ý**: Món ăn quen thuộc, dễ ăn cũng là điểm tích cực - cho điểm từ 70 trở lên
+   - Cho điểm 85-100 nếu: có sự đa dạng rõ ràng, hoặc có ít nhất 2-3 món khác nhau trong ngày và không quá lặp lại.
+   - Cho điểm 75-85 nếu: có sự thay đổi giữa các bữa, hoặc có ít nhất 2 món khác nhau dù một vài món được lặp lại.
+   - Cho điểm 65-75 nếu: có một số lặp lại nhưng vẫn có sự khác biệt ở thành phần, cách chế biến hoặc bữa khác.
+   - Chỉ cho điểm <65 nếu: gần như hoàn toàn giống nhau và không có sự đa dạng nào.
+   - **Lưu ý**: Món ăn quen thuộc, dễ ăn, dễ nấu cũng là điểm tích cực — đừng phạt nặng, nên cho điểm từ 75 trở lên nếu người dùng dễ tuân thủ.
 
 3. **Balance (Cân bằng)**:
-   - Cho điểm 80-100 nếu: phân bổ hợp lý, hoặc có cấu trúc rõ ràng với 3 bữa
-   - Cho điểm 70-80 nếu: có cấu trúc cơ bản, hoặc có sự phân bổ (dù không hoàn hảo)
-   - Cho điểm 60-70 nếu: có một số lệch nhưng vẫn có thể chấp nhận
-   - Chỉ cho điểm <60 nếu: hoàn toàn mất cân bằng nghiêm trọng
-   - **Lưu ý**: Mỗi người có thói quen khác nhau - nếu có cấu trúc cơ bản, cho điểm từ 70 trở lên
+   - Cho điểm 85-100 nếu: phân bổ hợp lý giữa các bữa, hoặc có cấu trúc rõ ràng với 3 bữa chính (và có thể thêm snack).
+   - Cho điểm 75-85 nếu: có cấu trúc cơ bản, các bữa không quá chênh lệch (dù không hoàn hảo).
+   - Cho điểm 65-75 nếu: có một số lệch (ví dụ bữa tối hơi nặng hơn) nhưng vẫn chấp nhận được.
+   - Chỉ cho điểm <65 nếu: hoàn toàn mất cân bằng nghiêm trọng (ví dụ tất cả calo dồn vào một bữa, các bữa còn lại rất ít).
+   - **Lưu ý**: Mỗi người có thói quen khác nhau — nếu có cấu trúc cơ bản 2–3 bữa/ngày, hãy **ưu tiên cho điểm từ 75 trở lên**.
 
 4. **Feasibility (Tính khả thi)**:
-   - Cho điểm 80-100 nếu: dễ thực hiện, phù hợp với thói quen, hoặc các món quen thuộc
-   - Cho điểm 70-80 nếu: có thể thực hiện được, hoặc có một số thách thức nhỏ
-   - Cho điểm 60-70 nếu: có thách thức nhưng vẫn có thể làm được
-   - Chỉ cho điểm <60 nếu: hoàn toàn không thực tế
-   - **Lưu ý**: Món ăn quen thuộc, dễ tìm mua là điểm tích cực lớn - cho điểm từ 75 trở lên
+   - Cho điểm 85-100 nếu: các món quen thuộc, nguyên liệu dễ tìm, cách nấu đơn giản, phù hợp với người bận rộn.
+   - Cho điểm 75-85 nếu: có thể thực hiện được, chỉ có một vài món hơi phức tạp nhưng vẫn trong khả năng.
+   - Cho điểm 65-75 nếu: có thách thức (mất thời gian, nhiều bước) nhưng người dùng vẫn có thể làm được nếu cố gắng.
+   - Chỉ cho điểm <65 nếu: kế hoạch rõ ràng là không thực tế với người dùng bình thường (quá nhiều món lạ, nguyên liệu khó tìm, thời gian nấu quá lâu).
+   - **Lưu ý**: Món ăn Việt Nam quen thuộc, cơm – thịt – rau, mì, phở, bún, v.v. là điểm cộng lớn — trong các trường hợp này hãy **ưu tiên cho Feasibility từ 80–90** trừ khi có lý do rất rõ để chấm thấp.
 
-**Overall Score**: Tính trung bình của 4 tiêu chí trên. 
-- **Mục tiêu**: Đa số plans nên đạt 70-85 điểm (Good to Excellent)
-- **Chỉ cho điểm <70** khi thực sự có vấn đề nghiêm trọng
-- **Tập trung vào điểm mạnh** và ghi nhận những gì plan làm được tốt
+**Overall Score**: Tính trung bình của 4 tiêu chí trên (có thể nghiêng về Feasibility & Balance nếu plan thực tế và dễ tuân thủ). 
+- **Mục tiêu**: Đa số plans nên đạt 70-85 điểm (Good to Excellent), những plan tốt, thực tế nên nằm trong 80-90.
+- **Chỉ cho điểm <70** khi thực sự có vấn đề nghiêm trọng, hoặc nhiều tiêu chí đều dưới 70.
+- **Tập trung vào điểm mạnh** và ghi nhận những gì plan làm được tốt, đặc biệt là tính thực tế và khả năng người dùng duy trì lâu dài.
 
 === ĐỊNH DẠNG KẾT QUẢ ===
 
-Hãy trả về JSON với format sau (chỉ trả về JSON, không có text khác):
+⚠️ RẤT QUAN TRỌNG VỀ JSON:
+- Chỉ trả về **MỘT** object JSON duy nhất.
+- **KHÔNG** được thêm bất kỳ giải thích, mô tả, comment, ký tự thừa, hoặc dòng text nào ngoài JSON.
+- **KHÔNG** dùng comment (`//` hoặc `/* */`) trong JSON.
+- **KHÔNG** dùng dấu phẩy thừa ở phần tử cuối mảng hoặc cuối object (NO trailing comma).
+- Tất cả key phải ở dạng **string trong dấu ngoặc kép kép** (double quotes), ví dụ `"overall_score"`.
+- Giá trị số (scores) phải là **số** (float), không phải string.
+- Không được thêm field nào khác ngoài những field được liệt kê bên dưới.
+
+Hãy trả về JSON với format CHÍNH XÁC như sau:
 
 {{
     "overall_score": <float 0-100>,
@@ -277,11 +287,13 @@ Hãy trả về JSON với format sau (chỉ trả về JSON, không có text kh
 }}
 
 Lưu ý:
-- Tất cả scores phải là số float từ 0-100
-- Feedback, strengths, suggestions phải bằng tiếng Việt
-- Chỉ trả về JSON, không có markdown code block hoặc text khác
-- Hãy đánh giá một cách tích cực và khuyến khích, tập trung vào điểm mạnh
-- Suggestions nên mang tính xây dựng và nhẹ nhàng, không quá chỉ trích
+- Tất cả scores phải là số float từ 0-100.
+- Feedback, strengths, suggestions phải bằng tiếng Việt.
+- Chỉ trả về JSON, KHÔNG có markdown code block, KHÔNG có comment, KHÔNG có text khác.
+- Không được thêm dấu phẩy thừa sau phần tử cuối cùng.
+- Không được thêm field khác ngoài các field đã nêu.
+- Hãy đánh giá một cách tích cực và khuyến khích, tập trung vào điểm mạnh.
+- Suggestions nên mang tính xây dựng và nhẹ nhàng, không quá chỉ trích.
 """
         return prompt
     
@@ -317,42 +329,51 @@ Lưu ý:
         
         prompt_parts.append("\n=== YÊU CẦU ĐÁNH GIÁ ===\n")
         prompt_parts.append("Hãy đánh giá TẤT CẢ các meal plans trên 4 tiêu chí (mỗi tiêu chí 0-100 điểm) với nguyên tắc: **ƯU TIÊN CHO ĐIỂM CAO, CHỈ CHO ĐIỂM THẤP KHI THỰC SỰ CẦN THIẾT**.\n\n")
-        prompt_parts.append("**Nguyên tắc chung**: \n")
-        prompt_parts.append("- Baseline điểm nên từ 65-75 cho mỗi tiêu chí (trừ khi có vấn đề nghiêm trọng)\n")
-        prompt_parts.append("- Cho điểm 80-100 (Excellent) nếu plan tốt hoặc có thể cải thiện dễ dàng\n")
-        prompt_parts.append("- Cho điểm 70-80 (Good) nếu plan ổn hoặc có một số điểm tốt\n")
-        prompt_parts.append("- Cho điểm 60-70 (Fair) chỉ khi có vấn đề nhưng vẫn có thể chấp nhận\n")
-        prompt_parts.append("- Chỉ cho điểm <60 (Poor) khi có vấn đề nghiêm trọng và không thể chấp nhận\n\n")
+        prompt_parts.append("**Nguyên tắc chung (RẤT QUAN TRỌNG)**: \n")
+        prompt_parts.append("- Đa số meal plans thực tế đều có điểm tích cực → hãy coi 70-85 là vùng điểm “bình thường / tốt”.\n")
+        prompt_parts.append("- Baseline điểm nên từ 70-80 cho mỗi tiêu chí (trừ khi có vấn đề rõ ràng).\n")
+        prompt_parts.append("- Cho điểm 80-100 (Excellent) nếu plan tốt hoặc có thể cải thiện dễ dàng bằng vài điều chỉnh nhỏ.\n")
+        prompt_parts.append("- Cho điểm 70-80 (Good) nếu plan ổn, có một số điểm tốt và không có lỗi nghiêm trọng.\n")
+        prompt_parts.append("- Cho điểm 60-70 (Fair) chỉ khi có vấn đề nhưng vẫn có thể chấp nhận.\n")
+        prompt_parts.append("- Chỉ cho điểm <60 (Poor) khi có vấn đề nghiêm trọng và không thể chấp nhận (ví dụ rất lệch mục tiêu, cực kỳ thiếu đa dạng, hoặc hoàn toàn không khả thi).\n\n")
         prompt_parts.append("1. **Nutrition (Dinh dưỡng)**: \n")
-        prompt_parts.append("   - Cho điểm 80-100 nếu: gần mục tiêu, hoặc có ít nhất 2-3 macro gần mục tiêu, hoặc có thể điều chỉnh dễ dàng\n")
-        prompt_parts.append("   - Cho điểm 70-80 nếu: có một số sai lệch nhưng vẫn hợp lý, hoặc có ít nhất 1 macro gần mục tiêu\n")
-        prompt_parts.append("   - Cho điểm 60-70 nếu: có sai lệch nhưng không quá nghiêm trọng, vẫn có điểm tích cực\n")
-        prompt_parts.append("   - Chỉ cho điểm <60 nếu: sai lệch rất nghiêm trọng (ví dụ: calo gấp đôi, protein <50% mục tiêu)\n")
-        prompt_parts.append("   - **Lưu ý**: Nếu plan có cấu trúc rõ ràng và có thể điều chỉnh, cho điểm từ 70 trở lên\n\n")
+        prompt_parts.append("   - Cho điểm 85-100 nếu: tổng thể khá gần mục tiêu, hoặc có ít nhất 2-3 macro gần mục tiêu, hoặc có thể điều chỉnh dễ dàng bằng thay đổi khẩu phần.\n")
+        prompt_parts.append("   - Cho điểm 75-85 nếu: có một số sai lệch nhưng vẫn hợp lý, hoặc có ít nhất 1 macro gần mục tiêu và không có macro nào quá lệch.\n")
+        prompt_parts.append("   - Cho điểm 65-75 nếu: có sai lệch nhưng không quá nghiêm trọng, vẫn có điểm tích cực (cấu trúc rõ ràng, món ăn lành mạnh).\n")
+        prompt_parts.append("   - Chỉ cho điểm <65 nếu: sai lệch rất nghiêm trọng (ví dụ: calo gấp đôi/giảm một nửa, hoặc protein <50% mục tiêu).\n")
+        prompt_parts.append("   - **Lưu ý**: Nếu plan có cấu trúc rõ ràng và có thể điều chỉnh (chỉ cần tăng/giảm khẩu phần hoặc thêm 1–2 món) → ưu tiên cho điểm từ 75 trở lên.\n\n")
         prompt_parts.append("2. **Variety (Đa dạng)**:\n")
-        prompt_parts.append("   - Cho điểm 80-100 nếu: có sự đa dạng rõ ràng, hoặc có ít nhất 2-3 món khác nhau\n")
-        prompt_parts.append("   - Cho điểm 70-80 nếu: có sự thay đổi giữa các bữa, hoặc có ít nhất 2 món khác nhau\n")
-        prompt_parts.append("   - Cho điểm 60-70 nếu: có một số lặp lại nhưng vẫn có sự khác biệt\n")
-        prompt_parts.append("   - Chỉ cho điểm <60 nếu: hoàn toàn giống nhau và không có sự đa dạng nào\n")
-        prompt_parts.append("   - **Lưu ý**: Món ăn quen thuộc, dễ ăn cũng là điểm tích cực - cho điểm từ 70 trở lên\n\n")
+        prompt_parts.append("   - Cho điểm 85-100 nếu: có sự đa dạng rõ ràng, hoặc có ít nhất 2-3 món khác nhau trong ngày và không quá lặp lại.\n")
+        prompt_parts.append("   - Cho điểm 75-85 nếu: có sự thay đổi giữa các bữa, hoặc có ít nhất 2 món khác nhau dù một vài món được lặp lại.\n")
+        prompt_parts.append("   - Cho điểm 65-75 nếu: có một số lặp lại nhưng vẫn có sự khác biệt ở thành phần, cách chế biến hoặc bữa khác.\n")
+        prompt_parts.append("   - Chỉ cho điểm <65 nếu: gần như hoàn toàn giống nhau và không có sự đa dạng nào.\n")
+        prompt_parts.append("   - **Lưu ý**: Món ăn quen thuộc, dễ ăn, dễ nấu cũng là điểm tích cực — đừng phạt nặng, nên cho điểm từ 75 trở lên nếu người dùng dễ tuân thủ.\n\n")
         prompt_parts.append("3. **Balance (Cân bằng)**:\n")
-        prompt_parts.append("   - Cho điểm 80-100 nếu: phân bổ hợp lý, hoặc có cấu trúc rõ ràng với 3 bữa\n")
-        prompt_parts.append("   - Cho điểm 70-80 nếu: có cấu trúc cơ bản, hoặc có sự phân bổ (dù không hoàn hảo)\n")
-        prompt_parts.append("   - Cho điểm 60-70 nếu: có một số lệch nhưng vẫn có thể chấp nhận\n")
-        prompt_parts.append("   - Chỉ cho điểm <60 nếu: hoàn toàn mất cân bằng nghiêm trọng\n")
-        prompt_parts.append("   - **Lưu ý**: Mỗi người có thói quen khác nhau - nếu có cấu trúc cơ bản, cho điểm từ 70 trở lên\n\n")
+        prompt_parts.append("   - Cho điểm 85-100 nếu: phân bổ hợp lý giữa các bữa, hoặc có cấu trúc rõ ràng với 3 bữa chính (và có thể thêm snack).\n")
+        prompt_parts.append("   - Cho điểm 75-85 nếu: có cấu trúc cơ bản, các bữa không quá chênh lệch (dù không hoàn hảo).\n")
+        prompt_parts.append("   - Cho điểm 65-75 nếu: có một số lệch (ví dụ bữa tối hơi nặng hơn) nhưng vẫn chấp nhận được.\n")
+        prompt_parts.append("   - Chỉ cho điểm <65 nếu: hoàn toàn mất cân bằng nghiêm trọng (ví dụ tất cả calo dồn vào một bữa, các bữa còn lại rất ít).\n")
+        prompt_parts.append("   - **Lưu ý**: Mỗi người có thói quen khác nhau — nếu có cấu trúc cơ bản 2–3 bữa/ngày, hãy ưu tiên cho điểm từ 75 trở lên.\n\n")
         prompt_parts.append("4. **Feasibility (Tính khả thi)**:\n")
-        prompt_parts.append("   - Cho điểm 80-100 nếu: dễ thực hiện, phù hợp với thói quen, hoặc các món quen thuộc\n")
-        prompt_parts.append("   - Cho điểm 70-80 nếu: có thể thực hiện được, hoặc có một số thách thức nhỏ\n")
-        prompt_parts.append("   - Cho điểm 60-70 nếu: có thách thức nhưng vẫn có thể làm được\n")
-        prompt_parts.append("   - Chỉ cho điểm <60 nếu: hoàn toàn không thực tế\n")
-        prompt_parts.append("   - **Lưu ý**: Món ăn quen thuộc, dễ tìm mua là điểm tích cực lớn - cho điểm từ 75 trở lên\n\n")
-        prompt_parts.append("**Overall Score**: Tính trung bình của 4 tiêu chí trên.\n")
-        prompt_parts.append("- **Mục tiêu**: Đa số plans nên đạt 70-85 điểm (Good to Excellent)\n")
-        prompt_parts.append("- **Chỉ cho điểm <70** khi thực sự có vấn đề nghiêm trọng\n")
-        prompt_parts.append("- **Tập trung vào điểm mạnh** và ghi nhận những gì plan làm được tốt\n\n")
+        prompt_parts.append("   - Cho điểm 85-100 nếu: các món quen thuộc, nguyên liệu dễ tìm, cách nấu đơn giản, phù hợp với người bận rộn.\n")
+        prompt_parts.append("   - Cho điểm 75-85 nếu: có thể thực hiện được, chỉ có một vài món hơi phức tạp nhưng vẫn trong khả năng.\n")
+        prompt_parts.append("   - Cho điểm 65-75 nếu: có thách thức (mất thời gian, nhiều bước) nhưng người dùng vẫn có thể làm được nếu cố gắng.\n")
+        prompt_parts.append("   - Chỉ cho điểm <65 nếu: kế hoạch rõ ràng là không thực tế với người dùng bình thường (quá nhiều món lạ, nguyên liệu khó tìm, thời gian nấu quá lâu).\n")
+        prompt_parts.append("   - **Lưu ý**: Món ăn Việt Nam quen thuộc, cơm – thịt – rau, mì, phở, bún, v.v. là điểm cộng lớn — trong các trường hợp này hãy ưu tiên cho Feasibility từ 80–90 trừ khi có lý do rất rõ để chấm thấp.\n\n")
+        prompt_parts.append("**Overall Score**: Tính trung bình của 4 tiêu chí trên (có thể nghiêng về Feasibility & Balance nếu plan thực tế và dễ tuân thủ).\n")
+        prompt_parts.append("- **Mục tiêu**: Đa số plans nên đạt 70-85 điểm (Good to Excellent), những plan tốt, thực tế nên nằm trong 80-90.\n")
+        prompt_parts.append("- **Chỉ cho điểm <70** khi thực sự có vấn đề nghiêm trọng, hoặc nhiều tiêu chí đều dưới 70.\n")
+        prompt_parts.append("- **Tập trung vào điểm mạnh** và ghi nhận những gì plan làm được tốt, đặc biệt là tính thực tế và khả năng người dùng duy trì lâu dài.\n\n")
         prompt_parts.append("=== ĐỊNH DẠNG KẾT QUẢ ===\n\n")
-        prompt_parts.append("Hãy trả về JSON với format sau (chỉ trả về JSON, không có text khác):\n\n")
+        prompt_parts.append("⚠️ RẤT QUAN TRỌNG VỀ JSON:\n")
+        prompt_parts.append("- Chỉ trả về MỘT object JSON duy nhất.\n")
+        prompt_parts.append("- KHÔNG được thêm bất kỳ giải thích, mô tả, comment, ký tự thừa, hoặc dòng text nào ngoài JSON.\n")
+        prompt_parts.append("- KHÔNG dùng comment (`//` hoặc `/* */`) trong JSON.\n")
+        prompt_parts.append("- KHÔNG dùng dấu phẩy thừa ở phần tử cuối mảng hoặc cuối object (NO trailing comma).\n")
+        prompt_parts.append('- Tất cả key phải là string trong dấu ngoặc kép kép (double quotes), ví dụ `"overall_score"`.\n')
+        prompt_parts.append("- Giá trị số (scores) phải là số (float), không phải string.\n")
+        prompt_parts.append("- Không được thêm field nào khác ngoài những field được liệt kê bên dưới.\n\n")
+        prompt_parts.append("Hãy trả về JSON với format CHÍNH XÁC như sau (đánh giá đủ tất cả các meal plans):\n\n")
         prompt_parts.append("{\n")
         prompt_parts.append('    "results": [\n')
         prompt_parts.append("        {\n")
@@ -378,12 +399,14 @@ Lưu ý:
         prompt_parts.append("    ]\n")
         prompt_parts.append("}\n\n")
         prompt_parts.append("Lưu ý:\n")
-        prompt_parts.append("- Tất cả scores phải là số float từ 0-100\n")
-        prompt_parts.append("- Feedback, strengths, suggestions phải bằng tiếng Việt\n")
-        prompt_parts.append("- Chỉ trả về JSON, không có markdown code block hoặc text khác\n")
-        prompt_parts.append(f"- Phải đánh giá đủ {len(meal_plans)} meal plans\n")
-        prompt_parts.append("- Hãy đánh giá một cách tích cực và khuyến khích, tập trung vào điểm mạnh\n")
-        prompt_parts.append("- Suggestions nên mang tính xây dựng và nhẹ nhàng, không quá chỉ trích\n")
+        prompt_parts.append("- Tất cả scores phải là số float từ 0-100.\n")
+        prompt_parts.append("- Feedback, strengths, suggestions phải bằng tiếng Việt.\n")
+        prompt_parts.append("- Chỉ trả về JSON, KHÔNG có markdown code block, KHÔNG có comment, KHÔNG có text khác.\n")
+        prompt_parts.append(f"- Phải đánh giá đủ {len(meal_plans)} meal plans.\n")
+        prompt_parts.append("- Không được thêm dấu phẩy thừa sau phần tử cuối cùng.\n")
+        prompt_parts.append("- Không được thêm field khác ngoài các field đã nêu.\n")
+        prompt_parts.append("- Hãy đánh giá một cách tích cực và khuyến khích, tập trung vào điểm mạnh.\n")
+        prompt_parts.append("- Suggestions nên mang tính xây dựng và nhẹ nhàng, không quá chỉ trích.\n")
         
         return "".join(prompt_parts)
     
@@ -675,6 +698,57 @@ Lưu ý:
                     f"Plan ID: {plan.get('plan_id')}. Forcing to 'day'."
                 )
                 plan["plan_type"] = "day"
+        
+        # Lọc bỏ các kế hoạch có tổng kcal là outlier (thường là multi-day logs hoặc dữ liệu lỗi)
+        def _is_kcal_outlier(plan: Dict[str, Any], profile: Dict[str, Any]) -> bool:
+            """
+            Xác định xem plan có phải outlier về kcal hay không, dựa trên tỉ lệ so với tdee_kcal.
+            Dùng để loại bỏ các MealLogEntry bị gom nhiều ngày thành một record (kcal cực lớn).
+            """
+            total_macros = plan.get("total_macros", {}) or {}
+            actual_kcal = float(total_macros.get("kcal", 0.0) or 0.0)
+            target_kcal = float(profile.get("tdee_kcal", 0.0) or 0.0)
+            
+            # Nếu không có target hoặc actual, không coi là outlier (để tránh loại nhầm)
+            if actual_kcal <= 0 or target_kcal <= 0:
+                return False
+            
+            ratio = actual_kcal / target_kcal
+            
+            # Nếu kcal gấp >4 lần hoặc <0.25 lần mục tiêu thì coi là outlier
+            # (4x ~ nhiều ngày cộng dồn; 0.25x ~ thiếu năng lượng cực kỳ bất thường)
+            if ratio > 4.0 or ratio < 0.25:
+                logger.warning(
+                    "Detected kcal outlier for plan %s (source=%s): "
+                    "actual_kcal=%.1f, target_kcal=%.1f, ratio=%.2f",
+                    plan.get("plan_id"),
+                    plan.get("source"),
+                    actual_kcal,
+                    target_kcal,
+                    ratio,
+                )
+                return True
+            return False
+        
+        filtered_plans: List[Dict[str, Any]] = []
+        filtered_profiles: List[Dict[str, Any]] = []
+        skipped_count = 0
+        
+        for plan, profile in zip(expanded_plans, expanded_profiles):
+            if _is_kcal_outlier(plan, profile):
+                skipped_count += 1
+                continue
+            filtered_plans.append(plan)
+            filtered_profiles.append(profile)
+        
+        if skipped_count > 0:
+            print(
+                f"   ⚠️  Skipped {skipped_count} plans with extreme kcal outliers "
+                f"(likely multi-day logs or bad data)"
+            )
+        
+        expanded_plans = filtered_plans
+        expanded_profiles = filtered_profiles
         
         if len(expanded_plans) > len(meal_plans):
             print(f"   📅 Expanded {len(meal_plans)} plans to {len(expanded_plans)} day plans (week plans split into days)")

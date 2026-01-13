@@ -17,6 +17,20 @@ sys.path.insert(0, str(project_root))
 
 from evaluation.metrics.nutrition_error import NutritionErrorEvaluator
 from evaluation.metrics.llm_judge import LLMJudgeEvaluator
+from evaluation.scripts.generate_evaluation_summary import (
+    analyze_results,
+    generate_summary_report,
+)
+
+
+# Danh sách models mặc định cho LLM Judge (OpenRouter)
+# Lưu ý: loại bỏ "openai/gpt-oss-120b:free" do thường xuyên trả về JSON không hợp lệ
+LLM_JUDGE_MODELS: List[str] = [
+    "google/gemini-3-flash-preview",
+    "x-ai/grok-4.1-fast",
+    "xiaomi/mimo-v2-flash:free",
+    "openai/gpt-5-mini",
+]
 
 from evaluation.utils.weaviate_data_loader import (
     load_evaluation_data_from_weaviate,
@@ -616,7 +630,8 @@ async def run_llm_judge_test(
     user_ids: Optional[List[str]] = None,
     use_meal_logs: bool = False,
     date: Optional[datetime] = None,
-    load_all: bool = True
+    load_all: bool = True,
+    models: Optional[List[str]] = None,
 ):
     """
     Chạy test LLM-as-a-Judge.
@@ -637,12 +652,6 @@ async def run_llm_judge_test(
         print("❌ OPENROUTER_API_KEY not set. Set it with:")
         print("   export OPENROUTER_API_KEY='your-api-key'")
         print("   Get your API key from: https://openrouter.ai/keys")
-        return None
-    
-    try:
-        evaluator = LLMJudgeEvaluator(api_key=api_key)
-    except Exception as e:
-        print(f"❌ Failed to initialize LLM Judge: {e}")
         return None
     
     # Get test data - Mặc định dùng Weaviate và load tất cả
@@ -713,325 +722,541 @@ async def run_llm_judge_test(
         print(f"   - Accepted/Actual Plans (MealLogEntry): {meal_log_count}")
         print(f"     ✅ These are plans users accepted or actually consumed")
     
-    # Run evaluation
-    # Note: evaluate_batch sẽ expand week plans thành day plans
-    # Nên số lượng results có thể nhiều hơn số lượng meal_plans ban đầu
-    print(f"\n⏳ Evaluating {len(meal_plans)} meal plans...")
-    print("⏳ This may take a while (LLM API calls)...")
-    print("⏳ Week plans will be split into individual day plans for evaluation...")
-    
-    results = evaluator.evaluate_batch(meal_plans, user_profiles)
-    print(f"✅ Completed {len(results)} evaluations")
-    
-    # Get expanded plans để match với results
-    # evaluate_batch đã expand week plans, nhưng không trả về expanded_plans
-    # Nên ta cần expand lại để có đúng mapping
-    expanded_plans, expanded_profiles, original_indices = evaluator._expand_week_plans_to_days(
-        meal_plans, user_profiles
-    )
-    
-    # Sử dụng expanded_plans và expanded_profiles cho output
-    output_plans = expanded_plans
-    output_profiles = expanded_profiles
-    
-    # Aggregate results
-    aggregated = evaluator.aggregate_results(results)
-    
-    # Print results for report
-    print("\n" + "=" * 80)
-    print("EVALUATION RESULTS")
-    print("=" * 80)
-    
-    # Print detailed plan-by-plan results (limit to first 10 for readability)
-    print(f"\n📋 Detailed Plan Results (showing first 10):")
-    for i, result in enumerate(results[:10], 1):
-        plan = output_plans[i-1] if i-1 < len(output_plans) else {}
-        profile = output_profiles[i-1] if i-1 < len(output_profiles) else {}
-        source = plan.get("source", "MealPlan")
-        plan_type = plan.get("plan_type", "day")
-        user_id = profile.get("user_id", "unknown")
-        plan_id = plan.get("plan_id", "unknown")
-        
-        # Nếu là day plan từ week plan, hiển thị thông tin
-        original_plan_id = plan.get("original_plan_id")
-        if original_plan_id:
-            plan_id_display = f"{plan_id} (from week plan {original_plan_id})"
-        else:
-            plan_id_display = plan_id
-        
-        category = "✅ Accepted/Actual" if source == "MealLogEntry" else "⚠️  Suggested"
-        
-        print(f"\n   [{i:2d}] Plan ID: {plan_id_display}")
-        print(f"       {category} | User: {user_id[:36]}... | Type: {plan_type}")
-        print(f"       Overall: {result.overall_score:5.1f}/100 | Nutrition: {result.nutrition_score:5.1f} | Variety: {result.variety_score:5.1f} | Balance: {result.balance_score:5.1f} | Feasibility: {result.feasibility_score:5.1f}")
-    
-    if len(results) > 10:
-        print(f"\n   ... and {len(results) - 10} more plans")
-    
-    # Print aggregated statistics
-    print(f"\n📈 Aggregated Scores:")
-    print(f"   {'Metric':<20} {'Mean':>10} {'Median':>10} {'Std':>10} {'Min':>10} {'Max':>10}")
-    print(f"   {'-'*70}")
-    
-    for metric in ["overall_score", "nutrition_score", "variety_score", "balance_score", "feasibility_score"]:
-        stats = aggregated.get(metric, {})
-        print(f"   {metric:<20} {stats.get('mean', 0):>10.2f} {stats.get('median', 0):>10.2f} {stats.get('std', 0):>10.2f} {stats.get('min', 0):>10.2f} {stats.get('max', 0):>10.2f}")
-    
-    # Breakdown by source and plan type
-    print(f"\n📊 Breakdown by Plan Type:")
-    
-    suggested_results = []
-    accepted_results = []
-    day_plan_results = []
-    week_plan_results = []
-    
-    for i, result in enumerate(results):
-        plan = output_plans[i] if i < len(output_plans) else {}
-        if plan.get("source") == "MealLogEntry":
-            accepted_results.append(result)
-        else:
-            suggested_results.append(result)
-            plan_type = plan.get("plan_type", "day")
-            # Week plans đã được expand thành day plans, nên không còn week_plan_results
-            # Tất cả đều là day plans bây giờ
-            day_plan_results.append(result)
-    
-    if suggested_results:
-        suggested_agg = evaluator.aggregate_results(suggested_results)
-        print(f"   Suggested Plans (MealPlan) - {len(suggested_results)} plans:")
-        print(f"      Overall Score: {suggested_agg['overall_score']['mean']:.2f} ± {suggested_agg['overall_score']['std']:.2f}")
-        if day_plan_results:
-            day_agg = evaluator.aggregate_results(day_plan_results)
-            print(f"      - Day Plans ({len(day_plan_results)}): {day_agg['overall_score']['mean']:.2f}")
-            # Đếm số day plans từ week plans
-            week_day_count = sum(1 for i, p in enumerate(output_plans[:len(results)]) 
-                               if i < len(results) and p.get("original_plan_id"))
-            if week_day_count > 0:
-                print(f"        (including {week_day_count} days from week plans)")
-    
-    if accepted_results:
-        accepted_agg = evaluator.aggregate_results(accepted_results)
-        print(f"   Accepted/Actual Plans (MealLogEntry) - {len(accepted_results)} plans:")
-        print(f"      Overall Score: {accepted_agg['overall_score']['mean']:.2f} ± {accepted_agg['overall_score']['std']:.2f}")
-    
-    # Performance distribution
-    if results:
-        overall_scores = [r.overall_score for r in results]
-        excellent = sum(1 for s in overall_scores if s >= 80)
-        good = sum(1 for s in overall_scores if 70 <= s < 80)
-        fair = sum(1 for s in overall_scores if 60 <= s < 70)
-        poor = sum(1 for s in overall_scores if s < 60)
-        
-        print(f"\n📈 Performance Distribution:")
-        print(f"   Excellent (≥80):    {excellent:3d} ({excellent/len(results)*100:5.1f}%)")
-        print(f"   Good (70-80):       {good:3d} ({good/len(results)*100:5.1f}%)")
-        print(f"   Fair (60-70):       {fair:3d} ({fair/len(results)*100:5.1f}%)")
-        print(f"   Poor (<60):         {poor:3d} ({poor/len(results)*100:5.1f}%)")
-    
+    # Helper to sanitize model name for filenames
+    def _sanitize_model_name(name: str) -> str:
+        return (
+            name.replace("/", "_")
+            .replace(":", "_")
+            .replace(".", "_")
+            .replace("-", "_")
+        )
+
+    # Danh sách models để so sánh
+    if models is None or len(models) == 0:
+        models = LLM_JUDGE_MODELS
+
+    all_model_summaries = []
+
     # Save results with detailed metadata (similar to nutrition_error)
     def serialize_datetime(obj):
         """Convert datetime objects to ISO format strings for JSON serialization."""
         if isinstance(obj, datetime):
             return obj.isoformat()
         raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-    
-    output = {
-        "method": "llm_judge",
-        "metadata": {
-            "total_evaluations": len(results),
-            "meal_plan_count": meal_plan_count,
-            "meal_log_count": meal_log_count,
-            "user_profile_count": len(user_profiles),
-            "data_source": "Weaviate" if use_weaviate else "Mock",
-            "load_all": load_all if use_weaviate else False,
-            "date_filter": date.isoformat() if date else None,
-        },
-        "individual_results": [],
-        "aggregated": aggregated,
-    }
-    
-    # Add individual results with detailed metadata
-    # Sử dụng output_plans và output_profiles (đã được expand)
-    for i, result in enumerate(results):
-        result_dict = result.to_dict()
-        plan = output_plans[i] if i < len(output_plans) else {}
-        profile = output_profiles[i] if i < len(output_profiles) else {}
-        
-        # Convert datetime to string if present
-        plan_date = plan.get("start_date")
-        if plan_date and isinstance(plan_date, datetime):
-            plan_date = plan_date.isoformat()
-        elif plan_date and isinstance(plan_date, str):
-            pass
-        else:
-            plan_date = None
-        
-        # Extract meal plan details - phân biệt MealPlan vs MealLogEntry
-        source = plan.get("source", "MealPlan")
-        total_macros = plan.get("total_macros", {})
-        meal_list = []
-        
-        if source == "MealPlan":
-            # MealPlan: lấy từ meals structure (đã được reconstruct từ MealPlanItem)
-            meals = plan.get("meals", {})
-            
-            for meal_type, meal_data in meals.items():
-                meal_info = {
-                    "meal_type": meal_type,
-                    "main_dish": None,
-                    "servings": meal_data.get("servings", 1.0),
-                    "accompaniments": [],
-                    "macros": meal_data.get("macros", {})
-                }
-                
-                # Main dish
-                recipe = meal_data.get("recipe", {})
-                if recipe:
-                    meal_info["main_dish"] = {
-                        "dish_name": recipe.get("dish_name", "Unknown"),
-                        "food_id": recipe.get("food_id"),
+
+    for model_name in models:
+        print("\n" + "=" * 80)
+        print(f"Evaluating with model: {model_name}")
+        print("=" * 80)
+
+        try:
+            evaluator = LLMJudgeEvaluator(api_key=api_key, model_name=model_name)
+        except Exception as e:
+            print(f"❌ Failed to initialize LLM Judge for model {model_name}: {e}")
+            continue
+
+        # Run evaluation
+        # Note: evaluate_batch sẽ expand week plans thành day plans
+        # Nên số lượng results có thể nhiều hơn số lượng meal_plans ban đầu
+        print(f"\n⏳ Evaluating {len(meal_plans)} meal plans...")
+        print("⏳ This may take a while (LLM API calls)...")
+        print("⏳ Week plans will be split into individual day plans for evaluation...")
+
+        results = evaluator.evaluate_batch(meal_plans, user_profiles)
+        print(f"✅ Completed {len(results)} evaluations with model {model_name}")
+
+        # Get expanded plans để match với results
+        expanded_plans, expanded_profiles, original_indices = evaluator._expand_week_plans_to_days(
+            meal_plans, user_profiles
+        )
+
+        # Sử dụng expanded_plans và expanded_profiles cho output
+        output_plans = expanded_plans
+        output_profiles = expanded_profiles
+
+        # Aggregate results
+        aggregated = evaluator.aggregate_results(results)
+
+        # Print results for report (limit to first 10 for readability)
+        print("\n" + "=" * 80)
+        print(f"EVALUATION RESULTS - {model_name}")
+        print("=" * 80)
+
+        print(f"\n📋 Detailed Plan Results (showing first 10):")
+        for i, result in enumerate(results[:10], 1):
+            plan = output_plans[i - 1] if i - 1 < len(output_plans) else {}
+            profile = output_profiles[i - 1] if i - 1 < len(output_profiles) else {}
+            source = plan.get("source", "MealPlan")
+            plan_type = plan.get("plan_type", "day")
+            user_id = profile.get("user_id", "unknown")
+            plan_id = plan.get("plan_id", "unknown")
+
+            # Nếu là day plan từ week plan, hiển thị thông tin
+            original_plan_id = plan.get("original_plan_id")
+            if original_plan_id:
+                plan_id_display = f"{plan_id} (from week plan {original_plan_id})"
+            else:
+                plan_id_display = plan_id
+
+            category = "✅ Accepted/Actual" if source == "MealLogEntry" else "⚠️  Suggested"
+
+            print(f"\n   [{i:2d}] Plan ID: {plan_id_display}")
+            print(f"       {category} | User: {user_id[:36]}... | Type: {plan_type}")
+            print(
+                f"       Overall: {result.overall_score:5.1f}/100 | "
+                f"Nutrition: {result.nutrition_score:5.1f} | "
+                f"Variety: {result.variety_score:5.1f} | "
+                f"Balance: {result.balance_score:5.1f} | "
+                f"Feasibility: {result.feasibility_score:5.1f}"
+            )
+
+        if len(results) > 10:
+            print(f"\n   ... and {len(results) - 10} more plans")
+
+        # Print aggregated statistics
+        print(f"\n📈 Aggregated Scores for model {model_name}:")
+        print(f"   {'Metric':<20} {'Mean':>10} {'Median':>10} {'Std':>10} {'Min':>10} {'Max':>10}")
+        print(f"   {'-'*70}")
+
+        for metric in [
+            "overall_score",
+            "nutrition_score",
+            "variety_score",
+            "balance_score",
+            "feasibility_score",
+        ]:
+            stats = aggregated.get(metric, {})
+            print(
+                f"   {metric:<20} "
+                f"{stats.get('mean', 0):>10.2f} "
+                f"{stats.get('median', 0):>10.2f} "
+                f"{stats.get('std', 0):>10.2f} "
+                f"{stats.get('min', 0):>10.2f} "
+                f"{stats.get('max', 0):>10.2f}"
+            )
+
+        # Breakdown by source and plan type
+        print(f"\n📊 Breakdown by Plan Type for model {model_name}:")
+
+        suggested_results = []
+        accepted_results = []
+        day_plan_results = []
+
+        for i, result in enumerate(results):
+            plan = output_plans[i] if i < len(output_plans) else {}
+            if plan.get("source") == "MealLogEntry":
+                accepted_results.append(result)
+            else:
+                suggested_results.append(result)
+                plan_type = plan.get("plan_type", "day")
+                # Week plans đã được expand thành day plans, nên không còn week_plan_results
+                # Tất cả đều là day plans bây giờ
+                day_plan_results.append(result)
+
+        if suggested_results:
+            suggested_agg = evaluator.aggregate_results(suggested_results)
+            print(f"   Suggested Plans (MealPlan) - {len(suggested_results)} plans:")
+            print(
+                f"      Overall Score: "
+                f"{suggested_agg['overall_score']['mean']:.2f} "
+                f"± {suggested_agg['overall_score']['std']:.2f}"
+            )
+            if day_plan_results:
+                day_agg = evaluator.aggregate_results(day_plan_results)
+                print(
+                    f"      - Day Plans ({len(day_plan_results)}): "
+                    f"{day_agg['overall_score']['mean']:.2f}"
+                )
+                # Đếm số day plans từ week plans
+                week_day_count = sum(
+                    1
+                    for i, p in enumerate(output_plans[: len(results)])
+                    if i < len(results) and p.get("original_plan_id")
+                )
+                if week_day_count > 0:
+                    print(f"        (including {week_day_count} days from week plans)")
+
+        if accepted_results:
+            accepted_agg = evaluator.aggregate_results(accepted_results)
+            print(
+                f"   Accepted/Actual Plans (MealLogEntry) - "
+                f"{len(accepted_results)} plans:"
+            )
+            print(
+                f"      Overall Score: "
+                f"{accepted_agg['overall_score']['mean']:.2f} "
+                f"± {accepted_agg['overall_score']['std']:.2f}"
+            )
+
+        # Performance distribution
+        if results:
+            overall_scores = [r.overall_score for r in results]
+            excellent = sum(1 for s in overall_scores if s >= 80)
+            good = sum(1 for s in overall_scores if 70 <= s < 80)
+            fair = sum(1 for s in overall_scores if 60 <= s < 70)
+            poor = sum(1 for s in overall_scores if s < 60)
+
+            print(f"\n📈 Performance Distribution for model {model_name}:")
+            print(
+                f"   Excellent (≥80):    {excellent:3d} "
+                f"({excellent/len(results)*100:5.1f}%)"
+            )
+            print(
+                f"   Good (70-80):       {good:3d} "
+                f"({good/len(results)*100:5.1f}%)"
+            )
+            print(
+                f"   Fair (60-70):       {fair:3d} "
+                f"({fair/len(results)*100:5.1f}%)"
+            )
+            print(
+                f"   Poor (<60):         {poor:3d} "
+                f"({poor/len(results)*100:5.1f}%)"
+            )
+
+        # Build output structure
+        output = {
+            "method": "llm_judge",
+            "model_name": model_name,
+            "metadata": {
+                "total_evaluations": len(results),
+                "meal_plan_count": meal_plan_count,
+                "meal_log_count": meal_log_count,
+                "user_profile_count": len(user_profiles),
+                "data_source": "Weaviate" if use_weaviate else "Mock",
+                "load_all": load_all if use_weaviate else False,
+                "date_filter": date.isoformat() if date else None,
+            },
+            "individual_results": [],
+            "aggregated": aggregated,
+        }
+
+        # Add individual results with detailed metadata
+        # Sử dụng output_plans và output_profiles (đã được expand)
+        for i, result in enumerate(results):
+            result_dict = result.to_dict()
+            plan = output_plans[i] if i < len(output_plans) else {}
+            profile = output_profiles[i] if i < len(output_profiles) else {}
+
+            # Convert datetime to string if present
+            plan_date = plan.get("start_date")
+            if plan_date and isinstance(plan_date, datetime):
+                plan_date = plan_date.isoformat()
+            elif plan_date and isinstance(plan_date, str):
+                pass
+            else:
+                plan_date = None
+
+            # Extract meal plan details - phân biệt MealPlan vs MealLogEntry
+            source = plan.get("source", "MealPlan")
+            total_macros = plan.get("total_macros", {})
+            meal_list = []
+
+            if source == "MealPlan":
+                # MealPlan: lấy từ meals structure (đã được reconstruct từ MealPlanItem)
+                meals = plan.get("meals", {})
+
+                for meal_type, meal_data in meals.items():
+                    meal_info = {
+                        "meal_type": meal_type,
+                        "main_dish": None,
+                        "servings": meal_data.get("servings", 1.0),
+                        "accompaniments": [],
+                        "macros": meal_data.get("macros", {}),
                     }
-                
-                # Accompaniments
-                accompaniments = meal_data.get("accompaniments", [])
-                for acc in accompaniments:
-                    acc_recipe = acc.get("recipe", {})
-                    if acc_recipe:
-                        meal_info["accompaniments"].append({
-                            "dish_name": acc_recipe.get("dish_name", "Unknown"),
-                            "food_id": acc_recipe.get("food_id"),
-                            "servings": acc.get("servings", 1.0),
-                            "type": acc.get("type", "main"),
-                        })
-                
-                meal_list.append(meal_info)
-        
-        elif source == "MealLogEntry":
-            # MealLogEntry: dữ liệu đã có sẵn trong thuộc tính
-            # Có thể có meal_description, parsed_dish, ingredients
-            meal_description = plan.get("meal_description")
-            parsed_dish = plan.get("parsed_dish")
-            ingredients = plan.get("ingredients", [])
-            
-            # Nếu có parsed_dish, tạo meal info từ đó
-            if parsed_dish:
-                if isinstance(parsed_dish, str):
-                    try:
-                        parsed_dish = json.loads(parsed_dish)
-                    except:
-                        parsed_dish = {"dish_name": parsed_dish}
-                
-                meal_info = {
-                    "meal_type": "unknown",  # MealLogEntry không có meal_type rõ ràng
-                    "main_dish": {
-                        "dish_name": parsed_dish.get("dish_name", meal_description or "Unknown"),
-                        "food_id": parsed_dish.get("food_id"),
-                    },
-                    "servings": parsed_dish.get("servings", plan.get("portion_size", 1.0)),
-                    "accompaniments": [],
-                    "macros": {}  # Sẽ lấy từ calculated_macros tổng
-                }
-                meal_list.append(meal_info)
-            elif meal_description:
-                # Fallback: chỉ có description
-                meal_info = {
-                    "meal_type": "unknown",
-                    "main_dish": {
-                        "dish_name": meal_description,
-                        "food_id": None,
-                    },
-                    "servings": plan.get("portion_size", 1.0),
-                    "accompaniments": [],
-                    "macros": {}
-                }
-                meal_list.append(meal_info)
-            
-            # Nếu có ingredients, thêm vào accompaniments
-            if ingredients and meal_list:
-                if isinstance(ingredients, str):
-                    try:
-                        ingredients = json.loads(ingredients)
-                    except:
-                        ingredients = [ingredients] if ingredients else []
-                
-                for ing in ingredients:
-                    if isinstance(ing, dict):
-                        meal_list[0]["accompaniments"].append({
-                            "dish_name": ing.get("name", str(ing)),
-                            "food_id": ing.get("food_id"),
-                            "servings": ing.get("servings", 1.0),
-                            "type": "ingredient",
-                        })
-                    else:
-                        meal_list[0]["accompaniments"].append({
-                            "dish_name": str(ing),
+
+                    # Main dish
+                    recipe = meal_data.get("recipe", {})
+                    if recipe:
+                        meal_info["main_dish"] = {
+                            "dish_name": recipe.get("dish_name", "Unknown"),
+                            "food_id": recipe.get("food_id"),
+                        }
+
+                    # Accompaniments
+                    accompaniments = meal_data.get("accompaniments", [])
+                    for acc in accompaniments:
+                        acc_recipe = acc.get("recipe", {})
+                        if acc_recipe:
+                            meal_info["accompaniments"].append(
+                                {
+                                    "dish_name": acc_recipe.get(
+                                        "dish_name", "Unknown"
+                                    ),
+                                    "food_id": acc_recipe.get("food_id"),
+                                    "servings": acc.get("servings", 1.0),
+                                    "type": acc.get("type", "main"),
+                                }
+                            )
+
+                    meal_list.append(meal_info)
+
+            elif source == "MealLogEntry":
+                # MealLogEntry: dữ liệu đã có sẵn trong thuộc tính
+                # Có thể có meal_description, parsed_dish, ingredients
+                meal_description = plan.get("meal_description")
+                parsed_dish = plan.get("parsed_dish")
+                ingredients = plan.get("ingredients", [])
+
+                # Nếu có parsed_dish, tạo meal info từ đó
+                if parsed_dish:
+                    if isinstance(parsed_dish, str):
+                        try:
+                            parsed_dish = json.loads(parsed_dish)
+                        except:
+                            parsed_dish = {"dish_name": parsed_dish}
+
+                    meal_info = {
+                        "meal_type": "unknown",  # MealLogEntry không có meal_type rõ ràng
+                        "main_dish": {
+                            "dish_name": parsed_dish.get(
+                                "dish_name", meal_description or "Unknown"
+                            ),
+                            "food_id": parsed_dish.get("food_id"),
+                        },
+                        "servings": parsed_dish.get(
+                            "servings", plan.get("portion_size", 1.0)
+                        ),
+                        "accompaniments": [],
+                        "macros": {},  # Sẽ lấy từ calculated_macros tổng
+                    }
+                    meal_list.append(meal_info)
+                elif meal_description:
+                    # Fallback: chỉ có description
+                    meal_info = {
+                        "meal_type": "unknown",
+                        "main_dish": {
+                            "dish_name": meal_description,
                             "food_id": None,
-                            "servings": 1.0,
-                            "type": "ingredient",
-                        })
-        
-        # Extract user profile targets
-        target_macros = {
-            "kcal": profile.get("tdee_kcal", 0),
-            "protein_g": profile.get("protein_g", 0),
-            "carb_g": profile.get("carb_g", 0),
-            "fat_g": profile.get("fat_g", 0),
-        }
-        
-        # Calculate actual macros (normalize week plans to daily)
-        actual_macros = {
-            "kcal": total_macros.get("kcal", 0),
-            "protein_g": total_macros.get("protein_g", 0),
-            "carb_g": total_macros.get("carb_g", 0),
-            "fat_g": total_macros.get("fat_g", 0),
-        }
-        
-        plan_type = plan.get("plan_type", "day")
-        # Không normalize week plans - week plans đã được expand thành day plans trong evaluate_batch
-        # Nếu vẫn là week plan ở đây, giữ nguyên macros (có thể là tổng của cả tuần)
-        
-        # Calculate differences
-        macro_differences = {
-            "kcal": actual_macros["kcal"] - target_macros["kcal"],
-            "protein_g": actual_macros["protein_g"] - target_macros["protein_g"],
-            "carb_g": actual_macros["carb_g"] - target_macros["carb_g"],
-            "fat_g": actual_macros["fat_g"] - target_macros["fat_g"],
-        }
-        
-        result_dict["metadata"] = {
-            "user_id": profile.get("user_id"),
-            "plan_id": plan.get("plan_id"),
-            "source": plan.get("source", "MealPlan"),
-            "plan_type": plan_type,
-            "plan_date": plan_date,
-        }
-        
-        # Add detailed plan log
-        result_dict["plan_details"] = {
-            "target_macros": target_macros,
-            "actual_macros": actual_macros,
-            "macro_differences": macro_differences,
-            "meals": meal_list,
-            "user_profile": {
-                "age": profile.get("age"),
-                "gender": profile.get("gender"),
-                "activity_level": profile.get("activity_level"),
-                "dietary_preferences": profile.get("dietary_preferences", []),
-                "allergies": profile.get("allergies", []),
+                        },
+                        "servings": plan.get("portion_size", 1.0),
+                        "accompaniments": [],
+                        "macros": {},
+                    }
+                    meal_list.append(meal_info)
+
+                # Nếu có ingredients, thêm vào accompaniments
+                if ingredients and meal_list:
+                    if isinstance(ingredients, str):
+                        try:
+                            ingredients = json.loads(ingredients)
+                        except:
+                            ingredients = [ingredients] if ingredients else []
+
+                    for ing in ingredients:
+                        if isinstance(ing, dict):
+                            meal_list[0]["accompaniments"].append(
+                                {
+                                    "dish_name": ing.get("name", str(ing)),
+                                    "food_id": ing.get("food_id"),
+                                    "servings": ing.get("servings", 1.0),
+                                    "type": "ingredient",
+                                }
+                            )
+                        else:
+                            meal_list[0]["accompaniments"].append(
+                                {
+                                    "dish_name": str(ing),
+                                    "food_id": None,
+                                    "servings": 1.0,
+                                    "type": "ingredient",
+                                }
+                            )
+
+            # Extract user profile targets
+            target_macros = {
+                "kcal": profile.get("tdee_kcal", 0),
+                "protein_g": profile.get("protein_g", 0),
+                "carb_g": profile.get("carb_g", 0),
+                "fat_g": profile.get("fat_g", 0),
             }
-        }
-        
-        output["individual_results"].append(result_dict)
-    
-    output_file = Path("evaluation/results/llm_judge_test.json")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False, default=serialize_datetime)
-    
-    print(f"\n💾 Results saved to: {output_file}")
+
+            # Calculate actual macros (normalize week plans to daily)
+            actual_macros = {
+                "kcal": total_macros.get("kcal", 0),
+                "protein_g": total_macros.get("protein_g", 0),
+                "carb_g": total_macros.get("carb_g", 0),
+                "fat_g": total_macros.get("fat_g", 0),
+            }
+
+            plan_type = plan.get("plan_type", "day")
+            # Không normalize week plans - week plans đã được expand thành day plans trong evaluate_batch
+            # Nếu vẫn là week plan ở đây, giữ nguyên macros (có thể là tổng của cả tuần)
+
+            # Calculate differences
+            macro_differences = {
+                "kcal": actual_macros["kcal"] - target_macros["kcal"],
+                "protein_g": actual_macros["protein_g"]
+                - target_macros["protein_g"],
+                "carb_g": actual_macros["carb_g"] - target_macros["carb_g"],
+                "fat_g": actual_macros["fat_g"] - target_macros["fat_g"],
+            }
+
+            result_dict["metadata"] = {
+                "user_id": profile.get("user_id"),
+                "plan_id": plan.get("plan_id"),
+                "source": plan.get("source", "MealPlan"),
+                "plan_type": plan_type,
+                "plan_date": plan_date,
+            }
+
+            # Add detailed plan log
+            result_dict["plan_details"] = {
+                "target_macros": target_macros,
+                "actual_macros": actual_macros,
+                "macro_differences": macro_differences,
+                "meals": meal_list,
+                "user_profile": {
+                    "age": profile.get("age"),
+                    "gender": profile.get("gender"),
+                    "activity_level": profile.get("activity_level"),
+                    "dietary_preferences": profile.get(
+                        "dietary_preferences", []
+                    ),
+                    "allergies": profile.get("allergies", []),
+                },
+            }
+
+            output["individual_results"].append(result_dict)
+
+        # Save per-model results
+        model_suffix = _sanitize_model_name(model_name)
+        output_file = Path(
+            f"evaluation/results/llm_judge_test__{model_suffix}.json"
+        )
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(
+                output, f, indent=2, ensure_ascii=False, default=serialize_datetime
+            )
+
+        print(f"\n💾 Results for model {model_name} saved to: {output_file}")
+
+        # Generate per-model summary (JSON + markdown)
+        print("📝 Generating per-model summary report...")
+        analysis = analyze_results(output)
+        model_suffix = _sanitize_model_name(model_name)
+        summary_md = f"evaluation/results/llm_judge_summary__{model_suffix}.md"
+        summary_json = f"evaluation/results/llm_judge_summary__{model_suffix}.json"
+
+        generate_summary_report(analysis, output_file=summary_md)
+        with open(summary_json, "w", encoding="utf-8") as f:
+            json.dump(analysis, f, indent=2, ensure_ascii=False)
+
+        print(f"✅ Summary markdown saved to: {summary_md}")
+        print(f"✅ Summary JSON saved to: {summary_json}")
+
+        all_model_summaries.append(
+            {
+                "model_name": model_name,
+                "result_file": str(output_file),
+                "summary_markdown": summary_md,
+                "summary_json": summary_json,
+                "aggregated_scores": analysis.get("aggregated_scores", {}),
+                "performance_distribution": analysis.get(
+                    "performance_distribution", {}
+                ),
+            }
+        )
+
+    # Tạo file tổng hợp tất cả models
+    if all_model_summaries:
+        # Sắp xếp theo overall mean (cao → thấp)
+        def _overall_mean(m: Dict[str, Any]) -> float:
+            agg = m.get("aggregated_scores", {}) or {}
+            return float(agg.get("overall_score", {}).get("mean", 0.0) or 0.0)
+
+        sorted_models = sorted(
+            all_model_summaries, key=_overall_mean, reverse=True
+        )
+
+        # Bổ sung rank & summary ngắn cho JSON tổng hợp
+        combined_payload: Dict[str, Any] = {"models": []}
+        for rank, m in enumerate(sorted_models, start=1):
+            agg = m.get("aggregated_scores", {}) or {}
+            dist = m.get("performance_distribution", {}) or {}
+
+            overall = float(agg.get("overall_score", {}).get("mean", 0.0) or 0.0)
+            nutrition = float(agg.get("nutrition_score", {}).get("mean", 0.0) or 0.0)
+            feasibility = float(
+                agg.get("feasibility_score", {}).get("mean", 0.0) or 0.0
+            )
+            excellent = int(dist.get("excellent", 0) or 0)
+            good = int(dist.get("good", 0) or 0)
+            fair = int(dist.get("fair", 0) or 0)
+            poor = int(dist.get("poor", 0) or 0)
+            total = max(excellent + good + fair + poor, 1)
+
+            summary_vi = (
+                f"Model {m['model_name']} đứng hạng {rank} với điểm overall trung bình ~{overall:.1f}. "
+                f"Tỷ lệ Excellent+Good chiếm khoảng "
+                f"{(excellent + good) / total * 100:.1f}% "
+                f"(Excellent: {excellent}, Good: {good}, Fair: {fair}, Poor: {poor}). "
+                f"Nutrition trung bình ~{nutrition:.1f}, Feasibility ~{feasibility:.1f}."
+            )
+
+            extended = dict(m)
+            extended["rank"] = rank
+            extended["summary_vi"] = summary_vi
+            combined_payload["models"].append(extended)
+
+        combined_json_path = Path(
+            "evaluation/results/llm_judge_all_models_summary.json"
+        )
+        with open(combined_json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                combined_payload,
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+        # Markdown comparison report chi tiết hơn
+        combined_md_path = Path(
+            "evaluation/results/llm_judge_all_models_summary.md"
+        )
+        lines = [
+            "# LLM Judge - All Models Comparison\n",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+            "## Models Overview (sorted by Overall Mean)\n",
+            "| Rank | Model | Overall Mean | Nutrition Mean | Variety Mean | Balance Mean | Feasibility Mean |\n",
+            "|-----:|-------|-------------:|---------------:|-------------:|-------------:|-----------------:|\n",
+        ]
+
+        # Tạo map từ model_name → rank để dùng lại
+        rank_map = {m["model_name"]: m["rank"] for m in combined_payload["models"]}
+
+        for m in sorted_models:
+            agg = m.get("aggregated_scores", {}) or {}
+            rank = rank_map.get(m["model_name"], "")
+            overall = float(agg.get("overall_score", {}).get("mean", 0.0) or 0.0)
+            nutrition = float(agg.get("nutrition_score", {}).get("mean", 0.0) or 0.0)
+            variety = float(agg.get("variety_score", {}).get("mean", 0.0) or 0.0)
+            balance = float(agg.get("balance_score", {}).get("mean", 0.0) or 0.0)
+            feasibility = float(
+                agg.get("feasibility_score", {}).get("mean", 0.0) or 0.0
+            )
+            lines.append(
+                f"| {rank} | {m['model_name']} | {overall:11.2f} | {nutrition:13.2f} | "
+                f"{variety:11.2f} | {balance:11.2f} | {feasibility:17.2f} |\n"
+            )
+
+        # Thêm nhận xét ngắn cho từng model
+        lines.append("\n## Model Notes\n\n")
+        for m in combined_payload["models"]:
+            lines.append(f"### {m['model_name']}\n\n")
+            lines.append(f"- **Rank**: {m['rank']}\n")
+            lines.append(f"- **Tóm tắt**: {m['summary_vi']}\n\n")
+
+        with open(combined_md_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+        print(f"\n💾 Combined JSON summary saved to: {combined_json_path}")
+        print(f"💾 Combined markdown summary saved to: {combined_md_path}")
+
     print("=" * 80)
-    
-    return output
+
+    return {"models": all_model_summaries}
 
 
 
@@ -1194,6 +1419,15 @@ Examples:
         dest="load_all",
         help="Disable loading all data, only load specific users"
     )
+
+    parser.add_argument(
+        "--llm-model",
+        choices=LLM_JUDGE_MODELS,
+        help=(
+            "Chỉ định LLM model cho llm_judge (mặc định: chạy tất cả models). "
+            "Chỉ áp dụng khi method = llm_judge."
+        ),
+    )
     
     args = parser.parse_args()
     
@@ -1221,7 +1455,8 @@ Examples:
             user_ids=args.user_ids,
             use_meal_logs=args.use_meal_logs,
             date=date,
-            load_all=args.load_all
+            load_all=args.load_all,
+            models=[args.llm_model] if args.llm_model else None,
         ))
     
 
