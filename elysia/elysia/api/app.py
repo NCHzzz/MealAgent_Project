@@ -93,7 +93,7 @@ app.include_router(utils.router, prefix="/util", tags=["utilities"])
 app.include_router(tools.router, prefix="/tools", tags=["tools"])
 app.include_router(db.router, prefix="/db", tags=["db"])
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(recipe_submission.router, prefix="/recipe", tags=["recipe-submission"])
+app.include_router(recipe_submission.router, prefix="/api/recipe", tags=["recipe-submission"])
 
 
 # Health check endpoint (kept in main app.py due to its simplicity)

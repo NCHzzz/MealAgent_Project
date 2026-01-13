@@ -95,7 +95,7 @@ export async function submitRecipe(
       return { error: "User ID is required" };
     }
 
-    const response = await fetch(`${host}/recipe/submit?user_id=${user_id}`, {
+    const response = await fetch(`${host}/api/recipe/submit?user_id=${user_id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -138,7 +138,7 @@ export async function getMySubmissions(
       params.set("status", status);
     }
 
-    const response = await fetch(`${host}/recipe/my-submissions?${params}`, {
+    const response = await fetch(`${host}/api/recipe/my-submissions?${params}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
@@ -180,7 +180,7 @@ export async function getPendingSubmissions(
       offset: String(offset),
     });
 
-    const response = await fetch(`${host}/recipe/admin/pending?${params}`, {
+    const response = await fetch(`${host}/api/recipe/admin/pending?${params}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
@@ -222,7 +222,7 @@ export async function getAllSubmissions(
       params.set("status", status);
     }
 
-    const response = await fetch(`${host}/recipe/admin/all?${params}`, {
+    const response = await fetch(`${host}/api/recipe/admin/all?${params}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
@@ -254,7 +254,7 @@ export async function approveSubmission(
     }
 
     const response = await fetch(
-      `${host}/recipe/admin/${submission_id}/approve?user_id=${user_id}`,
+      `${host}/api/recipe/admin/${submission_id}/approve?user_id=${user_id}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -289,7 +289,7 @@ export async function rejectSubmission(
     }
 
     const response = await fetch(
-      `${host}/recipe/admin/${submission_id}/reject?user_id=${user_id}`,
+      `${host}/api/recipe/admin/${submission_id}/reject?user_id=${user_id}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
