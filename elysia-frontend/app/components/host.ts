@@ -11,6 +11,11 @@
  * Nếu không có NEXT_PUBLIC_BACKEND_URL và đang HTTPS → dùng relative path (empty string)
  */
 export const host = (() => {
+  // Development mode: always use localhost:8000 unless overridden
+  if (process.env.NODE_ENV === "development") {
+    return process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+  }
+
   // Static mode: dùng relative path
   if (process.env.NEXT_PUBLIC_IS_STATIC === "true") {
     return "";
@@ -27,10 +32,6 @@ export const host = (() => {
     if (window.location.protocol === "https:") {
       const currentHost = window.location.host;
       const fullUrl = `${window.location.protocol}//${currentHost}`;
-      // Debug log (chỉ trong development)
-      if (process.env.NODE_ENV === "development") {
-        console.log("[host.ts] Using HTTPS, host:", fullUrl);
-      }
       return fullUrl;
     }
     // Nếu đang HTTP → dùng localhost cho development
