@@ -15,6 +15,7 @@ from .meal_plan import MEAL_PLAN_SCHEMA, MEAL_PLAN_ITEM_SCHEMA
 from .meal_log_entry import MEAL_LOG_ENTRY_SCHEMA
 from .pantry import PANTRY_SCHEMA, PANTRY_ITEM_SCHEMA
 from .shopping import SHOPPING_LIST_SCHEMA, SHOPPING_ITEM_SCHEMA
+from .recipe_submission import RECIPE_SUBMISSION_SCHEMA
 
 __all__ = [
     "RECIPE_SCHEMA",
@@ -29,5 +30,6 @@ __all__ = [
     "PANTRY_ITEM_SCHEMA",
     "SHOPPING_LIST_SCHEMA",
     "SHOPPING_ITEM_SCHEMA",
+    "RECIPE_SUBMISSION_SCHEMA",
 ]
 

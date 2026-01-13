@@ -32,6 +32,7 @@ from MealAgent.schemas import (
     PANTRY_ITEM_SCHEMA,
     SHOPPING_LIST_SCHEMA,
     SHOPPING_ITEM_SCHEMA,
+    RECIPE_SUBMISSION_SCHEMA,
 )
 from MealAgent.schemas.helpers import create_all_collections_from_schemas
 
@@ -97,6 +98,7 @@ def create_all_collections(client, drop_existing=False):
         PANTRY_ITEM_SCHEMA,
         SHOPPING_LIST_SCHEMA,
         SHOPPING_ITEM_SCHEMA,
+        RECIPE_SUBMISSION_SCHEMA,
     ]
     
     # Note: NutrientTarget is NOT a separate collection - it's embedded in UserProfile per design doc
@@ -125,6 +127,7 @@ def create_specific_collections(client, names: list[str]):
         PANTRY_ITEM_SCHEMA["name"]: PANTRY_ITEM_SCHEMA,
         SHOPPING_LIST_SCHEMA["name"]: SHOPPING_LIST_SCHEMA,
         SHOPPING_ITEM_SCHEMA["name"]: SHOPPING_ITEM_SCHEMA,
+        RECIPE_SUBMISSION_SCHEMA["name"]: RECIPE_SUBMISSION_SCHEMA,
     }
     wanted = []
     for n in names:
@@ -184,7 +187,7 @@ def main():
                     FDC_NUTRIENT_SCHEMA, FDC_PORTION_SCHEMA, FDC_FOOD_SCHEMA,
                     USER_PROFILE_SCHEMA, MEAL_PLAN_SCHEMA, MEAL_PLAN_ITEM_SCHEMA,
                     MEAL_LOG_ENTRY_SCHEMA, PANTRY_SCHEMA, PANTRY_ITEM_SCHEMA,
-                    SHOPPING_LIST_SCHEMA, SHOPPING_ITEM_SCHEMA,
+                    SHOPPING_LIST_SCHEMA, SHOPPING_ITEM_SCHEMA, RECIPE_SUBMISSION_SCHEMA,
                 ]
                 collection_names = [s["name"] for s in all_schemas]
                 drop_collections(client, collection_names)

@@ -16,7 +16,7 @@ export const RouterContext = createContext<{
   ) => void;
 }>({
   currentPage: "chat",
-  changePage: () => {},
+  changePage: () => { },
 });
 
 export const RouterProvider = ({ children }: { children: React.ReactNode }) => {
@@ -116,6 +116,8 @@ export const RouterProvider = ({ children }: { children: React.ReactNode }) => {
       "mealHistory",
       "pantry",
       "shopping",
+      "recipeSubmission",
+      "adminRecipe",
     ];
     const validatedPage = validPages.includes(pageParam) ? pageParam : "chat";
 

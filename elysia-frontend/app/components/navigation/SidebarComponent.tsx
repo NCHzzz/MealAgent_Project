@@ -22,7 +22,7 @@ import { IoNewspaperOutline } from "react-icons/io5";
 import { FaGithub } from "react-icons/fa";
 import { FaLinkedin } from "react-icons/fa";
 import { FaYoutube } from "react-icons/fa";
-import { FaSignOutAlt } from "react-icons/fa";
+import { FaSignOutAlt, FaUserShield } from "react-icons/fa";
 import { GiMeal } from "react-icons/gi";
 
 import { RiRobot2Line, RiCalendarTodoLine } from "react-icons/ri";
@@ -111,6 +111,12 @@ const SidebarComponent: React.FC = () => {
         onClick: () => changePage("shopping", {}, true, unsavedChanges),
       },
       {
+        title: "Đóng góp công thức",
+        mode: ["recipeSubmission"],
+        icon: <CgFileDocument />,
+        onClick: () => changePage("recipeSubmission", {}, true, unsavedChanges),
+      },
+      {
         title: "Dữ liệu",
         mode: ["data", "collection"],
         icon: !collections?.some((c) => c.processed === true) ? (
@@ -123,12 +129,18 @@ const SidebarComponent: React.FC = () => {
         onClick: () => changePage("data", {}, true, unsavedChanges),
       },
       {
+        title: "Quản lý công thức",
+        mode: ["adminRecipe"],
+        icon: <FaUserShield />,
+        onClick: () => changePage("adminRecipe", {}, true, unsavedChanges),
+      },
+      {
         title: "Cài đặt",
         mode: ["settings", "elysia"],
         icon: <MdOutlineSettingsInputComponent />,
         onClick: () => changePage("settings", {}, true, unsavedChanges),
       },
-      
+
       {
         title: "Đánh giá",
         mode: ["eval", "feedback", "display"],
@@ -139,7 +151,7 @@ const SidebarComponent: React.FC = () => {
 
     // Filter items based on role
     const filteredItems = _items.filter(item => {
-      if (["Dữ liệu", "Đánh giá", "Cài đặt"].includes(item.title)) {
+      if (["Dữ liệu", "Đánh giá", "Cài đặt", "Quản lý công thức"].includes(item.title)) {
         return isAdmin;
       }
       return true;
@@ -250,14 +262,14 @@ const SidebarComponent: React.FC = () => {
             //   </div>
             // </SidebarMenuItem>
             <SidebarMenuItem>
-            <SidebarMenuButton
-              className="w-full justify-start items-center"
-              onClick={logout}
-            >
-              <FaSignOutAlt />
-              <span>Đăng xuất</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+              <SidebarMenuButton
+                className="w-full justify-start items-center"
+                onClick={logout}
+              >
+                <FaSignOutAlt />
+                <span>Đăng xuất</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           )}
           {/* <SidebarMenuItem>
             <SidebarMenuButton
