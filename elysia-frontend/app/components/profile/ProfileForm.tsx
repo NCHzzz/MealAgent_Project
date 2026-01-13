@@ -253,10 +253,7 @@ export default function ProfileForm({
           value={form.goal || ""}
           aria-label="Goal"
           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-            handleChange(
-              "goal",
-              event.target.value || null
-            )
+            handleChange("goal", event.target.value)
           }
         >
           <option value="">Select your goal...</option>

@@ -276,6 +276,17 @@ def log_plan_to_meal_log(
         # use noon to avoid DST edge cases, always UTC
         return f"{base_date}T12:00:00Z"
 
+    def _get_meal_time_suffix(meal_key: str) -> str:
+        """Return ISO time suffix including Z for specific meal types."""
+        mk = meal_key.lower()
+        if "breakfast" in mk or "sang" in mk:
+            return "T07:00:00Z"
+        if "lunch" in mk or "trua" in mk:
+            return "T12:00:00Z"
+        if "dinner" in mk or "toi" in mk:
+            return "T19:00:00Z"
+        return "T10:00:00Z"  # Default for snacks/others
+
     def _log_meal(meal_obj: Dict[str, Any], meal_label: str, logged_at: str):
         """Log a meal including main dish and all accompaniments.
 
@@ -417,7 +428,12 @@ def log_plan_to_meal_log(
         for meal_key in ["breakfast", "lunch", "dinner"]:
             meal_obj = plan.get("meals", {}).get(meal_key) if plan.get("meals") else plan.get(meal_key)
             if meal_obj:
-                _log_meal(meal_obj, meal_key, _day_logged_at())
+                # Use specific time for each meal
+                base_date = plan_start_date or datetime.now(timezone.utc).date().isoformat()
+                time_suffix = _get_meal_time_suffix(meal_key)
+                logged_at = f"{base_date}{time_suffix}"
+                
+                _log_meal(meal_obj, meal_key, logged_at)
                 meals_logged += 1
                 logger.debug(f"accept_plan_tool: Logged {meal_key} (main + {len(meal_obj.get('accompaniments', []))} accompaniments)")
         
@@ -443,7 +459,7 @@ def log_plan_to_meal_log(
                     day_date = base
 
             # logged_at is always anchored to day_date at noon UTC
-            logged_at = f"{day_date}T12:00:00Z"
+            
 
             if day_date:
                 _delete_logs_for_date(log_collection, user_id, day_date)
@@ -459,6 +475,10 @@ def log_plan_to_meal_log(
                     isinstance(meal_obj, dict) and isinstance(meal_obj.get('recipe'), dict),
                     isinstance(meal_obj, dict) and bool(meal_obj.get('accompaniments')),
                 )
+                # Determine time for this meal
+                time_suffix = _get_meal_time_suffix(meal_key)
+                logged_at = f"{day_date}{time_suffix}"
+
                 _log_meal(meal_obj, f"day_{day_idx}_{meal_key}", logged_at)
     else:
         raise ValueError(f"Unsupported plan_type: {plan_type}")

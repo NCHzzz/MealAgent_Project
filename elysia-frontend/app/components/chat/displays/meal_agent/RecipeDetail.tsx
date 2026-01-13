@@ -62,7 +62,7 @@ const RecipeDetail: React.FC<RecipeDetailProps> = ({
     if (Array.isArray(r.cooking_method_array) && r.cooking_method_array.length > 0) {
       return r.cooking_method_array
         .map((s: unknown) => (typeof s === "string" ? s.trim() : String(s ?? "")))
-        .filter((s) => s.length > 0);
+        .filter((s: string) => s.length > 0);
     }
 
     // 1) Structured steps from CookingSteps-like payload

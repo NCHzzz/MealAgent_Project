@@ -1191,9 +1191,9 @@ async def plan_week_e2e_tool(
                     recipe_id = str(recipe.get("food_id", ""))
                     if recipe_id in used_ids:
                         continue
-                        dish_name = str(recipe.get("dish_name", "")).lower().strip()
-                        if dish_name and dish_name in used_names:
-                            continue
+                    dish_name = str(recipe.get("dish_name", "")).lower().strip()
+                    if dish_name and dish_name in used_names:
+                        continue
                     if not _is_vietnamese_breakfast(recipe):
                         continue
                     
@@ -3549,7 +3549,39 @@ async def plan_week_e2e_tool(
 
             lunch_needs_main = _needs_main(lunch_rice, is_lunch_noodle, is_lunch_combined)
             dinner_needs_main = _needs_main(dinner_rice, is_dinner_noodle, is_dinner_combined)
-
+            # Fallback: Validation often fails due to strict caps. If we need a main but don't have one,
+            # force select one with relaxed constraints or promote from supplementary.
+            if lunch_needs_main and not lunch_main:
+                logging.warning(f"plan_week_e2e_tool: Day {day_index+1} - Lunch missing main dish. Attempting fallback...")
+                # 1. Check supplementary
+                for supp in lunch_supplementary_dishes:
+                    supp_recipe = supp.get("recipe", supp)
+                    if _is_main_dish(supp_recipe):
+                        lunch_main = supp_recipe
+                        logging.info(f"plan_week_e2e_tool: Promoted supplementary dish '{supp_recipe.get('dish_name')}' to Lunch Main.")
+                        break
+                # 2. Relaxed search
+                if not lunch_main:
+                    lunch_main = _validate_and_select_main_dish(
+                         "lunch", day_index, None, available_recipes, excluded, 
+                         used_recipe_ids, used_dish_names, None, float('inf'), 5.0 # Relaxed caps
+                    )
+            
+            if dinner_needs_main and not dinner_main:
+                logging.warning(f"plan_week_e2e_tool: Day {day_index+1} - Dinner missing main dish. Attempting fallback...")
+                # 1. Check supplementary
+                for supp in dinner_supplementary_dishes:
+                    supp_recipe = supp.get("recipe", supp)
+                    if _is_main_dish(supp_recipe):
+                        dinner_main = supp_recipe
+                        logging.info(f"plan_week_e2e_tool: Promoted supplementary dish '{supp_recipe.get('dish_name')}' to Dinner Main.")
+                        break
+                # 2. Relaxed search
+                if not dinner_main:
+                    dinner_main = _validate_and_select_main_dish(
+                         "dinner", day_index, None, available_recipes, excluded, 
+                         used_recipe_ids, used_dish_names, None, float('inf'), 5.0 # Relaxed caps
+                    )
             if not breakfast or not lunch_rice or not dinner_rice or (lunch_needs_main and not lunch_main) or (dinner_needs_main and not dinner_main):
                 logging.error(
                     "plan_week_e2e_tool: Day %d - Incomplete meal assembly | "
@@ -3720,38 +3752,7 @@ async def plan_week_e2e_tool(
                         f"deficit: kcal={kcal_deficit:.1f} protein={protein_deficit:.1f} carb={carb_deficit:.1f}, attempting to fill..."
                     )
                     
-                    # User requirement: If missing carb, increase white rice serving
-                    # Lower threshold from 15% to 10% to catch deficits earlier
-                    if carb_deficit > daily_carb * 0.10:
-                        # Find white rice in lunch or dinner
-                        for meal_key in ["lunch", "dinner"]:
-                            meal_data = day_plan.get(meal_key, {})
-                            meal_recipe = meal_data.get("recipe")
-                            if meal_recipe:
-                                dish_name = str(meal_recipe.get("dish_name", "")).lower()
-                                if "cơm trắng" in dish_name or "com trang" in dish_name or "white rice" in dish_name:
-                                    # Increase serving to fill carb deficit
-                                    current_serving = meal_data.get("servings", 1.0)
-                                    rice_macros = _get_meal_macros(meal_recipe)
-                                    carb_per_serving = rice_macros.get("carb_g", 0.0)
-                                    if carb_per_serving > 0:
-                                        additional_servings = min(2.0, carb_deficit / carb_per_serving)
-                                        new_serving = current_serving + additional_servings
-                                        meal_data["servings"] = round(new_serving, 2)
-                                        # Recalculate day macros
-                                        additional_carb = carb_per_serving * additional_servings
-                                        additional_kcal = rice_macros.get("kcal", 0.0) * additional_servings
-                                        day_macros["carb_g"] += additional_carb
-                                        day_macros["kcal"] += additional_kcal
-                                        total_macros["carb_g"] += additional_carb
-                                        total_macros["kcal"] += additional_kcal
-                                        carb_deficit -= additional_carb
-                                        logging.info(
-                                            f"plan_week_e2e_tool: Day {day_index + 1} - Increased white rice serving "
-                                            f"from {current_serving:.2f} to {new_serving:.2f} to meet carb target "
-                                            f"(added {additional_carb:.1f}g carb)"
-                                        )
-                                        break
+
                     
                     # User requirement: If missing protein, prioritize chicken/beef dishes (especially for gym users)
                     # CRITICAL: Also check kcal deficit - if kcal deficit is large, add dishes even if protein is OK
@@ -3966,19 +3967,20 @@ async def plan_week_e2e_tool(
                 kcal_coverage = (day_macros_before.get("kcal", 0.0) / daily_kcal * 100) if daily_kcal > 0 else 0.0
                 protein_coverage = (day_macros_before.get("protein_g", 0.0) / daily_protein * 100) if daily_protein > 0 else 0.0
                 
-                # If daily coverage is below 90%, don't scale too much (minimum 0.7 instead of 0.5)
-                if kcal_coverage < 90.0 or protein_coverage < 90.0:
-                    min_scale = 0.7  # More lenient: only scale down to 70% instead of 50%
+               # If daily coverage is below 95%, DO NOT scale down at all
+                # We need every calorie to hit the target.
+                if kcal_coverage < 95.0 or protein_coverage < 95.0:
+                    min_scale = 1.0
                     logging.debug(
-                        f"plan_week_e2e_tool: Daily coverage low (kcal={kcal_coverage:.1f}% protein={protein_coverage:.1f}%), "
-                        f"using lenient scaling (min_scale={min_scale})"
+                        f"plan_week_e2e_tool: Daily coverage not met (kcal={kcal_coverage:.1f}% protein={protein_coverage:.1f}%), "
+                        f"disabling scaling (min_scale=1.0)"
                     )
-                # If daily coverage is below 80%, be even more lenient (minimum 0.8)
-                elif kcal_coverage < 80.0 or protein_coverage < 80.0:
+                # If daily coverage is reasonable (95-110%), allow slight trimming if meal is huge
+                elif kcal_coverage < 110.0:
                     min_scale = 0.8
                     logging.debug(
-                        f"plan_week_e2e_tool: Daily coverage very low (kcal={kcal_coverage:.1f}% protein={protein_coverage:.1f}%), "
-                        f"using very lenient scaling (min_scale={min_scale})"
+                        f"plan_week_e2e_tool: Daily coverage adequate (kcal={kcal_coverage:.1f}%), "
+                        f"allowing moderate scaling (min_scale={min_scale})"
                     )
             
             scale = max(min_scale, min(scale_factors))  # Don't scale below min_scale
@@ -4064,93 +4066,142 @@ async def plan_week_e2e_tool(
                 carb_coverage = (day_macros["carb_g"] / daily_carb * 100) if daily_carb > 0 else 0.0
                 
                 # CRITICAL: If coverage dropped below 90% after scaling, add supplementary dishes
-                if kcal_coverage < 90.0 or protein_coverage < 90.0:
-                    logging.info(
-                        f"plan_week_e2e_tool: Day {day_data.get('day_index', 0) + 1} - Coverage dropped after scaling: "
-                        f"kcal={kcal_coverage:.1f}% protein={protein_coverage:.1f}%, attempting to fill..."
-                    )
+                # NEW ROUTINE: Smart Integer Scaling (Iterative) - aligned with plan_day_e2e.py
+                # Prioritizes: Rice (max 4) -> Main Dish (max 2)
+                
+                # Iterative loop to gradually fill deficits OR reduce excesses
+                for _ in range(20):
+                    # Recalculate current day macros
+                    current_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                    for meal_key in ["breakfast", "lunch", "dinner"]: # Iterate explicit keys to be safe
+                        meal_data = day_plan.get(meal_key, {})
+                        recipe = meal_data.get("recipe")
+                        servings = meal_data.get("servings", 1.0)
+                        if recipe:
+                            m = _get_meal_macros(recipe)
+                            for k in current_macros:
+                                current_macros[k] += m.get(k, 0.0) * servings
+                        for acc in meal_data.get("accompaniments", []):
+                            acc_recipe = acc.get("recipe")
+                            acc_servings = acc.get("servings", 1.0)
+                            if acc_recipe:
+                                m = _get_meal_macros(acc_recipe)
+                                for k in current_macros:
+                                    current_macros[k] += m.get(k, 0.0) * acc_servings
                     
-                    kcal_deficit = daily_kcal - day_macros["kcal"]
-                    protein_deficit = daily_protein - day_macros["protein_g"]
-                    carb_deficit = daily_carb - day_macros["carb_g"]
+                    # Update totals
+                    kcal_coverage = (current_macros["kcal"] / daily_kcal * 100) if daily_kcal > 0 else 0.0
                     
                     # Fill carb deficit first (increase rice serving)
-                    if carb_deficit > daily_carb * 0.10:
+                    # Target range: 95% - 105%
+                    if 95.0 <= kcal_coverage <= 105.0:
+                        break
+                        
+                    kcal_deficit = daily_kcal - current_macros["kcal"]
+                    kcal_surplus = current_macros["kcal"] - daily_kcal
+                    
+                    # --- SCALE UP LOGIC (Deficit) ---
+                    if kcal_coverage < 95.0:
+                        scaled_up = False
+                        # 1. Increase Rice (max 4)
                         for meal_key in ["lunch", "dinner"]:
                             meal_data = day_plan.get(meal_key, {})
-                            meal_recipe = meal_data.get("recipe")
-                            if meal_recipe:
-                                dish_name = str(meal_recipe.get("dish_name", "")).lower()
-                                if "cơm trắng" in dish_name or "com trang" in dish_name or "white rice" in dish_name:
-                                    current_serving = meal_data.get("servings", 1.0)
-                                    rice_macros = _get_meal_macros(meal_recipe)
-                                    carb_per_serving = rice_macros.get("carb_g", 0.0)
-                                    if carb_per_serving > 0:
-                                        additional_servings = min(2.0, carb_deficit / carb_per_serving)
-                                        new_serving = current_serving + additional_servings
-                                        meal_data["servings"] = round(new_serving, 2)
-                                        additional_carb = carb_per_serving * additional_servings
-                                        additional_kcal = rice_macros.get("kcal", 0.0) * additional_servings
-                                        day_macros["carb_g"] += additional_carb
-                                        day_macros["kcal"] += additional_kcal
-                                        total_macros["carb_g"] += additional_carb
-                                        total_macros["kcal"] += additional_kcal
-                                        logging.info(
-                                            f"plan_week_e2e_tool: Day {day_data.get('day_index', 0) + 1} - Increased rice serving "
-                                            f"after scaling: {current_serving:.2f} -> {new_serving:.2f}"
-                                        )
-                                        break
-                    
-                    # Fill protein/kcal deficit with supplementary dishes
-                    if protein_deficit > 10.0 or kcal_deficit > 300.0:
-                        # Find available recipes (not used in this day)
-                        excluded = []
-                        for meal_data in day_plan.values():
+                            
                             recipe = meal_data.get("recipe")
-                            if recipe:
-                                excluded.append(recipe)
+
+
+                            if recipe and (_is_rice_dish(recipe) or "cơm" in str(recipe.get("dish_name","")).lower()):
+                                if meal_data.get("servings", 1.0) < 4.0:
+                                    meal_data["servings"] += 1.0
+                                    scaled_up = True
+                                    break
+                        if scaled_up: continue
+                        # 2. Increase Main (max 2)
+                        for meal_key in ["dinner", "lunch"]:
+                            meal_data = day_plan.get(meal_key, {})
+                            # Check accompaniments
+
                             for acc in meal_data.get("accompaniments", []):
-                                acc_recipe = acc.get("recipe")
-                                if acc_recipe:
-                                    excluded.append(acc_recipe)
-                        
-                        # Try to add supplementary dish to dinner
-                        # Use full recipes pool (not available_recipes which is scoped to day loop)
-                        supp = select_meal_by_strategy(
-                            recipes,
-                            "highest_protein",
-                            exclude=excluded,
-                            used_recipe_ids=set(),  # Allow reuse for daily target fulfillment
-                            preferred_meal_type="dinner",
-                            target_macros={"protein_g": protein_deficit, "kcal": kcal_deficit},
-                            require_macros=True,
-                            min_kcal=100.0,
-                            max_kcal=min(500.0, kcal_deficit * 1.2),
-                            min_protein=20.0,
-                        )
-                        
-                        if supp and _is_main_dish(supp):
-                            day_plan["dinner"]["accompaniments"].append(
-                                {"recipe": supp, "servings": 1.0, "type": "main"}
-                            )
-                            supp_macros = _get_meal_macros(supp)
-                            day_macros["kcal"] += supp_macros["kcal"]
-                            day_macros["protein_g"] += supp_macros["protein_g"]
-                            day_macros["fat_g"] += supp_macros["fat_g"]
-                            day_macros["carb_g"] += supp_macros["carb_g"]
-                            total_macros["kcal"] += supp_macros["kcal"]
-                            total_macros["protein_g"] += supp_macros["protein_g"]
-                            total_macros["fat_g"] += supp_macros["fat_g"]
-                            total_macros["carb_g"] += supp_macros["carb_g"]
-                            logging.info(
-                                f"plan_week_e2e_tool: Day {day_data.get('day_index', 0) + 1} - Added supplementary dish "
-                                f"after scaling: '{supp.get('dish_name', 'Unknown')}' "
-                                f"({supp_macros.get('protein_g', 0):.1f}g protein, {supp_macros.get('kcal', 0):.1f} kcal)"
-                            )
-                            _trim_excess_mains(day_plan["dinner"]["accompaniments"])
-        
-        # Optional optimization: swap some mains to improve weekly macro fit
-        total_macros = _try_optimize_macros(weekly_plan, total_macros)
+                                 if acc.get("type") == "main" and acc.get("servings", 1.0) < 2.0:
+                                    acc["servings"] += 1.0
+                                    scaled_up = True
+                                    break
+                            if self_recipe := meal_data.get("recipe"):
+                                if _is_main_dish(self_recipe) and meal_data.get("servings", 1.0) < 2.0:
+                                    meal_data["servings"] += 1.0
+                                    scaled_up = True
+                                    break
+                            if scaled_up: break
+                                
+                        if not scaled_up: break # Cannot scale up further
+                    # --- SCALE DOWN LOGIC (Surplus) ---
+                    elif kcal_coverage > 105.0:
+                        scaled_down = False
+                        # 1. Decrease Rice (min 1)
+                        for meal_key in ["dinner", "lunch"]: # Reduce dinner rice first
+                            meal_data = day_plan.get(meal_key, {})
+                            recipe = meal_data.get("recipe")
+                            if recipe and (_is_rice_dish(recipe) or "cơm" in str(recipe.get("dish_name","")).lower()):
+                                if meal_data.get("servings", 1.0) > 1.0:
+                                    meal_data["servings"] -= 1.0
+                                    scaled_down = True
+                                    break
+                        if scaled_down: continue
+                        # 2. Decrease Main (min 1)
+                        for meal_key in ["dinner", "lunch"]:
+                            meal_data = day_plan.get(meal_key, {})
+                            # Check accompaniments
+                            for acc in meal_data.get("accompaniments", []):
+                                if acc.get("type") == "main" and acc.get("servings", 1.0) > 1.0:
+                                    acc["servings"] -= 1.0
+                                    scaled_down = True
+                                    break
+                            if self_recipe := meal_data.get("recipe"):
+                                if _is_main_dish(self_recipe) and meal_data.get("servings", 1.0) > 1.0:
+                                    meal_data["servings"] -= 1.0
+                                    scaled_down = True
+                                    break
+                            if scaled_down: break
+                            
+                        if not scaled_down: break # Cannot scale down further
+                # Final recalc for `day_macros` and `total_macros` consistency outside loop
+                day_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+                for meal_key, meal_data in day_plan.items():
+                    recipe = meal_data.get("recipe")
+                    servings = meal_data.get("servings", 1.0)
+                    if recipe:
+                        m = _get_meal_macros(recipe)
+                        for k in day_macros:
+                            day_macros[k] += m.get(k, 0.0) * servings
+                    for acc in meal_data.get("accompaniments", []):
+                        acc_recipe = acc.get("recipe")
+                        acc_servings = acc.get("servings", 1.0)
+                        if acc_recipe:
+                            m = _get_meal_macros(acc_recipe)
+                            for k in day_macros:
+                                day_macros[k] += m.get(k, 0.0) * acc_servings
+                # CRITICAL FIX: Update day_data["total_macros"] with the recalculated day_macros
+                # This ensures the frontend displays correct daily nutrition values after iterative scaling
+                day_data["total_macros"] = day_macros
+                
+            # END OF DAY LOOP
+            
+            # Recompute TOTAL WEEK macros from scratch to ensure accuracy after all scaling
+            total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
+            for d_key, d_data in weekly_plan.items():
+                m_plan = d_data.get("meals", {}).values()
+                for m in m_plan:
+                    s = m.get("servings", 1.0)
+                    r = m.get("recipe")
+                    if r:
+                        mac = _get_meal_macros(r)
+                        for k in total_macros: total_macros[k] += mac.get(k,0)*s
+                    for acc in m.get("accompaniments", []):
+                        s_acc = acc.get("servings", 1.0)
+                        r_acc = acc.get("recipe")
+                        if r_acc:
+                            mac_acc = _get_meal_macros(r_acc)
+                            for k in total_macros: total_macros[k] += mac_acc.get(k,0)*s_acc
 
         # Calculate average daily macros
         average_daily_macros = {
@@ -4356,6 +4407,19 @@ async def plan_week_e2e_tool(
             else:
                 yield Response("✅ All key micronutrients meet RDA requirements!")
         
+        # CONTINUATION DETECTION:
+        # Check if the user's initial query requested a shopping list or cooking steps.
+        # This allows us to "Smart Stop" if only a plan was requested, saving tokens.
+        def _has_continuation_intent(query: str) -> bool:
+            lowered = (query or "").lower()
+            # Keywords for shopping/pantry
+            pantry_k = ["shopping", "mua sắm", "chợ", "nguyên liệu", "danh sách", "tủ lạnh", "pantry"]
+            # Keywords for cooking/instructions
+            cooking_k = ["nấu", "cách làm", "hướng dẫn", "bước", "cook", "recipe", "cooking"]
+            return any(k in lowered for k in pantry_k + cooking_k)
+
+        continuation_requested = _has_continuation_intent(query_text)
+
         # Then yield Result for data consistency
         # Use "meal_plan" payload_type for explicit frontend detection
         yield Result(
@@ -4372,10 +4436,17 @@ async def plan_week_e2e_tool(
                 "plan_id": plan_output.get("plan_id"),
                 "user_id": user_id,
                 "can_accept": True,
-                "stop_calling_tool": True,
-                "end_conversation": True,
+                # SMART STOP: Only allow continuation if a follow-up action was likely requested
+                "stop_calling_tool": not continuation_requested,
+                "end_conversation": not continuation_requested,
             },
             payload_type="meal_plan",
+            # CRITICAL: Guide the LLM on what to do next if NOT stopping
+            llm_message=(
+                "WEEKLY PLAN GENERATED. STATUS: SUCCESS. "
+                "The plan has been summarized and displayed to the user. "
+                f"{'CONTINUATION DETECTED: Proceed to next request (shopping list or cooking steps).' if continuation_requested else 'NO CONTINUATION: Planning complete. The conversation will end now.'}"
+            ),
             display=True,
         )
         _clear_missing_macro_state(tree_data)

@@ -78,10 +78,6 @@ async def ensure_profile_loaded(
     
     # If force_refresh, skip cache and Environment
     if not force_refresh:
-        cached_profile = hidden.get("profile")
-        if cached_profile:
-            return cached_profile, False
-
         profile_results = tree_data.environment.find("profile_crud_tool", "profile")
         if profile_results and profile_results[0]["objects"]:
             profile = profile_results[0]["objects"][0]
@@ -162,10 +158,6 @@ async def ensure_macro_targets(
     
     # If force_refresh, skip cache and Environment
     if not force_refresh:
-        cached_targets = hidden.get("macro_targets")
-        if cached_targets:
-            return cached_targets, False
-
         target_results = tree_data.environment.find("macro_calc_tool", "targets")
         if target_results and target_results[0]["objects"]:
             targets = target_results[0]["objects"][0]

@@ -138,7 +138,6 @@ async def macro_calc_tool(
                                 "target_calories",
                                 "daily_calorie_target",
                                 "calorie_target",
-                                "tdee_kcal",
                             )
                             if profile.get(key) is not None
                         ),

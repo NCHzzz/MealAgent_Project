@@ -12,14 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+
 import {
   Dialog,
   DialogContent,
@@ -46,8 +39,53 @@ import {
   ShoppingItem,
   ShoppingList,
 } from "../api/shopping";
-import { IoRefresh, IoAdd, IoTrash, IoCreate, IoCheckmarkCircle, IoCheckmarkCircleOutline } from "react-icons/io5";
+import { 
+  IoRefresh, 
+  IoAdd, 
+  IoTrash, 
+  IoCreate, 
+  IoCheckmarkCircle, 
+  IoCheckmarkCircleOutline,
+  IoFishOutline,
+  IoLeafOutline,
+  IoWaterOutline,
+  IoNutritionOutline,
+  IoFlaskOutline,
+  IoEllipsisHorizontalCircleOutline,
+  IoChevronDown,
+  IoChevronUp,
+  IoCartOutline
+} from "react-icons/io5";
 import { Badge } from "@/components/ui/badge";
+
+
+/* Helper to guess category if missing or generic */
+const assignCategory = (name: string, currentCategory?: string): string => {
+  if (currentCategory && currentCategory !== "general" && currentCategory !== "Khác") {
+    return currentCategory;
+  }
+  
+  const lowerName = name.toLowerCase();
+  
+  // Keywords for categories
+  const meatSeafood = ["thịt", "bò", "gà", "heo", "lợn", "cá", "tôm", "mực", "cua", "ngêu", "sò", "ốc", "hải sản", "xúc xích", "jambon", "chả", "giò"];
+  const vegHerbs = ["rau", "củ", "quả", "hành", "tỏi", "ớt", "gừng", "nấm", "cà", "bí", "khoai", "măng", "cải", "xà lách", "ngò", "thì là", "chanh", "sả", "riềng", "nghệ", "lá", "đậu", "giá"];
+  const fruits = ["táo", "cam", "quýt", "bưởi", "nho", "dưa", "xoài", "chuối", "lê", "mận", "đào", "ổi", "thơm", "dứa"];
+  const dairy = ["sữa", "phô mai", "bơ", "kem", "trứng", "yaourt", "sữa chua"];
+  const grains = ["gạo", "mì", "bún", "phở", "nui", "miến", "hủ tiếu", "bánh", "bột", "ngô", "bắp", "khoai tây", "khoai lang"];
+  const spicesPantry = ["mắm", "muối", "đường", "tiêu", "hạt nêm", "bột ngọt", "dầu", "tương", "giấm", "ngũ vị hương", "cà ri", "sa tế", "sốt", "xốt", "mật ong", "đồ hộp"];
+  const drinks = ["nước", "bia", "rượu", "trà", "cà phê", "sinh tố", "nước ép"];
+
+  if (meatSeafood.some(k => lowerName.includes(k))) return "Thịt & Hải sản";
+  if (vegHerbs.some(k => lowerName.includes(k))) return "Rau củ & Thảo mộc";
+  if (fruits.some(k => lowerName.includes(k))) return "Trái cây";
+  if (dairy.some(k => lowerName.includes(k))) return "Sữa & Phô mai";
+  if (grains.some(k => lowerName.includes(k))) return "Ngũ cốc & Tinh bột";
+  if (spicesPantry.some(k => lowerName.includes(k))) return "Gia vị & Đồ khô";
+  if (drinks.some(k => lowerName.includes(k))) return "Đồ uống";
+  
+  return "general";
+};
 
 const ShoppingListPage: React.FC = () => {
   const { id } = useContext(SessionContext);
@@ -67,6 +105,73 @@ const ShoppingListPage: React.FC = () => {
     category: "general",
     purchased: false,
   });
+
+  /* Grouping Logic */
+  const groupedItems = React.useMemo(() => {
+    const active = items.filter(i => !i.purchased);
+    const purchased = items.filter(i => i.purchased);
+
+    const groups: Record<string, ShoppingItem[]> = {};
+    
+    active.forEach(item => {
+      // Auto-assign category if missing or generic
+      const cat = assignCategory(item.ingredient_name, item.category);
+      if (!groups[cat]) {
+        groups[cat] = [];
+      }
+      groups[cat].push(item);
+    });
+
+    return {
+      activeGroups: groups,
+      purchasedItems: purchased
+    };
+  }, [items]);
+
+  const categoryOrder = [
+    "Thịt & Hải sản",
+    "Rau củ & Thảo mộc",
+    "Trái cây",
+    "Sữa & Phô mai",
+    "Ngũ cốc & Tinh bột",
+    "Gia vị & Đồ khô",
+    "Đồ uống",
+    "general"
+  ];
+
+
+
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case "Thịt & Hải sản": return <IoFishOutline className="w-6 h-6" />;
+      case "Rau củ & Thảo mộc": return <IoLeafOutline className="w-6 h-6" />;
+      case "Trái cây": return <IoNutritionOutline className="w-6 h-6" />;
+      case "Sữa & Phô mai": return <IoWaterOutline className="w-6 h-6" />;
+      case "Ngũ cốc & Tinh bột": return <IoNutritionOutline className="w-6 h-6" />;
+      case "Gia vị & Đồ khô": return <IoFlaskOutline className="w-6 h-6" />;
+      case "Đồ uống": return <IoWaterOutline className="w-6 h-6" />;
+      default: return <IoEllipsisHorizontalCircleOutline className="w-6 h-6" />;
+    }
+  };
+
+  const getCategoryLabel = (category: string) => {
+    return category === "general" ? "Khác" : category;
+  };
+
+  const sortedCategories = Object.keys(groupedItems.activeGroups).sort((a, b) => {
+    const indexA = categoryOrder.indexOf(a);
+    const indexB = categoryOrder.indexOf(b);
+    // If both are in the known list, sort by index
+    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+    // If only A is known, it comes first
+    if (indexA !== -1) return -1;
+    // If only B is known, it comes first
+    if (indexB !== -1) return 1;
+    // Otherwise sort alphabetically
+    return a.localeCompare(b);
+  });
+
+  const [expandedPurchased, setExpandedPurchased] = useState(false);
 
   const fetchShoppingLists = async () => {
     if (!id) {
@@ -260,6 +365,8 @@ const ShoppingListPage: React.FC = () => {
   }
 
   const selectedList = lists.find(l => l.list_id === selectedListId);
+
+
   const purchasedCount = items.filter(i => i.purchased).length;
   const remainingCount = items.length - purchasedCount;
 
@@ -540,24 +647,12 @@ const ShoppingListPage: React.FC = () => {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.6 }}
+            className="space-y-8"
           >
-            <Card className="shadow-xl bg-background_alt border-secondary/20 backdrop-blur-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-2xl flex items-center gap-2">
-                  <svg className="w-6 h-6 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                  </svg>
-                  Danh sách mục ({items.length})
-                </CardTitle>
-                <CardDescription className="text-sm mt-1">
-                  {items.length === 0 
-                    ? "Danh sách này hiện đang trống. Thêm mục để bắt đầu."
-                    : "Quản lý các mục trong danh sách mua sắm"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {items.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16">
+            {/* Active Items Grouped by Category */}
+            {items.length === 0 ? (
+              <Card className="shadow-xl bg-background_alt border-secondary/20 backdrop-blur-sm">
+                 <CardContent className="flex flex-col items-center justify-center py-16">
                     <motion.div
                       initial={{ scale: 0.9, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
@@ -575,55 +670,64 @@ const ShoppingListPage: React.FC = () => {
                         Thêm mục đầu tiên
                       </Button>
                     </motion.div>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="hover:bg-transparent">
-                          <TableHead className="w-12 font-semibold">Đã mua</TableHead>
-                          <TableHead className="font-semibold">Tên nguyên liệu</TableHead>
-                          <TableHead className="font-semibold">Số lượng</TableHead>
-                          <TableHead className="font-semibold">Đơn vị</TableHead>
-                          <TableHead className="font-semibold">Danh mục</TableHead>
-                          <TableHead className="text-right font-semibold">Thao tác</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {items.map((item, index) => (
-                          <TableRow 
-                            key={index}
-                            className={`hover:bg-foreground/5 transition-colors ${item.purchased ? "opacity-60 line-through" : ""}`}
-                          >
-                            <TableCell>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => handleTogglePurchased(item)}
-                                className="h-8 w-8 hover:bg-green-500/10"
-                              >
-                                {item.purchased ? (
-                                  <IoCheckmarkCircle className="w-5 h-5 text-green-500" />
-                                ) : (
-                                  <IoCheckmarkCircleOutline className="w-5 h-5 text-secondary" />
-                                )}
-                              </Button>
-                            </TableCell>
-                            <TableCell className="font-medium">{item.ingredient_name}</TableCell>
-                            <TableCell>{item.quantity}</TableCell>
-                            <TableCell>{item.unit}</TableCell>
-                            <TableCell>
-                              <Badge variant="outline" className="text-xs">
-                                {item.category || "general"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-2">
+                 </CardContent>
+              </Card>
+            ) : (
+              <>
+                {/* Active Items Categories */}
+                {sortedCategories.length > 0 ? (
+                   sortedCategories.map(category => (
+                    <div key={category} className="mb-8 last:mb-0">
+                      <div className="flex items-center gap-4 mb-5 px-1 pt-2">
+                          <div className="p-3 bg-gradient-to-br from-accent to-accent/80 rounded-xl text-white shadow-lg shadow-accent/20">
+                            {getCategoryIcon(category)}
+                          </div>
+                          <h3 className="font-bold text-2xl text-white flex items-center gap-3 tracking-tight" style={{ textShadow: '0 2px 10px rgba(0,0,0,0.5)' }}>
+                            {getCategoryLabel(category)}
+                            <Badge className="bg-white/10 text-white hover:bg-white/20 ml-2 h-7 min-w-7 flex items-center justify-center rounded-full px-2.5 text-sm border-0">
+                              {groupedItems.activeGroups[category].length}
+                            </Badge>
+                          </h3>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                        {groupedItems.activeGroups[category].map((item, idx) => (
+                           <motion.div 
+                              key={idx} 
+                              layoutId={`item-${item.ingredient_name}-${idx}`}
+                              className="group relative flex items-start p-3 bg-card/60 backdrop-blur-sm border border-white/10 rounded-xl shadow-sm hover:shadow-lg hover:border-accent/40 hover:bg-card/80 transition-all duration-200"
+                           >
+                              {/* Checkbox area */}
+                              <div className="mr-3 mt-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => handleTogglePurchased(item)}
+                                  className="h-6 w-6 rounded-full border-2 border-secondary/40 text-transparent hover:border-green-500 hover:text-green-500 hover:bg-green-500/10 p-0 transition-colors"
+                                >
+                                  <IoCheckmarkCircle className="w-full h-full opacity-0 hover:opacity-100 transition-opacity" />
+                                </Button>
+                              </div>
+                              
+                              {/* Content area */}
+                              <div className="flex-1 min-w-0 mr-2">
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-lg text-white/90 line-clamp-2 leading-tight mb-1">
+                                    {item.ingredient_name}
+                                  </span>
+                                  <span className="text-base font-semibold text-accent" style={{ textShadow: '0 0 10px rgba(234, 88, 12, 0.2)' }}>
+                                    {item.quantity} <span className="text-white/60 font-medium">{item.unit}</span>
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Actions - Always visible on mobile, visible on hover desktop, or just subtle */}
+                              <div className="flex flex-col gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity absolute right-2 top-2 sm:static">
                                 <Button
                                   size="icon"
                                   variant="ghost"
                                   onClick={() => handleEditItem(item)}
-                                  className="h-8 w-8 hover:bg-accent/10"
+                                  className="h-7 w-7 text-muted-foreground hover:text-accent hover:bg-accent/10 rounded-md"
                                 >
                                   <IoCreate className="h-4 w-4" />
                                 </Button>
@@ -631,20 +735,85 @@ const ShoppingListPage: React.FC = () => {
                                   size="icon"
                                   variant="ghost"
                                   onClick={() => handleDeleteItem(item)}
-                                  className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md"
                                 >
                                   <IoTrash className="h-4 w-4" />
                                 </Button>
                               </div>
-                            </TableCell>
-                          </TableRow>
+                           </motion.div>
                         ))}
-                      </TableBody>
-                    </Table>
+                      </div>
+                    </div>
+                   ))
+                ) : (
+                   /* If no active items but have purchased items, show a message */
+                   groupedItems.purchasedItems.length > 0 && <div className="text-center text-secondary py-12 italic">Không có mục nào cần mua! 😍</div>
+                )}
+
+                {/* Purchased Items Section */}
+                {groupedItems.purchasedItems.length > 0 && (
+                  <div className="mt-12 pt-8 border-t border-border/20">
+                    <div 
+                      className="flex items-center justify-between cursor-pointer group mb-6"
+                      onClick={() => setExpandedPurchased(!expandedPurchased)}
+                    >
+                      <div className="flex items-center gap-3">
+                         <div className="p-2 bg-green-500/10 rounded-lg text-green-600">
+                            <IoCartOutline className="w-5 h-5" />
+                         </div>
+                        <h3 className="font-bold text-xl text-secondary/80 group-hover:text-foreground transition-colors">Đã mua</h3>
+                        <Badge variant="outline" className="text-secondary/70 border-secondary/30 ml-2">
+                          {groupedItems.purchasedItems.length}
+                        </Badge>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-9 w-9 p-0 text-secondary rounded-full bg-secondary/10 group-hover:bg-secondary/20 transition-colors">
+                        {expandedPurchased ? <IoChevronUp /> : <IoChevronDown />}
+                      </Button>
+                    </div>
+                    
+                    {expandedPurchased && (
+                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 opacity-70">
+                        {groupedItems.purchasedItems.map((item, idx) => (
+                           <motion.div 
+                              key={idx} 
+                              initial={{ opacity: 0 }} 
+                              animate={{ opacity: 1 }}
+                              className="flex items-center p-3 bg-muted/40 border border-transparent rounded-xl"
+                           >
+                              <div className="mr-3">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => handleTogglePurchased(item)}
+                                  className="h-6 w-6 rounded-full bg-green-500 text-white hover:bg-red-500 hover:text-white p-0 transition-colors"
+                                >
+                                  <IoCheckmarkCircle className="w-4 h-4" />
+                                </Button>
+                              </div>
+                              
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-secondary line-through truncate">{item.ingredient_name}</p>
+                                <p className="text-sm text-secondary/60 line-through">
+                                  {item.quantity} {item.unit}
+                                </p>
+                              </div>
+
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleDeleteItem(item)}
+                                className="h-8 w-8 text-secondary/40 hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <IoTrash className="h-4 w-4" />
+                              </Button>
+                           </motion.div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </>
+            )}
           </motion.div>
         ) : (
           <motion.div

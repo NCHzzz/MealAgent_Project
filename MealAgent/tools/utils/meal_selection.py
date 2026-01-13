@@ -141,6 +141,7 @@ def filter_by_macro_requirements(
     min_kcal: float = 30.0,
     max_kcal: float | None = None,
     min_protein: float = 0.0,
+    max_fat: float | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Filter candidates by macro requirements.
@@ -151,11 +152,12 @@ def filter_by_macro_requirements(
         min_kcal: Minimum kcal requirement
         max_kcal: Maximum kcal limit
         min_protein: Minimum protein requirement
+        max_fat: Maximum fat limit
     
     Returns:
         Filtered list of candidates
     """
-    if not (require_macros or max_kcal or min_protein > 0):
+    if not (require_macros or max_kcal or min_protein > 0 or max_fat):
         return candidates
     
     filtered = []
@@ -164,6 +166,7 @@ def filter_by_macro_requirements(
         if isinstance(macros, dict):
             kcal = macros.get("kcal", 0)
             protein = macros.get("protein_g", 0)
+            fat = macros.get("fat_g", 0)
             # Filter by min_kcal if require_macros
             if require_macros and kcal < min_kcal:
                 continue
@@ -172,6 +175,9 @@ def filter_by_macro_requirements(
                 continue
             # CRITICAL: Filter by min_protein for main dishes to ensure adequate protein
             if min_protein > 0 and protein < min_protein:
+                continue
+            # CRITICAL: Filter by max_fat to prevent high-fat dishes from skewing daily total
+            if max_fat and fat > max_fat:
                 continue
             filtered.append(r)
     
@@ -486,6 +492,7 @@ def select_meal_by_strategy(
     min_kcal: float = 30.0,
     max_kcal: float | None = None,
     min_protein: float = 0.0,
+    max_fat: float | None = None,
 ) -> Dict[str, Any] | None:
     """
     Select recipe based on strategy with improved macro-aware selection.
@@ -502,6 +509,7 @@ def select_meal_by_strategy(
         min_kcal: Minimum kcal requirement
         max_kcal: Maximum kcal limit
         min_protein: Minimum protein requirement (for main dishes)
+        max_fat: Maximum fat limit to prevent excess
     
     Returns:
         Selected recipe or None
@@ -536,7 +544,7 @@ def select_meal_by_strategy(
     
     # Filter by macro requirements
     candidates = filter_by_macro_requirements(
-        candidates, require_macros, min_kcal, max_kcal, min_protein
+        candidates, require_macros, min_kcal, max_kcal, min_protein, max_fat
     )
     
     # Filter by dish category

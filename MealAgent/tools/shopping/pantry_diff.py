@@ -1,11 +1,12 @@
 """
 Subtract pantry items from shopping list to get final shopping list.
 """
-from typing import AsyncGenerator, Dict, Any, List
-from datetime import datetime, timezone
+from typing import AsyncGenerator, Dict, Any, List, Tuple
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 import hashlib
 import logging
+import re
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -13,55 +14,75 @@ from elysia.util.client import ClientManager
 from elysia import tool
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+from MealAgent.tools.utils.ingredient_parser import parse_ingredient_string, convert_to_grams as parser_convert_to_grams, DEFAULT_UNIT_WEIGHTS
+
+logger = logging.getLogger(__name__)
 
 
 def _convert_to_grams(quantity: float, unit: str, fdc_id: int | None, client) -> float:
     """
-    Convert quantity to grams using FdcPortion if available.
-    Returns quantity in grams.
+    Convert quantity to grams using FdcPortion if available, 
+    otherwise fall back to robust default weight table.
     """
-    if unit.lower() == "g":
+    normalized_unit = unit.lower()
+    if normalized_unit == "g":
         return quantity
     
+    # Try FDC conversion first
     if fdc_id:
         try:
             try:
                 portion_collection = client.collections.get("FdcPortion")
             except Exception:
-                return quantity  # Fallback: assume grams if collection unavailable
-            portion_filter = build_filters_from_where(
-                {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
-            )
-            portion_results = portion_collection.query.fetch_objects(filters=portion_filter, limit=10)
-            
-            for portion_obj in portion_results.objects:
-                portion = portion_obj.properties
-                if portion.get("measure_unit", "").lower() == unit.lower():
-                    gram_weight = portion.get("gram_weight", 0.0)
-                    if gram_weight > 0:
-                        portion_amount = portion.get("amount", 1.0)
-                        return (quantity / portion_amount) * gram_weight
+                # Collection might not exist yet or be inaccessible
+                pass
+            else:
+                portion_filter = build_filters_from_where(
+                    {"path": ["fdc_id"], "operator": "Equal", "valueInt": int(fdc_id)}
+                )
+                portion_results = portion_collection.query.fetch_objects(filters=portion_filter, limit=10)
+                
+                for portion_obj in portion_results.objects:
+                    portion = portion_obj.properties
+                    if portion.get("measure_unit", "").lower() == normalized_unit:
+                        gram_weight = portion.get("gram_weight", 0.0)
+                        if gram_weight > 0:
+                            portion_amount = portion.get("amount", 1.0)
+                            return (quantity / portion_amount) * gram_weight
         except Exception:
-            pass  # Fallback to assuming grams
+            pass 
     
-    # Fallback: assume unit is grams (may be inaccurate)
-    return quantity
+    # Fallback to parser's default weight table
+    return parser_convert_to_grams(quantity, unit)
 
 
-def _extract_ingredients_from_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _extract_ingredients_from_plan(plan: Dict[str, Any], client=None) -> List[Dict[str, Any]]:
     """
     Extract and aggregate ingredients from plan (daily or weekly).
     Returns list of shopping items with ingredient_name, quantity, unit, fdc_id.
+    Standardizes everything to grams/ml for robust aggregation.
     """
+    # Key: normalized_name
     ingredient_map: Dict[str, Dict[str, Any]] = {}
     
     plan_type = plan.get("plan_type", "day")
     
-    def _process_recipe_ingredients(recipe: Dict[str, Any], servings: float, meal_key: str, day_key: str | None = None):
+    def _process_recipe_ingredients(recipe: Dict[str, Any], requested_servings: float, meal_key: str, day_key: str | None = None):
         """Helper to process ingredients from a recipe (main or accompaniment)."""
         ingredients_with_qty = recipe.get("ingredients_with_qty", [])
         ingredients = recipe.get("ingredients", [])
         ingredient_fdc_map = recipe.get("ingredient_fdc_map", [])
+        
+        try:
+            raw_serving = recipe.get("serving_size", 1.0)
+            if isinstance(raw_serving, (str, bytes)):
+                import re
+                match = re.search(r"([\d\.]+)", str(raw_serving))
+                recipe_servings = float(match.group(1)) if match else 1.0
+            else:
+                recipe_servings = float(raw_serving or 1.0)
+        except (ValueError, TypeError):
+            recipe_servings = 1.0
         
         # Build FDC lookup
         fdc_lookup = {}
@@ -73,64 +94,42 @@ def _extract_ingredients_from_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]
                     if ing_vn and fdc_id:
                         fdc_lookup[ing_vn] = fdc_id
         
-        # Process ingredients_with_qty (preferred)
-        if ingredients_with_qty:
-            for ing_str in ingredients_with_qty:
-                if not isinstance(ing_str, str):
-                    continue
-                ing_lower = ing_str.lower().strip()
-                ing_key = ing_lower
+        scale = requested_servings / recipe_servings
+        raw_list = ingredients_with_qty if ingredients_with_qty else ingredients
+        
+        for ing_str in raw_list:
+            if not isinstance(ing_str, str):
+                continue
+            
+            parsed = parse_ingredient_string(ing_str)
+            name = parsed["name"].lower().strip()
+            if not name:
+                continue
                 
-                if ing_key not in ingredient_map:
-                    ingredient_map[ing_key] = {
-                        "ingredient_name": ing_str,
-                        "quantity": 0.0,
-                        "unit": "g",
-                        "fdc_id": fdc_lookup.get(ing_lower),
-                        "recipes": [],
-                    }
-                ingredient_map[ing_key]["quantity"] += servings
-                recipe_info = {
-                    "meal": meal_key,
-                    "recipe_id": recipe.get("food_id"),
+            qty = parsed["quantity"] * scale
+            unit = parsed["unit"]
+            fdc_id = fdc_lookup.get(name)
+            
+            # Convert to grams/ml for aggregation
+            grams = _convert_to_grams(qty, unit, fdc_id, client)
+            
+            if name not in ingredient_map:
+                ingredient_map[name] = {
+                    "ingredient_name": name,
+                    "total_grams": 0.0,
+                    "unit": unit, # Keep last unit as representative
+                    "fdc_id": fdc_id,
+                    "is_liquid": unit.lower() in ["ml", "l", "lít"],
                 }
-                if day_key:
-                    recipe_info["day"] = day_key
-                ingredient_map[ing_key]["recipes"].append(recipe_info)
-        elif ingredients:
-            # Fallback: use simple ingredient names
-            for ing in ingredients:
-                if not isinstance(ing, str):
-                    continue
-                ing_lower = str(ing).lower().strip()
-                ing_key = ing_lower
-                
-                if ing_key not in ingredient_map:
-                    ingredient_map[ing_key] = {
-                        "ingredient_name": str(ing),
-                        "quantity": 0.0,
-                        "unit": "g",
-                        "fdc_id": fdc_lookup.get(ing_lower),
-                        "recipes": [],
-                    }
-                ingredient_map[ing_key]["quantity"] += servings
-                recipe_info = {
-                    "meal": meal_key,
-                    "recipe_id": recipe.get("food_id"),
-                }
-                if day_key:
-                    recipe_info["day"] = day_key
-                ingredient_map[ing_key]["recipes"].append(recipe_info)
+            
+            ingredient_map[name]["total_grams"] += grams
     
     if plan_type == "day":
-        # Daily plan: iterate through meals
         for meal_key, meal_data in plan.get("meals", {}).items():
-            # Main recipe
             recipe = meal_data.get("recipe", {})
             servings = float(meal_data.get("servings", 1.0))
             _process_recipe_ingredients(recipe, servings, meal_key)
             
-            # Accompaniments (for Vietnamese meals)
             accompaniments = meal_data.get("accompaniments", [])
             for acc in accompaniments:
                 acc_recipe = acc.get("recipe", {})
@@ -139,15 +138,12 @@ def _extract_ingredients_from_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]
                     _process_recipe_ingredients(acc_recipe, acc_servings, meal_key)
     
     elif plan_type == "week":
-        # Weekly plan: iterate through all days and meals
         for day_key, day_data in plan.get("days", {}).items():
             for meal_key, meal_data in day_data.get("meals", {}).items():
-                # Main recipe
                 recipe = meal_data.get("recipe", {})
                 servings = float(meal_data.get("servings", 1.0))
                 _process_recipe_ingredients(recipe, servings, meal_key, day_key)
                 
-                # Accompaniments (for Vietnamese meals)
                 accompaniments = meal_data.get("accompaniments", [])
                 for acc in accompaniments:
                     acc_recipe = acc.get("recipe", {})
@@ -155,35 +151,54 @@ def _extract_ingredients_from_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]
                     if acc_recipe:
                         _process_recipe_ingredients(acc_recipe, acc_servings, meal_key, day_key)
     
-    # Convert to list and clean up
+    # Convert back to readable units
     items = []
     for item in ingredient_map.values():
+        name = item["ingredient_name"]
+        grams = item["total_grams"]
+        is_liquid = item["is_liquid"]
+        
+        final_qty = grams
+        final_unit = "ml" if is_liquid else "g"
+        
+        # Check if we should preserve a discrete unit
+        # Use a case-insensitive check against keys
+        preferred_unit_lower = item.get("unit", "").lower()
+        # Find matching key in DEFAULT_UNIT_WEIGHTS (which are mostly lowercase)
+        # But we want to preserve the casing of the item['unit'] if possible, or use the key
+        
+        if preferred_unit_lower in DEFAULT_UNIT_WEIGHTS:
+            weight_per_unit = DEFAULT_UNIT_WEIGHTS[preferred_unit_lower]
+            if weight_per_unit > 0:
+                final_qty = grams / weight_per_unit
+                final_unit = item.get("unit") # Use original casing
+        else:
+            # Standard conversion to kg/l if large enough
+            if final_qty >= 1000:
+                final_qty /= 1000.0
+                final_unit = "l" if is_liquid else "kg"
+        
         items.append({
-            "ingredient_name": item["ingredient_name"],
-            "quantity": item["quantity"],
-            "unit": item["unit"],
+            "ingredient_name": name,
+            "quantity": round(final_qty, 2),
+            "unit": final_unit,
             "fdc_id": item.get("fdc_id"),
+            "total_grams": grams, # For internal use
         })
     
     return items
 
 
+
 def _normalize_ingredient_name(name: str) -> str:
     """
     Normalize ingredient name for matching.
-    
-    Note: This is a simple normalization. For production, consider:
-    - Fuzzy matching (e.g., using difflib or rapidfuzz)
-    - Synonym handling (e.g., "chicken breast" vs "chicken, breast")
-    - Unit removal (e.g., "chicken 200g" vs "chicken")
+    Uses the same logic as the ingredient parser for consistency.
     """
     if not name:
         return ""
-    # Basic normalization: lowercase, strip, remove extra spaces
-    normalized = " ".join(name.lower().strip().split())
-    # Remove common punctuation that might cause mismatches
-    normalized = normalized.replace(",", "").replace(";", "").replace(":", "")
-    return normalized
+    parsed = parse_ingredient_string(name)
+    return parsed["name"].lower().strip()
 
 
 @tool
@@ -279,45 +294,87 @@ async def pantry_diff_tool(
     if user_id_auto_detected:
         yield Response(f"ℹ️ Using user_id from profile: {user_id[:8]}...")
 
-    # Load plan from Weaviate database (source of truth)
-    plan = None
-    plan_source = None
-    plan_id = None
-    plan_user_id = None
-
-    if plan_id:
-        # Load specific plan by plan_id
-        from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
-        plan = load_plan_from_weaviate(plan_id, client_manager, user_id)
-        if plan:
-            plan_source = plan.get("plan_type", "day") + "_plan"
-    elif user_id:
-        # Load latest plan for user
-        from MealAgent.tools.utils.plan_loader import load_latest_plan_from_weaviate
-        plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
-        if not plan:
-            plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
-    
-    # Fallback: try environment cache (only as last resort)
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    if not plan:
-        logger.warning("pantry_diff_tool: No plan from database, trying environment cache")
-        day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
-        if day_plan_results and day_plan_results[0]["objects"]:
-            plan = day_plan_results[0]["objects"][0]
-            plan_source = "plan_day_e2e_tool"
-            yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
+    # Determine target date (default to today)
+    target_date = kwargs.get("date")
+    if not target_date:
+        # Check if date is in query string (best effort for Vietnamese)
+        query = kwargs.get("query", "").lower()
+        if "hôm nay" in query or "hom nay" in query:
+            target_date = datetime.now(timezone.utc).date().isoformat()
+        elif "ngày mai" in query or "ngay mai" in query:
+            target_date = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+        elif "hôm qua" in query or "hom qua" in query:
+            target_date = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
         else:
-            week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
-            if week_plan_results and week_plan_results[0]["objects"]:
-                plan = week_plan_results[0]["objects"][0]
-                plan_source = "plan_week_e2e_tool"
-                yield Response("⚠️ Using cached plan (please provide plan_id or user_id for database access)")
-    
+            # Check for dd/mm or yyyy-mm-dd
+            match = re.search(r"(\d{4}-\d{2}-\d{2})", query)
+            if match:
+                target_date = match.group(1)
+            else:
+                # Default to today
+                target_date = datetime.now(timezone.utc).date().isoformat()
+
+    plan = None
+    plan_source = "none"
+    is_today = (target_date == datetime.now(timezone.utc).date().isoformat())
+
+    # 1. Environment Cache (Only if today and no explicit plan_id)
+    if is_today and not kwargs.get("plan_id"):
+        # Detect preference from query
+        query = kwargs.get("query", "").lower()
+        prefers_week = "tuần" in query or "week" in query
+        
+        # Pull both from cache
+        day_plan_results = tree_data.environment.find("plan_day_e2e_tool", "plan")
+        week_plan_results = tree_data.environment.find("plan_week_e2e_tool", "plan")
+        
+        # Prioritize based on intent
+        if prefers_week and week_plan_results and week_plan_results[-1].get("objects"):
+            plan = week_plan_results[-1]["objects"][0]
+            plan_source = "current_session"
+            yield Response("💡 Using weekly plan from current chat session")
+        elif day_plan_results and day_plan_results[-1].get("objects"):
+            plan = day_plan_results[-1]["objects"][0]
+            plan_source = "current_session"
+            yield Response("💡 Using plan from current chat session")
+        elif week_plan_results and week_plan_results[-1].get("objects"):
+            plan = week_plan_results[-1]["objects"][0]
+            plan_source = "current_session"
+            yield Response("💡 Using weekly plan from current chat session")
+
+    # 2. MealLogEntry (Accepted/Consumed meals for the specific date)
+    if not plan and not kwargs.get("plan_id"):
+        from MealAgent.tools.utils.plan_loader import load_plan_from_logs
+        plan = load_plan_from_logs(user_id, client_manager, target_date)
+        if plan:
+            plan_source = "accepted_meals"
+            yield Response(f"✅ Loaded accepted meals for {target_date}")
+
+    # 3. MealPlan (Suggested plans in database)
     if not plan:
-        yield Error("No plan found. Please provide plan_id or user_id, or run plan_day_e2e_tool/plan_week_e2e_tool first.")
+        from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate, load_plan_by_date, load_latest_plan_from_weaviate
+        
+        if kwargs.get("plan_id"):
+            plan = load_plan_from_weaviate(kwargs["plan_id"], client_manager, user_id)
+            if plan: plan_source = "specific_plan"
+        else:
+            # Try specific date in suggest plans
+            plan = load_plan_by_date(user_id, client_manager, target_date, "day")
+            if not plan:
+                plan = load_plan_by_date(user_id, client_manager, target_date, "week")
+            
+            # Fallback: Latest plan if it's today and nothing else found
+            if not plan and is_today:
+                plan = load_latest_plan_from_weaviate(user_id, client_manager, "day")
+                if not plan:
+                    plan = load_latest_plan_from_weaviate(user_id, client_manager, "week")
+            
+            if plan:
+                plan_source = "suggested_plan"
+                yield Response(f"📋 Loaded latest suggested plan for {target_date if plan.get('start_date') == target_date else 'the user'}")
+
+    if not plan:
+        yield Error(f"No plan found for {target_date}. Please generate a plan first.")
         return
     
     plan_id = plan.get("plan_id")
@@ -331,43 +388,36 @@ async def pantry_diff_tool(
     else:
         logger.warning(f"pantry_diff_tool: Plan {plan_id} has no start_date field")
     
+    client = client_manager.get_client()
+    
     # Extract shopping items from plan
-    shopping_items = _extract_ingredients_from_plan(plan)
-    yield Response(f"📋 Extracted {len(shopping_items)} ingredient(s) from {plan_type} plan")
+    shopping_items = _extract_ingredients_from_plan(plan, client=client)
+    yield Response(f"📋 Extracted and aggregated {len(shopping_items)} ingredient(s) from {plan_type} plan")
 
-    # Load pantry state from Weaviate database
+    # Load pantry state from Weaviate database (PantryItem collection)
     try:
         client = client_manager.get_client()
-        pantry_collection = client.collections.get("Pantry")
+        try:
+            item_collection = client.collections.get("PantryItem")
+        except Exception as e:
+            yield Error(f"PantryItem collection not found: {str(e)}. Please ensure collections are created.")
+            return
         
-        # Find pantry for user
-        pantry_filter = build_filters_from_where({
-            "path": ["user_id"], "operator": "Equal", "valueString": plan_user_id
-        })
-        pantry_results = pantry_collection.query.fetch_objects(filters=pantry_filter, limit=1)
+        # Get all pantry items for user
+        items_filter = build_filters_from_where(
+            {"path": ["user_id"], "operator": "Equal", "valueString": plan_user_id}
+        )
+        items_results = item_collection.query.fetch_objects(filters=items_filter, limit=500)
         
-        if pantry_results.objects:
-            pantry_obj = pantry_results.objects[0]
-            pantry_state = pantry_obj.properties
-            pantry_items = pantry_state.get("items", [])
-            yield Response(f"📦 Loaded pantry with {len(pantry_items)} item(s) from database")
-        else:
-            # Fallback: try environment cache
-            logger.warning("pantry_diff_tool: No pantry from database, trying environment cache")
-            pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
-            if pantry_results and pantry_results[0].get("objects"):
-                pantry_state = pantry_results[0]["objects"][0]
-                pantry_items = pantry_state.get("items", [])
-                yield Response("⚠️ Using cached pantry (please ensure pantry is saved to database)")
-            else:
-                yield Error("Pantry state not found in database. Please create or update your pantry first.")
-                return
+        pantry_items = [obj.properties for obj in items_results.objects]
+        yield Response(f"📦 Loaded pantry with {len(pantry_items)} item(s) from database")
+        
     except Exception as e:
         logger.error(f"Failed to load pantry from Weaviate: {e}")
         # Fallback: try environment cache
         pantry_results = tree_data.environment.find("pantry_crud_tool", "state")
-        if pantry_results and pantry_results[0].get("objects"):
-            pantry_state = pantry_results[0]["objects"][0]
+        if pantry_results and pantry_results[-1].get("objects"):
+            pantry_state = pantry_results[-1]["objects"][0]
             pantry_items = pantry_state.get("items", [])
             yield Response("⚠️ Using cached pantry (database access failed)")
         else:
@@ -419,27 +469,39 @@ async def pantry_diff_tool(
                 # Calculate difference
                 needed_grams = shop_grams - pantry_grams
 
-                if needed_grams > 0:
-                    # Still need to buy
-                    # Note: Quantity is in grams after conversion. 
-                    # For non-gram units, we keep the original unit but quantity represents grams.
-                    # In production, consider converting back to original unit using FdcPortion.
+                if needed_grams > 0.1:  # Only add if significant amount needed
+                    # Convert to sensible display unit
+                    # Convert to sensible display unit
+                    display_qty = needed_grams
+                    is_liquid = shop_unit.lower() in ["ml", "l", "lít"]
+                    
+                    if shop_unit.lower() in DEFAULT_UNIT_WEIGHTS:
+                         weight_per_unit = DEFAULT_UNIT_WEIGHTS[shop_unit.lower()]
+                         if weight_per_unit > 0:
+                            display_qty = needed_grams / weight_per_unit
+                            display_unit = shop_unit
+                         else:
+                            display_unit = "ml" if is_liquid else "g"
+                    else:
+                        display_unit = "ml" if is_liquid else "g"
+                        if display_qty >= 1000:
+                            display_qty /= 1000.0
+                            display_unit = "l" if is_liquid else "kg"
+                        
                     final_item = {
                         "ingredient_name": ingredient_name,
-                        "quantity": needed_grams,  # Always in grams after conversion
-                        "unit": "g",  # Standardized to grams for consistency
+                        "quantity": round(display_qty, 2),
+                        "unit": display_unit,
                         "fdc_id": shop_fdc_id,
                         "original_quantity": shop_quantity,
                         "original_unit": shop_unit,
-                        "pantry_deducted": pantry_grams,
+                        "pantry_deducted_grams": pantry_grams,
                     }
                     final_items.append(final_item)
-                elif needed_grams < -0.1:  # Small tolerance
-                    # Have more than needed
+                elif needed_grams < -0.1:
                     warnings.append(f"{ingredient_name}: pantry has {pantry_grams:.1f}g, only need {shop_grams:.1f}g")
-                # If needed_grams is ~0, skip (have exactly what's needed)
             else:
-                # Not in pantry, need to buy all
+                # Not in pantry, use the already aggregated/sensible version from shopping_items
                 final_items.append(shop_item)
 
         diff_output = {

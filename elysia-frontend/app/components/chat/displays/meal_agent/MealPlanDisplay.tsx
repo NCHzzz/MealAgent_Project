@@ -383,10 +383,16 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
   const renderWeeklyPlan = (plan: MealPlanPayload) => {
     if (plan.plan_type !== "week" || !plan.days) return null;
 
-    const days = Object.entries(plan.days).map(([key, day]) => ({
+    const sortedDays = Object.entries(plan.days).sort((a, b) => {
+      const dayNumA = parseInt(a[0].replace('day_', '')) || 0;
+      const dayNumB = parseInt(b[0].replace('day_', '')) || 0;
+      return dayNumA - dayNumB;
+    }).map(([key, day]) => ({
       key,
       ...day,
     }));
+
+    const mealOrder = ['breakfast', 'lunch', 'dinner'];
 
     return (
       <Card className="w-full bg-background_alt border-secondary/10">
@@ -412,7 +418,7 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
         <CardContent className="space-y-4">
           {/* Days */}
           <div className="space-y-4">
-            {days.map((day, idx) => (
+            {sortedDays.map((day, idx) => (
               <div
                 key={day.key}
                 className="p-3 bg-background rounded-lg border border-secondary/5"
@@ -426,7 +432,14 @@ const MealPlanDisplay: React.FC<MealPlanDisplayProps> = ({
                   </div>
                 </div>
                 <div className="space-y-2">
-                  {Object.entries(day.meals).map(
+                  {Object.entries(day.meals)
+                    .sort(([keyA], [keyB]) => {
+                       const idxA = mealOrder.indexOf(keyA);
+                       const idxB = mealOrder.indexOf(keyB);
+                       // If not found (e.g. snack), put at the end
+                       return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+                    })
+                    .map(
                     ([mealKey, meal]: [string, WeeklyMeal]) => (
                       <div
                         key={mealKey}

@@ -39,6 +39,24 @@ type AuthContextValue = {
 
 const STORAGE_KEY = "elysia_auth_user";
 
+
+
+/**
+ * Decode JWT token and extract payload (without verification - backend validates)
+ */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1];
+    // Base64Url decode
+    const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
 export const AuthContext = createContext<AuthContextValue>({
   authUser: null,
   profile: null,
@@ -66,6 +84,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       try {
         const parsed = JSON.parse(cached) as AuthUser;
         setAuthUser(parsed);
+        // Extract cached profile from JWT immediately (no API call needed)
+        if (parsed.token) {
+          const jwtPayload = decodeJwtPayload(parsed.token);
+          if (jwtPayload?.profile) {
+            setProfile(jwtPayload.profile as UserProfileResponse);
+            setLoading(false);
+            return; // Skip API call, we have cached profile
+          }
+        }
       } catch (err) {
         console.error(err);
         window.localStorage.removeItem(STORAGE_KEY);
@@ -84,7 +111,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       }
       return;
     }
-    // Fetch profile when authUser token is available
+    // Check if we already have profile from JWT cache
+    if (profile) {
+      setLoading(false);
+      return; // Already have cached profile, skip API call
+    }
+    // Fetch full profile only if not cached (rare case)
     const loadProfile = async () => {
       setLoading(true);
       try {

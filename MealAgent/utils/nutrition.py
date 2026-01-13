@@ -287,6 +287,22 @@ def adjust_targets_by_goal(
         fat_g = (target_calories * fat_share) / 9.0  # 1g fat = 9 cal
         carb_g = (target_calories * carb_share) / 4.0  # 1g carb = 4 cal
         
+        # CRITICAL: Cap protein at 2.5g/kg to prevent excessive intake for high TDEE
+        # This fixes the issue where high TDEE with fixed % (e.g. 35%) yields 300g+ protein.
+        if weight_kg:
+            max_protein_g = 2.5 * weight_kg
+            if protein_g > max_protein_g:
+                excess_protein_g = protein_g - max_protein_g
+                excess_cal = excess_protein_g * 4.0
+                
+                # Cap the protein
+                protein_g = max_protein_g
+                
+                # Redistribute excess calories to Carbs (primary energy source)
+                # We could split with Fat, but carbs are more standard for buffer.
+                carb_g += excess_cal / 4.0
+                
+                # Recalculate shares will happen below in the shared logic block
         # For weight_loss and maintenance, ensure minimum protein per kg for muscle preservation
         if weight_kg and goal_lower in ("weight_loss", "maintenance"):
             min_protein_per_kg = PROTEIN_REQUIREMENTS_G_PER_KG.get(goal_lower, 1.4)

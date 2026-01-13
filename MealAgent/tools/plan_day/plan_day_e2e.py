@@ -159,7 +159,7 @@ def _create_default_white_rice_recipe() -> Dict[str, Any]:
         "sugar_g": 0.1,
         "sodium_mg": 1.0,
         "description": "Cơm trắng nấu từ gạo tẻ, món cơ bản trong bữa ăn Việt Nam",
-        "ingredients": ["Gạo tẻ", "Nước"],
+        "ingredients": ["100g Gạo tẻ", "150ml Nước"],
         "cooking_time_min": 30,
         "serving_size": "1 chén",
         "is_default": True,  # Flag to indicate this is a default recipe
@@ -310,8 +310,12 @@ def _enrich_rice_meal(
             target_macros=targets,
             require_macros=True,
             min_kcal=250.0,
-            max_kcal=main_max_kcal,
+            # CRITICAL: Clamp max_kcal to what is needed (with 10% buffer) to avoid overshoot
+            # But ensure at least 400kcal window for main dishes
+            max_kcal=min(main_max_kcal, max(400.0, kcal_need * 1.1)),
             min_protein=28.0,
+            # CRITICAL: Enforce fat limit for forced main (allow up to 25g or 40% of daily)
+            max_fat=max(25.0, targets.get("fat_g", 60.0) * 0.40) if targets else 25.0,
         )
         if forced_main:
             meal_main = forced_main
@@ -1116,6 +1120,15 @@ async def plan_day_e2e_tool(
         macro_tolerance_percent,
         recent_plan_window_minutes,
     )
+
+    # CRITICAL: Sanitize inputs that might be passed as string "None" by LLM
+    if str(start_date).lower() == "none":
+        start_date = None
+    if str(user_id).lower() == "none":
+        user_id = None
+    if str(plan_id).lower() == "none":
+        plan_id = None
+
     yield Response("🍽️ Planning your daily meals (breakfast, lunch, dinner)...")
 
     # Local helpers to keep recipe objects and macros consistent across the long workflow.
@@ -2371,6 +2384,8 @@ async def plan_day_e2e_tool(
                 min_kcal=100.0,
                 max_kcal=breakfast_max_kcal,  # CRITICAL: Enforce kcal limit
                 min_protein=min_breakfast_protein,  # CRITICAL: Require minimum protein
+                # CRITICAL: Enforce fat limit (20g for rule-based breakfast as it's lighter)
+                max_fat=20.0,
             )
             if breakfast and _is_hotpot(breakfast):
                 logging.warning("BREAKFAST_REJECT_HOTPOT: Rule-based breakfast is hotpot, retrying fallback...")
@@ -2392,6 +2407,10 @@ async def plan_day_e2e_tool(
                 min_breakfast_protein = 18.0
             else:
                 min_breakfast_protein = 15.0
+
+            # CRITICAL: Calculate max fat for breakfast (approx 30% of daily / 3 meals)
+            daily_fat = targets.get("fat_g", 60.0) if targets else 60.0
+            max_breakfast_fat = max(15.0, daily_fat * 0.35)  # Allow up to 35% of daily fat for breakfast
             
             if breakfast_targets and remaining_targets:
                 protein_remaining = remaining_targets.get("protein_g", 0.0)
@@ -2412,6 +2431,7 @@ async def plan_day_e2e_tool(
                 min_kcal=100.0,
                 max_kcal=breakfast_max_kcal,  # CRITICAL: Enforce kcal limit
                 min_protein=min_breakfast_protein,  # CRITICAL: Still require minimum protein
+                max_fat=max_breakfast_fat,  # CRITICAL: Enforce fat limit
             )
             if breakfast and _is_hotpot(breakfast):
                 logging.warning("BREAKFAST_REJECT_HOTPOT: Fallback breakfast is hotpot, clearing...")
@@ -2830,14 +2850,14 @@ async def plan_day_e2e_tool(
                     fat_excess_ratio = (total_consumed_fat - daily_fat) / daily_fat if daily_fat > 0 and total_consumed_fat > daily_fat else 0.0
                     carb_excess_ratio = (total_consumed_carb - daily_carb) / daily_carb if daily_carb > 0 and total_consumed_carb > daily_carb else 0.0
                     kcal_excess_ratio = (total_consumed_kcal - daily_kcal) / daily_kcal if daily_kcal > 0 and total_consumed_kcal > daily_kcal else 0.0
-                    has_severe_fat_excess = fat_excess_ratio > 0.15  # Balanced: 15% to prevent over-eating but allow nutrition
-                    has_severe_carb_excess = carb_excess_ratio > 0.15  # Balanced: 15%
-                    has_severe_kcal_excess = kcal_excess_ratio > 0.15  # Balanced: 15%
+                    has_severe_fat_excess = fat_excess_ratio > 0.10  # Balanced: 10% to prevent over-eating but allow nutrition
+                    has_severe_carb_excess = carb_excess_ratio > 0.10  # Balanced: 10%
+                    has_severe_kcal_excess = kcal_excess_ratio > 0.10  # Balanced: 10%
                     
-                    # CRITICAL: Stop immediately if fat excess is very high (>40%) - this is unhealthy
-                    if fat_excess_ratio > 0.40:
-                        # Only continue if we REALLY need protein/kcal (very high threshold: >35% protein or >40% kcal)
-                        if protein_deficit_ratio > 0.35 or kcal_deficit_ratio > 0.40:
+                    # CRITICAL: Stop immediately if fat excess is very high (>15%) - this is unhealthy
+                    if fat_excess_ratio > 0.15:
+                        # Only continue if we REALLY need protein/kcal (very high threshold: >20% protein or >20% kcal)
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.20:
                             # Continue only if deficit is critical
                             pass
                         else:
@@ -2849,9 +2869,9 @@ async def plan_day_e2e_tool(
                                 f"Stopping to prevent unhealthy fat excess"
                             )
                             break
-                    # CRITICAL: Stop if carb excess is extremely high (>50%)
-                    elif carb_excess_ratio > 0.50:
-                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                    # CRITICAL: Stop if carb excess is high (>20%)
+                    elif carb_excess_ratio > 0.20:
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.20:
                             pass
                         else:
                             logging.warning(
@@ -2862,26 +2882,26 @@ async def plan_day_e2e_tool(
                                 f"Stopping to prevent unhealthy carb excess"
                             )
                             break
-                    # CRITICAL: Stop if kcal excess is extremely high (>50%)
-                    elif kcal_excess_ratio > 0.50:
-                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                    # CRITICAL: Stop if kcal excess is high (>20%)
+                    elif kcal_excess_ratio > 0.20:
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.20:
                             pass
                         else:
                             logging.warning(
-                                f"LUNCH_SUPP_STOP_EXCESS: Extreme kcal excess detected! "
+                                f"LUNCH_SUPP_STOP_EXCESS: High kcal excess detected! "
                                 f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
                                 f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
                                 f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
                                 f"Stopping to prevent unhealthy kcal excess"
                             )
                             break
-                    # For moderate excess (15-50%), use balanced logic
+                    # For moderate excess (10-20%), use balanced logic
                     elif has_severe_fat_excess or has_severe_carb_excess or has_severe_kcal_excess:
                         # Continue if we still have significant deficit (prioritize nutrition)
-                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.25:
+                        if protein_deficit_ratio > 0.15 or kcal_deficit_ratio > 0.15:
                             # Continue adding despite moderate excess because deficit is high
                             pass
-                        elif protein_deficit_ratio < 0.20 and kcal_deficit_ratio < 0.25:  # Only stop if deficit is low
+                        elif protein_deficit_ratio < 0.15 and kcal_deficit_ratio < 0.15:  # Only stop if deficit is low
                             logging.warning(
                                 f"LUNCH_SUPP_STOP_EXCESS: Moderate excess detected! "
                                 f"fat_excess={fat_excess_ratio*100:.1f}% | "
@@ -2898,7 +2918,7 @@ async def plan_day_e2e_tool(
                     current_main_count = sum(1 for d in current_lunch_dishes if _is_main_dish(d))
                     if current_main_count >= 3:
                         # Only stop if daily deficit is low - otherwise continue to meet daily targets
-                        if kcal_deficit_ratio < 0.15 and protein_deficit_ratio < 0.20:
+                        if kcal_deficit_ratio < 0.10 and protein_deficit_ratio < 0.10:
                             logging.debug(
                                 f"LUNCH_SUPP_STOP: Too many main dishes ({current_main_count}) AND "
                                 f"daily deficit is low (kcal={kcal_deficit_ratio*100:.1f}%, protein={protein_deficit_ratio*100:.1f}%), "
@@ -2929,7 +2949,7 @@ async def plan_day_e2e_tool(
                         )
                         break
                     # If daily deficit is still high (>20% kcal or >25% protein), continue even if meal is large
-                    elif kcal_deficit_ratio > 0.20 or protein_deficit_ratio > 0.25:
+                    elif kcal_deficit_ratio > 0.15 or protein_deficit_ratio > 0.15:
                         # Continue adding to meet daily targets, even if meal exceeds normal limits
                         logging.debug(
                             f"LUNCH_SUPP_CONTINUE: Daily deficit still high "
@@ -2951,13 +2971,13 @@ async def plan_day_e2e_tool(
                         supplementary_dishes = []
                     else:
                         # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
-                        # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
-                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                            effective_meal_max_kcal = lunch_max_kcal * 1.4  # Allow 40% when deficit is very high
-                        elif is_lunch_noodle or is_lunch_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                            effective_meal_max_kcal = lunch_max_kcal * 1.3  # Allow 30% for combined/noodle or medium deficit
+                        # Increase tolerance when deficit is significant (>15% protein or >20% kcal)
+                        if protein_deficit_ratio > 0.15 or kcal_deficit_ratio > 0.20:
+                            effective_meal_max_kcal = lunch_max_kcal * 1.15  # Allow 15% when deficit is high
+                        elif is_lunch_noodle or is_lunch_combined or protein_deficit_ratio > 0.10 or kcal_deficit_ratio > 0.15:
+                            effective_meal_max_kcal = lunch_max_kcal * 1.10  # Allow 10% for combined/noodle or medium deficit
                         else:
-                            effective_meal_max_kcal = lunch_max_kcal * 1.2  # Normal case: 20%
+                            effective_meal_max_kcal = lunch_max_kcal * 1.05  # Normal case: 20%
                         supplementary_dishes = add_supplementary_dishes(
                             "lunch",
                             current_lunch_dishes,
@@ -3035,7 +3055,9 @@ async def plan_day_e2e_tool(
                             assigned = True  # Assigned to lunch_soup, don't double-count
                             yield Response(f"✅ Added soup to meet nutrition targets: {dish_name}")
                         else:
-                            logging.info(f"Added additional soup to lunch: {dish_name}")
+                            # CRITICAL: Limit soups to 1 per meal - prevent excessive liquids
+                            logging.info(f"Skipping additional soup for lunch (limit 1): {dish_name}")
+                            continue  # Skip adding this soup to avoid bloat
                     
                     # Update excluded (remaining_targets already updated in iterative loop above)
                     # Only append if not already in excluded (to avoid duplicates)
@@ -3113,12 +3135,12 @@ async def plan_day_e2e_tool(
                     # Log breakdown of lunch components
                     # CRITICAL: If lunch total exceeds lunch_max_kcal, log warning but allow for better nutrition
                     # Increased tolerance to 50% to ensure we meet nutritional targets
-                    if lunch_total_kcal > lunch_max_kcal * 1.4:  # Allow up to 40% when deficit is high
+                    if lunch_total_kcal > lunch_max_kcal * 1.15:  # Allow up to 40% when deficit is high
                         logging.warning(
                             f"Lunch total kcal ({lunch_total_kcal:.1f}) exceeds limit ({lunch_max_kcal:.1f}) by "
                             f"{((lunch_total_kcal / lunch_max_kcal - 1.0) * 100):.1f}%"
                         )
-                    elif lunch_total_kcal > lunch_max_kcal * 1.2:
+                    elif lunch_total_kcal > lunch_max_kcal * 1.10:
                         logging.debug(
                             f"Lunch total kcal ({lunch_total_kcal:.1f}) exceeds limit ({lunch_max_kcal:.1f}) by "
                             f"{((lunch_total_kcal / lunch_max_kcal - 1.0) * 100):.1f}% (within tolerance for nutrition)"
@@ -3222,6 +3244,7 @@ async def plan_day_e2e_tool(
                 min_kcal=min_main_kcal,  # CRITICAL: Require minimum kcal for better nutrition
                 max_kcal=max_main_kcal,  # CRITICAL: Dynamic kcal limit
                 min_protein=min_main_protein,  # CRITICAL: Require minimum protein
+                max_fat=max_lunch_fat,
             )
             
             if lunch_main:
@@ -3252,6 +3275,7 @@ async def plan_day_e2e_tool(
                     min_kcal=min_main_kcal,  # CRITICAL: Require minimum kcal for better nutrition
                     max_kcal=max_main_kcal,
                     min_protein=min_main_protein,
+                    max_fat=max_lunch_fat,
                 )
                 # Validate it's actually a main dish
                 if lunch_main and not _is_main_dish(lunch_main):
@@ -3577,14 +3601,14 @@ async def plan_day_e2e_tool(
                     fat_excess_ratio = (total_consumed_fat - daily_fat) / daily_fat if daily_fat > 0 and total_consumed_fat > daily_fat else 0.0
                     carb_excess_ratio = (total_consumed_carb - daily_carb) / daily_carb if daily_carb > 0 and total_consumed_carb > daily_carb else 0.0
                     kcal_excess_ratio = (total_consumed_kcal - daily_kcal) / daily_kcal if daily_kcal > 0 and total_consumed_kcal > daily_kcal else 0.0
-                    has_severe_fat_excess = fat_excess_ratio > 0.15  # Balanced: 15% to prevent over-eating but allow nutrition
-                    has_severe_carb_excess = carb_excess_ratio > 0.15  # Balanced: 15%
-                    has_severe_kcal_excess = kcal_excess_ratio > 0.15  # Balanced: 15%
+                    has_severe_fat_excess = fat_excess_ratio > 0.10  # Balanced: 10% to prevent over-eating but allow nutrition
+                    has_severe_carb_excess = carb_excess_ratio > 0.10  # Balanced: 10%
+                    has_severe_kcal_excess = kcal_excess_ratio > 0.10  # Balanced: 10%
                     
-                    # CRITICAL: Stop immediately if fat excess is very high (>40%) - this is unhealthy
-                    if fat_excess_ratio > 0.40:
-                        # Only continue if we REALLY need protein/kcal (very high threshold: >35% protein or >40% kcal)
-                        if protein_deficit_ratio > 0.35 or kcal_deficit_ratio > 0.40:
+                    # CRITICAL: Stop immediately if fat excess is very high (15%) - this is unhealthy
+                    if fat_excess_ratio > 0.15:
+                        # Only continue if we REALLY need protein/kcal (very high threshold: >20% protein or >20% kcal)
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.20:
                             # Continue only if deficit is critical
                             pass
                         else:
@@ -3596,39 +3620,39 @@ async def plan_day_e2e_tool(
                                 f"Stopping to prevent unhealthy fat excess"
                             )
                             break
-                    # CRITICAL: Stop if carb excess is extremely high (>50%)
-                    elif carb_excess_ratio > 0.50:
-                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                    # CRITICAL: Stop if carb excess is extremely high (20%)
+                    elif carb_excess_ratio > 0.20:
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.20:
                             pass
                         else:
                             logging.warning(
-                                f"DINNER_SUPP_STOP_EXCESS: Extreme carb excess detected! "
+                                f"DINNER_SUPP_STOP_EXCESS: High carb excess detected! "
                                 f"carb_excess={carb_excess_ratio*100:.1f}% | "
                                 f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
                                 f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
                                 f"Stopping to prevent unhealthy carb excess"
                             )
                             break
-                    # CRITICAL: Stop if kcal excess is extremely high (>50%)
-                    elif kcal_excess_ratio > 0.50:
-                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.35:
+                    # CRITICAL: Stop if kcal excess is extremely high (20%)
+                    elif kcal_excess_ratio > 0.20:
+                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.20:
                             pass
                         else:
                             logging.warning(
-                                f"DINNER_SUPP_STOP_EXCESS: Extreme kcal excess detected! "
+                                f"DINNER_SUPP_STOP_EXCESS: High kcal excess detected! "
                                 f"kcal_excess={kcal_excess_ratio*100:.1f}% | "
                                 f"protein_deficit={protein_deficit_ratio*100:.1f}% | "
                                 f"kcal_deficit={kcal_deficit_ratio*100:.1f}% | "
                                 f"Stopping to prevent unhealthy kcal excess"
                             )
                             break
-                    # For moderate excess (15-40%), use balanced logic
+                    # For moderate excess (15-20%), use balanced logic
                     elif has_severe_fat_excess or has_severe_carb_excess or has_severe_kcal_excess:
                         # Continue if we still have significant deficit (prioritize nutrition)
-                        if protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.25:
+                        if protein_deficit_ratio > 0.15 or kcal_deficit_ratio > 0.15:
                             # Continue adding despite moderate excess because deficit is high
                             pass
-                        elif protein_deficit_ratio < 0.20 and kcal_deficit_ratio < 0.25:  # Only stop if deficit is low
+                        elif protein_deficit_ratio < 0.15 and kcal_deficit_ratio < 0.15:  # Only stop if deficit is low
                             logging.warning(
                                 f"DINNER_SUPP_STOP_EXCESS: Moderate excess detected! "
                                 f"fat_excess={fat_excess_ratio*100:.1f}% | "
@@ -3645,7 +3669,7 @@ async def plan_day_e2e_tool(
                     current_main_count = sum(1 for d in current_dinner_dishes if _is_main_dish(d))
                     if current_main_count >= 3:
                         # Only stop if daily deficit is low - otherwise continue to meet daily targets
-                        if kcal_deficit_ratio < 0.15 and protein_deficit_ratio < 0.20:
+                        if kcal_deficit_ratio < 0.10 and protein_deficit_ratio < 0.10:
                             logging.debug(
                                 f"DINNER_SUPP_STOP: Too many main dishes ({current_main_count}) AND "
                                 f"daily deficit is low (kcal={kcal_deficit_ratio*100:.1f}%, protein={protein_deficit_ratio*100:.1f}%), "
@@ -3666,11 +3690,11 @@ async def plan_day_e2e_tool(
                     meal_size_ratio = current_meal_kcal / dinner_max_kcal if dinner_max_kcal > 0 else 0
                     
                     # Stop only if: (1) deficit is low AND (2) meal is already substantial (>80% of max)
-                    if kcal_deficit_ratio < 0.10 and protein_deficit_ratio < 0.15 and meal_size_ratio > 0.80:
+                    if kcal_deficit_ratio < 0.10 and protein_deficit_ratio < 0.10 and meal_size_ratio > 0.80:
                         logging.debug(
                             f"DINNER_SUPP_STOP: Close enough to targets "
                             f"(kcal_deficit={kcal_deficit_ratio*100:.1f}% < 10%, "
-                            f"protein_deficit={protein_deficit_ratio*100:.1f}% < 15%)"
+                            f"protein_deficit={protein_deficit_ratio*100:.1f}% < 10%)"
                         )
                         break
                     
@@ -3686,8 +3710,8 @@ async def plan_day_e2e_tool(
                     # Add supplementary dishes (skip if standalone noodle ONLY if daily deficit is low)
                     # CRITICAL: If daily deficit is high, still add dishes even for noodle to meet nutrition targets
                     if is_dinner_noodle:
-                        # Only skip if daily deficit is low (<15% kcal and <20% protein)
-                        if kcal_deficit_ratio < 0.15 and protein_deficit_ratio < 0.20:
+                        # Only skip if daily deficit is low (<10% kcal and <10% protein)
+                        if kcal_deficit_ratio < 0.10 and protein_deficit_ratio < 0.15:
                             logging.debug("DINNER_SUPP_SKIP: noodle dish selected and daily deficit is low; skipping supplementary dishes.")
                             supplementary_dishes = []
                         else:
@@ -3698,13 +3722,13 @@ async def plan_day_e2e_tool(
                             )
                             # Continue to add supplementary dishes below
                             # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
-                            # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
-                            if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                                effective_meal_max_kcal = dinner_max_kcal * 1.4  # Allow 40% when deficit is very high
-                            elif is_dinner_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                                effective_meal_max_kcal = dinner_max_kcal * 1.3  # Allow 30% for combined or medium deficit
+                            # Increase tolerance when deficit is significant (>15% protein or >20% kcal)
+                            if protein_deficit_ratio > 0.15 or kcal_deficit_ratio > 0.20:
+                                effective_meal_max_kcal = dinner_max_kcal * 1.15  # Allow 15% when deficit is high
+                            elif is_dinner_combined or protein_deficit_ratio > 0.10 or kcal_deficit_ratio > 0.15:
+                                effective_meal_max_kcal = dinner_max_kcal * 1.10  # Allow 10% for combined or medium deficit
                             else:
-                                effective_meal_max_kcal = dinner_max_kcal * 1.2  # Normal case: 20%
+                                effective_meal_max_kcal = dinner_max_kcal * 1.05  # Normal case: 20%
                             supplementary_dishes = add_supplementary_dishes(
                                 "dinner",
                                 current_dinner_dishes,
@@ -3730,13 +3754,13 @@ async def plan_day_e2e_tool(
                             supplementary_dishes = filtered_supplementary
                     else:
                         # CRITICAL: Allow more tolerance when deficit is high to meet nutrition targets
-                        # Increase tolerance when deficit is significant (>30% protein or >40% kcal)
-                        if protein_deficit_ratio > 0.30 or kcal_deficit_ratio > 0.40:
-                            effective_meal_max_kcal = dinner_max_kcal * 1.4  # Allow 40% when deficit is very high
-                        elif is_dinner_combined or protein_deficit_ratio > 0.20 or kcal_deficit_ratio > 0.30:
-                            effective_meal_max_kcal = dinner_max_kcal * 1.3  # Allow 30% for combined or medium deficit
+                         # Increase tolerance when deficit is significant (>15% protein or >20% kcal)
+                        if protein_deficit_ratio > 0.15 or kcal_deficit_ratio > 0.20:
+                            effective_meal_max_kcal = dinner_max_kcal * 1.15  # Allow 15% when deficit is high
+                        elif is_dinner_combined or protein_deficit_ratio > 0.10 or kcal_deficit_ratio > 0.15:
+                            effective_meal_max_kcal = dinner_max_kcal * 1.10  # Allow 10% for combined or medium deficit
                         else:
-                            effective_meal_max_kcal = dinner_max_kcal * 1.2  # Normal case: 20%
+                            effective_meal_max_kcal = dinner_max_kcal * 1.05  # Normal case: 20%
                         supplementary_dishes = add_supplementary_dishes(
                             "dinner",
                             current_dinner_dishes,
@@ -3818,7 +3842,9 @@ async def plan_day_e2e_tool(
                             assigned = True  # Assigned to dinner_soup, don't double-count
                             yield Response(f"✅ Added soup to meet nutrition targets: {dish_name}")
                         else:
-                            logging.info(f"Added additional soup to dinner: {dish_name}")
+                            # CRITICAL: Limit soups to 1 per meal - prevent excessive liquids
+                            logging.info(f"Skipping additional soup for dinner (limit 1): {dish_name}")
+                            continue  # Skip adding this soup to avoid bloat
                     
                     # Update excluded (remaining_targets already updated in iterative loop above)
                     # Only append if not already in excluded (to avoid duplicates)
@@ -3896,7 +3922,7 @@ async def plan_day_e2e_tool(
                     
                     # CRITICAL: If dinner total exceeds dinner_max_kcal, log warning but allow for better nutrition
                     # Increased tolerance to 50% to ensure we meet nutritional targets
-                    if dinner_total_kcal > dinner_max_kcal * 1.4:  # Allow up to 40% when deficit is high
+                    if dinner_total_kcal > dinner_max_kcal * 1.1:  # Allow up to 40% when deficit is high
                         logging.warning(
                             f"Dinner total kcal ({dinner_total_kcal:.1f}) exceeds limit ({dinner_max_kcal:.1f}) by "
                             f"{((dinner_total_kcal / dinner_max_kcal - 1.0) * 100):.1f}%"
@@ -3966,6 +3992,14 @@ async def plan_day_e2e_tool(
                 base_min_protein = 35.0  # Increased from 30.0
             else:
                 base_min_protein = 30.0  # Increased from 25.0
+
+            # CRITICAL: Calculate max fat for dinner main (allow up to 40% of daily fat)
+            daily_fat = targets.get("fat_g", 60.0) if targets else 60.0
+            max_dinner_fat = max(20.0, daily_fat * 0.40)
+            
+            # CRITICAL: Calculate max fat for dinner main (allow up to 40% of daily fat)
+            daily_fat = targets.get("fat_g", 60.0) if targets else 60.0
+            max_dinner_fat = max(20.0, daily_fat * 0.40)
             
             max_main_kcal = 700.0  # Increased from 550.0 to allow larger dishes
             min_main_protein = base_min_protein
@@ -4016,6 +4050,7 @@ async def plan_day_e2e_tool(
                 min_kcal=min_main_kcal,  # CRITICAL: Require minimum kcal for better nutrition
                 max_kcal=max_main_kcal,  # CRITICAL: Dynamic kcal limit
                 min_protein=min_main_protein,  # CRITICAL: Require minimum protein
+                max_fat=max_dinner_fat,  # CRITICAL: Enforce fat limit
             )
             
             if dinner_main:
@@ -4632,166 +4667,91 @@ async def plan_day_e2e_tool(
             _recompute_meal_macros(plan)
             total_macros = _calculate_plan_totals(plan)
         
-        # CRITICAL: Scale UP servings (1.0 - 2.0 max) if still below targets
-        # This helps meet daily kcal targets without adding too many dishes
-        # CRITICAL: Check ALL macros before scaling - don't scale if protein/fat already exceed tolerance
-        max_allowed_protein = target_protein * (1.0 + macro_tolerance_percent) if target_protein else 0.0
-        
+        # CRITICAL: Scale UP servings (INTEGER STEPS) if still below targets
+        # This helps meet daily kcal targets using WHOLE servings (Rice -> Main)
+        # Replaces previous fractional scaling which caused precision issues and user confusion
+
         # Check current macro status
         current_protein = total_macros.get("protein_g", 0.0)
-        current_fat = total_macros.get("fat_g", 0.0)
-        current_carb = total_macros.get("carb_g", 0.0)
         current_kcal = total_macros.get("kcal", 0.0)
         
-        protein_excess_ratio = (current_protein / target_protein - 1.0) if target_protein > 0 else 0.0
-        fat_excess_ratio = (current_fat / target_fat - 1.0) if target_fat > 0 else 0.0
-        carb_excess_ratio = (current_carb / target_carb - 1.0) if target_carb > 0 else 0.0
         kcal_deficit_ratio = (target_kcal - current_kcal) / target_kcal if target_kcal > 0 else 0.0
         
-        # Only scale UP if:
-        # 1. Kcal is below target (deficit > 5%)
-        # 2. Macros within tolerance OR kcal deficit is high enough to justify scaling despite mild excess
-        within_tolerance = (
-            protein_excess_ratio < macro_tolerance_percent
-            and fat_excess_ratio < macro_tolerance_percent
-            and carb_excess_ratio < macro_tolerance_percent
-        )
-        kcal_deficit_high = kcal_deficit_ratio > 0.20  # >20% deficit
-        mild_macro_excess = (
-            protein_excess_ratio < 0.35  # allow up to +35% protein if kcal thiếu nhiều
-            and fat_excess_ratio < 0.35
-            and carb_excess_ratio < 0.35
-        )
         should_scale_up = (
             target_kcal > 0
             and current_kcal < target_kcal * 0.95  # Kcal deficit > 5%
-            and (within_tolerance or (kcal_deficit_high and mild_macro_excess))
         )
         
         if should_scale_up:
-            # Calculate optimal scale based on kcal deficit
-            # More aggressive scaling: if deficit is >20%, allow up to 2.0x
-            if kcal_deficit_ratio > 0.20:
-                optimal_scale_kcal = min(2.0, 1.0 + (kcal_deficit_ratio * 2.0))  # More aggressive: up to 2.0x
-            else:
-                optimal_scale_kcal = min(2.0, 1.0 + (kcal_deficit_ratio * 1.5))  # Normal scaling
+            logging.info(f"PLAN_SERVING_INCREASE_START: kcal={current_kcal:.1f}/{target_kcal:.1f} (deficit {kcal_deficit_ratio*100:.1f}%) - attempting INTEGER TOP-UP")
             
-            # CRITICAL: Limit scale based on protein/fat/carb to prevent excessive excess
-            # Calculate max safe scale for each macro (if within tolerance); if we are already mildly over but kcal thiếu lớn, relax caps slightly
-            max_safe_scale = 2.0  # Default max
-            
-            if within_tolerance:
-                if target_protein > 0 and current_protein > 0:
-                    max_protein_scale = max_allowed_protein / current_protein if current_protein > 0 else 2.0
-                    max_safe_scale = min(max_safe_scale, max_protein_scale)
-                if target_fat > 0 and current_fat > 0:
-                    max_fat_scale = max_allowed_fat / current_fat if current_fat > 0 else 2.0
-                    max_safe_scale = min(max_safe_scale, max_fat_scale)
-                if target_carb > 0 and current_carb > 0:
-                    max_carb_scale = max_allowed_carb / current_carb if current_carb > 0 else 2.0
-                    max_safe_scale = min(max_safe_scale, max_carb_scale)
-            else:
-                # Nếu đang thiếu kcal >20% nhưng macro hơi dư, cho phép scale tới 1.3x để bù kcal mà không vượt quá xa
-                max_safe_scale = min(max_safe_scale, 1.3)
-            
-            # Use the minimum of kcal-based scale and safe scale
-            optimal_scale = min(optimal_scale_kcal, max_safe_scale)
-            
-            # Only scale up if it would meaningfully increase kcal (>3% increase)
-            if optimal_scale > 1.03:
-                logging.info(
-                    "PLAN_SERVING_INCREASE: Increasing servings to %.2f to meet kcal targets "
-                    "(before_scale: %.1f kcal, target: %.1f kcal, deficit: %.1f%%) | "
-                    "protein=%.1f/%.1f (%.1f%%) fat=%.1f/%.1f (%.1f%%) | "
-                    "max_safe_scale=%.2f (limited by macro constraints)",
-                    optimal_scale,
-                    current_kcal,
-                    target_kcal,
-                    kcal_deficit_ratio * 100,
-                    current_protein,
-                    target_protein,
-                    (current_protein / target_protein * 100) if target_protein > 0 else 0,
-                    current_fat,
-                    target_fat,
-                    (current_fat / target_fat * 100) if target_fat > 0 else 0,
-                    max_safe_scale,
-                )
-                
-                # Apply scale to all meals and accompaniments
-                for meal_data in plan.values():
-                    current_servings = meal_data.get("servings", 1.0)
-                    new_servings = min(2.0, round(current_servings * optimal_scale, 2))
-                    meal_data["servings"] = new_servings
-                    
-                    for acc in meal_data.get("accompaniments", []):
-                        acc_current_servings = acc.get("servings", 1.0)
-                        acc_new_servings = min(2.0, round(acc_current_servings * optimal_scale, 2))
-                        acc["servings"] = acc_new_servings
-                
-                # Recalculate macros with new servings
-                _recompute_meal_macros(plan)
+            # Max iterations increased to ensure we can scale rice (max 4) and mains (max 2)
+            # across multiple meals if deficits are large.
+            for _ in range(20):
+                # Recalculate deficits
                 total_macros = _calculate_plan_totals(plan)
+                current_kcal = total_macros.get("kcal", 0.0)
+                current_carb = total_macros.get("carb_g", 0.0)
                 
-                logging.info(
-                    "PLAN_SERVING_INCREASE_COMPLETE: New totals kcal=%.1f (target=%.1f, coverage=%.1f%%) | "
-                    "protein=%.1f/%.1f (%.1f%%) fat=%.1f/%.1f (%.1f%%) carb=%.1f/%.1f (%.1f%%)",
-                    total_macros.get("kcal", 0),
-                    target_kcal,
-                    (total_macros.get("kcal", 0) / target_kcal * 100) if target_kcal > 0 else 0,
-                    total_macros.get("protein_g", 0),
-                    target_protein,
-                    (total_macros.get("protein_g", 0) / target_protein * 100) if target_protein > 0 else 0,
-                    total_macros.get("fat_g", 0),
-                    target_fat,
-                    (total_macros.get("fat_g", 0) / target_fat * 100) if target_fat > 0 else 0,
-                    total_macros.get("carb_g", 0),
-                    target_carb,
-                    (total_macros.get("carb_g", 0) / target_carb * 100) if target_carb > 0 else 0,
-                )
-                logging.debug(
-                    "PLAN_SERVING_INCREASE_SERVINGS: breakfast=%.2f lunch=%.2f dinner=%.2f",
-                    plan.get("breakfast", {}).get("servings", 1.0),
-                    plan.get("lunch", {}).get("servings", 1.0),
-                    plan.get("dinner", {}).get("servings", 1.0),
-                )
-            else:
-                logging.debug(
-                    "PLAN_SERVING_INCREASE_SKIP: Optimal scale (%.2f) too small (<1.03), skipping scale UP",
-                    optimal_scale,
-                )
+                kcal_deficit = max(0.0, target_kcal - current_kcal)
+                carb_deficit = max(0.0, target_carb - current_carb)
+                
+                if kcal_deficit <= target_kcal * 0.05: # Stop if within 5%
+                    break
+
+                # Strategy 1: Top up Rice (Carbs + Kcal) - safest option
+                # Prioritize meals with rice
+                rice_topped_up = False
+                for meal_key in ("lunch", "dinner"):
+                    meal = plan.get(meal_key, {})
+                    recipe = meal.get("recipe", {})
+                    if _is_rice_recipe(recipe):
+                        current_servings = meal.get("servings", 1.0)
+                        # Cap rice at 4 bowls max (generous but realistic for high TDEE)
+                        if current_servings < 4.0:
+                             meal["servings"] += 1.0
+                             logging.info(f"PLAN_SERVING_INCREASE: Added +1 serving to {meal_key} rice (new: {meal['servings']})")
+                             rice_topped_up = True
+                             # Break inner loop to re-evaluate deficits after one change
+                             break 
+                            
+                if rice_topped_up:
+                    _recompute_meal_macros(plan)
+                    continue # Re-evaluate
+                    
+                # Strategy 2: Top up Main Dish (Protein + Fat + Kcal)
+                # Only if rice is maxed or not enough
+                main_topped_up = False
+                for meal_key in ("lunch", "dinner"):
+                    meal = plan.get(meal_key, {})
+                    # Iterate accompaniments to find main dish
+                    for acc in meal.get("accompaniments", []):
+                        acc_recipe = acc.get("recipe", {})
+                        if _is_main_dish(acc_recipe):
+                            current_acc_servings = acc.get("servings", 1.0)
+                            # Cap main dishes at 2 servings max
+                            if current_acc_servings < 2.0:
+                                acc["servings"] += 1.0
+                                logging.info(f"PLAN_SERVING_INCREASE: Added +1 serving to {meal_key} main '{acc_recipe.get('dish_name')}' (new: {acc['servings']})")
+                                main_topped_up = True
+                                break
+                    if main_topped_up:
+                        break
+                
+                if main_topped_up:
+                    _recompute_meal_macros(plan)
+                    continue
+                
+                # If no changes made, stop
+                break
+            total_macros = _calculate_plan_totals(plan)
+            logging.info(
+                "PLAN_SERVING_INCREASE_COMPLETE: New totals kcal=%.1f/%.1f (%.1f%%)",
+                total_macros.get("kcal", 0), target_kcal,
+                (total_macros.get("kcal", 0) / target_kcal * 100) if target_kcal > 0 else 0
+            ) 
         else:
-            # Log why we're not scaling up
-            if current_kcal >= target_kcal * 0.95:
-                logging.debug(
-                    "PLAN_SERVING_INCREASE_SKIP: Kcal already at %.1f%% of target (%.1f/%.1f), no need to scale UP",
-                    (current_kcal / target_kcal * 100) if target_kcal > 0 else 0,
-                    current_kcal,
-                    target_kcal,
-                )
-            elif protein_excess_ratio >= macro_tolerance_percent:
-                logging.warning(
-                    "PLAN_SERVING_INCREASE_SKIP: Protein already exceeds tolerance (%.1f%% excess, %.1f/%.1f), "
-                    "cannot scale UP without worsening excess",
-                    protein_excess_ratio * 100,
-                    current_protein,
-                    target_protein,
-                )
-            elif fat_excess_ratio >= macro_tolerance_percent:
-                logging.warning(
-                    "PLAN_SERVING_INCREASE_SKIP: Fat already exceeds tolerance (%.1f%% excess, %.1f/%.1f), "
-                    "cannot scale UP without worsening excess",
-                    fat_excess_ratio * 100,
-                    current_fat,
-                    target_fat,
-                )
-            elif carb_excess_ratio >= macro_tolerance_percent:
-                logging.warning(
-                    "PLAN_SERVING_INCREASE_SKIP: Carb already exceeds tolerance (%.1f%% excess, %.1f/%.1f), "
-                    "cannot scale UP without worsening excess",
-                    carb_excess_ratio * 100,
-                    current_carb,
-                    target_carb,
-                )
+            logging.debug("PLAN_SERVING_INCREASE_SKIP: Deficit within tolerance (<5%)")
 
         kcal_coverage = (total_macros["kcal"] / target_kcal * 100) if target_kcal > 0 else 0.0
         protein_coverage = (total_macros["protein_g"] / target_protein * 100) if target_protein > 0 else 0.0
@@ -4896,40 +4856,10 @@ async def plan_day_e2e_tool(
 
         # Normalize servings to allowed discrete values before final validation.
         # Rules: non-rice dishes => 1 or 2 servings; rice (incl. default) => 1..4.
-        _normalize_servings(plan)
+        _normalize_servings(plan) # RESTORED: User requested integer servings
         _recompute_meal_macros(plan)
         total_macros = _calculate_plan_totals(plan)
 
-        # Final carb/kcal top-up: if carb deficit remains, increase rice servings
-        # (lunch/dinner) up to the cap. Protein excess is acceptable; priority is
-        # kcal/carb as requested.
-        target_kcal = targets.get("tdee_kcal", 0.0) if targets else 0.0
-        target_carb = targets.get("carb_g", 0.0) if targets else 0.0
-        if target_kcal > 0 and target_carb > 0:
-            carb_deficit = max(0.0, target_carb - total_macros.get("carb_g", 0.0))
-            kcal_deficit = max(0.0, target_kcal - total_macros.get("kcal", 0.0))
-            if carb_deficit > 0 or kcal_deficit > 0:
-                for meal_key in ("lunch", "dinner"):
-                    meal = plan.get(meal_key, {})
-                    if not meal:
-                        continue
-                    recipe = meal.get("recipe") or {}
-                    # Skip top-up for noodle/combined dishes
-                    if _is_noodle_soup(recipe) or _is_combined_dish(recipe):
-                        continue
-                    # Ensure primary carb is rice; if not, swap to default white rice
-                    if not _is_rice_recipe(recipe):
-                        meal["recipe"] = _create_default_white_rice_recipe()
-                        recipe = meal["recipe"]
-                    # Increase rice servings while under cap and deficits remain
-                    while meal.get("servings", 1.0) < 4 and (carb_deficit > 0 or kcal_deficit > 0):
-                        meal["servings"] += 1.0
-                        _recompute_meal_macros(plan)
-                        total_macros = _calculate_plan_totals(plan)
-                        carb_deficit = max(0.0, target_carb - total_macros.get("carb_g", 0.0))
-                        kcal_deficit = max(0.0, target_kcal - total_macros.get("kcal", 0.0))
-                        if carb_deficit <= 0 and kcal_deficit <= 0:
-                            break
 
         # Step 5: Validate
         validation = {"valid": True, "macro_validation": {}, "constraint_validation": {}}
@@ -5154,6 +5084,19 @@ async def plan_day_e2e_tool(
             f"📋 Tóm tắt nhanh: 🌅 {bf_name} | 🍽️ {', '.join(lunch_items)} | 🌙 {', '.join(dinner_items)}"
         )
 
+        # CONTINUATION DETECTION:
+        # Check if the user's initial query requested a shopping list or cooking steps.
+        # This allows us to "Smart Stop" if only a plan was requested, saving tokens.
+        def _has_continuation_intent(query: str) -> bool:
+            lowered = (query or "").lower()
+            # Keywords for shopping/pantry
+            pantry_k = ["shopping", "mua sắm", "chợ", "nguyên liệu", "danh sách", "tủ lạnh", "pantry"]
+            # Keywords for cooking/instructions
+            cooking_k = ["nấu", "cách làm", "hướng dẫn", "bước", "cook", "recipe", "cooking"]
+            return any(k in lowered for k in pantry_k + cooking_k)
+
+        continuation_requested = _has_continuation_intent(query_text)
+
         yield Result(
             name="plan",
             objects=[plan_output],
@@ -5166,29 +5109,36 @@ async def plan_day_e2e_tool(
                 "plan_id": plan_output.get("plan_id"),
                 "user_id": user_id,
                 "can_accept": True,
-                "stop_calling_tool": True,
-                "end_conversation": True,
+                # SMART STOP: Only allow continuation if a follow-up action was likely requested
+                "stop_calling_tool": not continuation_requested,
+                "end_conversation": not continuation_requested,
             },
             payload_type="meal_plan",
+            # CRITICAL: Guide the LLM on what to do next if NOT stopping
+            llm_message=(
+                "DAILY PLAN GENERATED. STATUS: SUCCESS. "
+                "The plan has been summarized and displayed to the user. "
+                f"{'CONTINUATION DETECTED: Proceed to next request (shopping list or cooking steps).' if continuation_requested else 'NO CONTINUATION: Planning complete. The conversation will end now.'}"
+            ),
             display=True,
         )
 
         yield Response("👍 Kế hoạch đã sẵn sàng. Bạn có thể bấm Accept hoặc điều chỉnh.")
         
         logging.info(
-            "plan_day_e2e_tool: PLAN_READY | plan_id=%s | plan summarised inline (no cited_summarize).",
+            "plan_day_e2e_tool: PLAN_READY | plan_id=%s | continuation=%s | stop=%s",
             plan_output.get("plan_id"),
+            continuation_requested,
+            not continuation_requested,
         )
         
-        # Store plan_id in environment for support (quick reference, not source of truth)
-        # IMPORTANT: Environment is only for support - tools must load from Weaviate (database)
-        # This plan_id can be used by other tools to quickly reference, but they must load from Weaviate
+        # Store plan_id in environment for support
         if plan_output.get("plan_id"):
             try:
                 tree_data.environment.add_objects(
                     "plan_day_e2e_tool",
                     "plan_id",
-                    [{"plan_id": plan_output.get("plan_id")}],  # Must be dict, not string
+                    [{"plan_id": plan_output.get("plan_id")}],
                 )
             except Exception as e:
                 logging.debug(f"plan_day_e2e_tool: failed to store plan_id in environment: {e}")
@@ -5204,15 +5154,13 @@ async def plan_day_e2e_tool(
                 )
                 
                 if critic_task:
-                    # Try to get critic note quickly (with timeout)
                     try:
                         critic_note = await asyncio.wait_for(critic_task, timeout=5.0)
                         if critic_note:
                             plan_output["critic_note"] = critic_note
                             yield Response(f"💡 Gợi ý: {critic_note}")
                     except asyncio.TimeoutError:
-                        # Critic taking too long, continue without it
-                        logging.debug("LLM critic timeout, continuing without critic note")
+                        logging.debug("LLM critic timeout")
                     except Exception as e:
                         logging.debug(f"LLM critic error: {e}")
             except Exception as e:

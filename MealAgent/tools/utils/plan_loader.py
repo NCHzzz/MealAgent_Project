@@ -428,3 +428,180 @@ def load_latest_plan_from_weaviate(
         logger.error(f"Failed to load latest plan from Weaviate: {e}", exc_info=True)
         return None
 
+
+def load_plan_from_logs(
+    user_id: str,
+    client_manager,
+    date_str: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Load accepted meals from MealLogEntry for a specific date and reconstruct a day plan.
+    
+    Args:
+        user_id: User ID
+        client_manager: ClientManager instance
+        date_str: Date string in YYYY-MM-DD format
+        
+    Returns:
+        Day plan dictionary or None if no logs found
+    """
+    try:
+        client = client_manager.get_client()
+        try:
+            log_collection = client.collections.get("MealLogEntry")
+        except Exception as e:
+            logger.error(f"load_plan_from_logs: MealLogEntry collection not available: {str(e)}")
+            return None
+
+        # Create UTC datetime range for the entire day (aligned with accept_plan_tool)
+        try:
+            date_obj = datetime.fromisoformat(date_str).date()
+        except Exception as e:
+            logger.error(f"load_plan_from_logs: Invalid date format '{date_str}': {str(e)}")
+            return None
+            
+        start_dt = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end_dt = start_dt + timedelta(days=1)
+        
+        start_iso = start_dt.isoformat().replace("+00:00", "Z")
+        end_iso = end_dt.isoformat().replace("+00:00", "Z")
+        
+        log_filter = build_filters_from_where({
+            "operator": "And",
+            "operands": [
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                {"path": ["logged_at"], "operator": "GreaterThanEqual", "valueDate": start_iso},
+                {"path": ["logged_at"], "operator": "LessThan", "valueDate": end_iso},
+            ],
+        })
+        
+        log_results = log_collection.query.fetch_objects(filters=log_filter, limit=100)
+        
+        if not log_results.objects:
+            logger.debug(f"No log entries found for user {user_id} on {date_str}")
+            return None
+            
+        # Reconstruct plan structure from logs
+        plan = {
+            "plan_id": f"logs_{date_str}",
+            "user_id": user_id,
+            "plan_type": "day",
+            "start_date": date_str,
+            "meals": {},
+            "total_macros": {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0},
+            "source": "MealLogEntry"
+        }
+        
+        for obj in log_results.objects:
+            props = obj.properties
+            desc = props.get("meal_description", "")
+            
+            # Extract meal type from description (e.g., "breakfast: ...")
+            meal_type = "unknown"
+            if ":" in desc:
+                prefix = desc.split(":")[0].lower().strip()
+                if "breakfast" in prefix: meal_type = "breakfast"
+                elif "lunch" in prefix: meal_type = "lunch"
+                elif "dinner" in prefix: meal_type = "dinner"
+            
+            if meal_type == "unknown":
+                continue
+                
+            # Parse ingredients with qty from JSON string
+            ingredients_raw = props.get("ingredients", "[]")
+            try:
+                if isinstance(ingredients_raw, str):
+                    ingredients = json.loads(ingredients_raw)
+                else:
+                    ingredients = ingredients_raw
+            except:
+                ingredients = []
+                
+            # Parse macros from JSON
+            macros_raw = props.get("calculated_macros", "{}")
+            try:
+                if isinstance(macros_raw, str):
+                    macros = json.loads(macros_raw)
+                else:
+                    macros = macros_raw
+            except:
+                macros = {}
+                
+            # Create a pseudo-recipe object that _extract_ingredients_from_plan can use
+            # We put all ingredients into 'ingredients_with_qty'
+            meal_data = {
+                "meal_type": meal_type,
+                "recipe": {
+                    "dish_name": props.get("parsed_dish", "Unknown"),
+                    "ingredients_with_qty": ingredients,
+                },
+                "servings": float(props.get("portion_size", 1.0)),
+                "macros": {
+                    "kcal": float(macros.get("kcal", 0.0)),
+                    "protein_g": float(macros.get("protein_g", 0.0)),
+                    "fat_g": float(macros.get("fat_g", 0.0)),
+                    "carb_g": float(macros.get("carb_g", 0.0)),
+                }
+            }
+            
+            plan["meals"][meal_type] = meal_data
+            for m in plan["total_macros"]:
+                plan["total_macros"][m] += meal_data["macros"][m]
+                
+        return plan if plan["meals"] else None
+        
+    except Exception as e:
+        logger.error(f"Failed to load plan from logs: {e}", exc_info=True)
+        return None
+
+
+def load_plan_by_date(
+    user_id: str,
+    client_manager,
+    date_str: str,
+    plan_type: str = "day",
+) -> Optional[Dict[str, Any]]:
+    """
+    Load a suggested meal plan for a specific date from MealPlan collection.
+    
+    Args:
+        user_id: User ID
+        client_manager: ClientManager instance
+        date_str: Date string in YYYY-MM-DD format
+        plan_type: "day" or "week"
+        
+    Returns:
+        Plan dictionary or None if not found
+    """
+    try:
+        client = client_manager.get_client()
+        try:
+            plan_collection = client.collections.get("MealPlan")
+        except Exception as e:
+            logger.error(f"load_plan_by_date: MealPlan collection not available: {str(e)}")
+            return None
+            
+        # Filter by user_id, plan_type, and start_date
+        # Note: start_date in Weaviate for day plans is often YYYY-MM-DD
+        from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
+        filters = build_filters_from_where({
+            "operator": "And",
+            "operands": [
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                {"path": ["plan_type"], "operator": "Equal", "valueString": plan_type},
+                {"path": ["start_date"], "operator": "Equal", "valueString": date_str},
+            ]
+        })
+        
+        plan_results = plan_collection.query.fetch_objects(filters=filters, limit=1)
+        
+        if not plan_results.objects:
+            logger.debug(f"No suggested {plan_type} plan found for user {user_id} on {date_str}")
+            return None
+            
+        plan_id = plan_results.objects[0].properties.get("plan_id")
+        return load_plan_from_weaviate(plan_id, client_manager, user_id)
+        
+    except Exception as e:
+        logger.error(f"Failed to load plan by date from Weaviate: {e}", exc_info=True)
+        return None
