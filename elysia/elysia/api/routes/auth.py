@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 from uuid import uuid4
-import secrets
+
+import jwt
 
 import bcrypt
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -22,7 +24,8 @@ router = APIRouter()
 
 _client_manager = ClientManager(logger=logger)
 _SESSION_TTL = timedelta(hours=12)
-_sessions: Dict[str, Dict[str, Any]] = {}
+_JWT_SECRET = os.getenv("JWT_SECRET", "meal-agent-dev-secret-key-change-in-production")
+_JWT_ALGORITHM = "HS256"
 
 
 class RegisterRequest(BaseModel):
@@ -78,26 +81,51 @@ def _verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def _issue_token(user_id: str) -> str:
-    token = secrets.token_urlsafe(32)
-    _sessions[token] = {
+def _issue_token(user_id: str, profile: Optional[dict] = None) -> str:
+    """Issue a JWT token for the given user_id with optional cached profile."""
+    payload = {
         "user_id": user_id,
-        "expires_at": datetime.now(timezone.utc) + _SESSION_TTL,
+        "exp": datetime.now(timezone.utc) + _SESSION_TTL,
+        "iat": datetime.now(timezone.utc),
     }
-    return token
+    # Cache essential profile fields in JWT to avoid /profile call on page load
+    if profile:
+        payload["profile"] = {
+            "display_name": profile.get("display_name"),
+            "role": profile.get("role", "user"),
+            "email": profile.get("email"),
+            "tdee_kcal": profile.get("tdee_kcal"),
+            "protein_g": profile.get("protein_g"),
+            "fat_g": profile.get("fat_g"),
+            "carb_g": profile.get("carb_g"),
+        }
+    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
 
 
 def _validate_token(authorization: Optional[str]) -> Tuple[str, str]:
+    """Validate JWT token and return (user_id, token)."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
     token = authorization.split(" ", 1)[1].strip()
-    session = _sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    if session["expires_at"] < datetime.now(timezone.utc):
-        del _sessions[token]
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+        return payload["user_id"], token
+    except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    return session["user_id"], token
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+def _get_cached_profile_from_token(authorization: Optional[str]) -> Optional[dict]:
+    """Extract cached profile from JWT token if available."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+        return payload.get("profile")
+    except jwt.InvalidTokenError:
+        return None
 
 
 async def admin_required(
@@ -225,7 +253,7 @@ async def register_user(payload: RegisterRequest, user_manager: UserManager = De
                 detail=str(exc),
             ) from exc
 
-    token = _issue_token(user_id)
+    token = _issue_token(user_id, properties)
     # Warm up user manager state for the new user
     try:
         await user_manager.add_user_local(user_id)
@@ -256,7 +284,7 @@ async def login_user(payload: LoginRequest):
         if not stored_hash or not _verify_password(payload.password, stored_hash):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    token = _issue_token(properties["user_id"])
+    token = _issue_token(properties["user_id"], properties)
     return JSONResponse(
         content={
             "error": "",
@@ -272,8 +300,9 @@ async def login_user(payload: LoginRequest):
 
 @router.post("/logout")
 async def logout_user(authorization: Optional[str] = Header(default=None)):
-    _, token = _validate_token(authorization)
-    _sessions.pop(token, None)
+    """Logout user. With JWT, this is a no-op on server side (token just expires)."""
+    _validate_token(authorization)  # Validate to ensure token is still valid
+    # JWT is stateless - client should discard the token
     return JSONResponse(content={"error": ""})
 
 
@@ -320,7 +349,9 @@ async def update_profile(
                     for field in required_fields
                 ):
                     # Calculate base TDEE using Mifflin-St Jeor
-                    calorie_override = merged_profile.get("tdee_kcal") or merged_profile.get("target_calories")
+                    # FIXED: Do NOT use tdee_kcal as override, as it contains the *result* of the previous calc.
+                    # Only check for explicit manual override fields.
+                    calorie_override = merged_profile.get("target_calories")
                     if calorie_override is not None:
                         base_tdee = float(calorie_override)
                     else:
