@@ -595,6 +595,7 @@ async def log_meal_e2e_tool(
             "ingredients": [],
             "portion_size": 1.0,
         }
+    import logging
     logging.debug(
         "log_meal_e2e_tool: parsed meal dish=%s portion=%s ingredients=%d warning=%s",
         parsed_data.get("dish"),

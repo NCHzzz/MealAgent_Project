@@ -83,7 +83,7 @@ def test_meal_slot_draft_validation():
 
 
 def test_meal_slot_draft_too_many_suggestions():
-    """Test that more than 3 suggestions raises error."""
+    """Test that more than 7 suggestions raises error."""
     suggestions = [
         MealDraftSuggestion(
             dish_name=f"Dish {i}",
@@ -92,7 +92,7 @@ def test_meal_slot_draft_too_many_suggestions():
             meal_type="breakfast",
             category="soup",
         )
-        for i in range(4)
+        for i in range(8)
     ]
     
     with pytest.raises(ValueError):

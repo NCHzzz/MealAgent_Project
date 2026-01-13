@@ -32,7 +32,9 @@ async def test_calculate_recipe_macros_from_cache(
     async for output in calculate_recipe_macros_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        recipe=recipe_with_cache,
+        inputs={"recipe": recipe_with_cache},
+        base_lm=None,
+        complex_lm=None,
     ):
         results.append(output)
     
@@ -81,8 +83,9 @@ async def test_calculate_recipe_macros_with_fdc_lookup(
     async for output in calculate_recipe_macros_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        recipe=recipe_no_cache,
+        inputs={"recipe": recipe_no_cache},
         base_lm=mock_tree_data,  # Placeholder for base_lm
+        complex_lm=None,
     ):
         results.append(output)
     
@@ -113,8 +116,9 @@ async def test_calculate_recipe_macros_vn_to_en_translation(
     async for output in calculate_recipe_macros_tool(
         tree_data=mock_tree_data,
         client_manager=mock_client_manager,
-        recipe=recipe_vn,
+        inputs={"recipe": recipe_vn},
         base_lm=mock_base_lm,
+        complex_lm=None,
     ):
         results.append(output)
     
