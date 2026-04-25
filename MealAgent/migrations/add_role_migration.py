@@ -1,9 +1,11 @@
 import weaviate
 from weaviate.classes.config import Property, DataType
-import sys
+import argparse
 
-def migrate():
+def migrate(apply: bool = False):
     print("🚀 Starting migration: Adding 'role' to UserProfile...")
+    if not apply:
+        print("ℹ️ Dry run mode. Re-run with --apply to mutate schema/data.")
     
     # Connect to Weaviate
     try:
@@ -25,10 +27,13 @@ def migrate():
         has_role = any(p.name == "role" for p in config.properties)
         if not has_role:
             print("📝 Adding 'role' property to UserProfile schema...")
-            collection.config.add_property(
-                Property(name="role", data_type=DataType.TEXT)
-            )
-            print("✅ 'role' property added.")
+            if apply:
+                collection.config.add_property(
+                    Property(name="role", data_type=DataType.TEXT)
+                )
+                print("✅ 'role' property added.")
+            else:
+                print("DRY RUN: would add 'role' property.")
         else:
             print("ℹ️ 'role' property already exists in schema.")
 
@@ -41,13 +46,15 @@ def migrate():
         for user in users.objects:
             # We check if role is missing or None
             if not user.properties.get("role"):
-                collection.data.update(
-                    uuid=user.uuid,
-                    properties={"role": "user"}
-                )
+                if apply:
+                    collection.data.update(
+                        uuid=user.uuid,
+                        properties={"role": "user"}
+                    )
                 updated_count += 1
         
-        print(f"✅ Migration complete. Updated {updated_count} users to role 'user'.")
+        verb = "Updated" if apply else "Would update"
+        print(f"✅ Migration complete. {verb} {updated_count} users to role 'user'.")
 
     except Exception as e:
         print(f"❌ Error during migration: {e}")
@@ -56,4 +63,6 @@ def migrate():
         print("🔌 Connection closed.")
 
 if __name__ == "__main__":
-    migrate()
+    parser = argparse.ArgumentParser(description="Add default UserProfile.role values")
+    parser.add_argument("--apply", action="store_true", help="Apply schema/data changes. Default is dry-run.")
+    migrate(apply=parser.parse_args().apply)

@@ -20,6 +20,7 @@ def _is_vietnamese_breakfast(recipe: Dict[str, Any]) -> bool:
     """
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
+    category = str(recipe.get("category", "")).lower()
     
     # CRITICAL: Vietnamese breakfast keywords - dishes that start with these are breakfast
     # User requirement: bún, hủ tiếu, bánh mì, mì, phở, miến, bánh canh, bánh ngọt, bánh mặn, 
@@ -147,6 +148,7 @@ def _is_rice_dish(recipe: Dict[str, Any]) -> bool:
     """Check if recipe is a rice dish (cơm) - plain rice, not main dishes."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
+    category = str(recipe.get("category", "")).lower()
     
     # CRITICAL: Rice dishes must explicitly contain "cơm" or "com" or "rice"
     rice_keywords = ["cơm", "com", "rice"]
@@ -177,6 +179,9 @@ def _is_rice_dish(recipe: Dict[str, Any]) -> bool:
     breakfast_keywords = ["bánh mì", "banh mi", "bánh cuốn", "banh cuon", "xôi", "xoi", "cháo", "chao", "phở", "pho"]
     if any(kw in dish_name or kw in dish_type for kw in breakfast_keywords):
         return False
+
+    if category in {"main", "main_dish", "protein"} or dish_type in {"main", "main_dish", "protein"}:
+        return True
     
     # Exclude cakes/pancakes
     cake_keywords = ["pancake", "bánh bông lan", "banh bong lan", "bánh ngọt", "banh ngot", "flan", "cake"]
@@ -237,6 +242,7 @@ def _is_main_dish(recipe: Dict[str, Any]) -> bool:
     """Check if recipe is a main dish (món mặn)."""
     dish_name = str(recipe.get("dish_name", "")).lower()
     dish_type = str(recipe.get("dish_type", "")).lower()
+    category = str(recipe.get("category", "")).lower()
     
     # Exclude desserts/sweets so they are not treated as main dishes
     dessert_keywords = [
@@ -266,6 +272,9 @@ def _is_main_dish(recipe: Dict[str, Any]) -> bool:
         has_main = any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)
         if not has_main:
             return False
+
+    if category in {"main", "main_dish", "main course", "protein"} or dish_type in {"main", "main_dish", "main course", "protein"}:
+        return True
     
     # Check for main dish keywords
     main_keywords = [
@@ -274,7 +283,8 @@ def _is_main_dish(recipe: Dict[str, Any]) -> bool:
         "kho", "nướng", "nuong", "rang", "xào", "xao", "chiên", "chien",
         "ba rọi", "ba roi", "pork belly", "sườn", "suon", "rib",
         "xúc xích", "xuc xich", "sausage", "giò", "gio", "bì", "bi",
-        "lươn", "luon", "eel", "ếch", "ech", "frog", "ngâm", "ngam", "pickled"
+        "lươn", "luon", "eel", "ếch", "ech", "frog", "ngâm", "ngam", "pickled",
+        "món mặn", "mon man", "mặn", "man"
     ]
     
     return any(keyword in dish_name or keyword in dish_type for keyword in main_keywords)

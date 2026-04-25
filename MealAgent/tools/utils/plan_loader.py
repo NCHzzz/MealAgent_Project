@@ -79,7 +79,7 @@ def load_plan_from_weaviate(
         item_filter = build_filters_from_where(
             {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
         )
-        item_results = item_collection.query.fetch_objects(filters=item_filter, limit=100)
+        item_results = item_collection.query.fetch_objects(filters=item_filter, limit=1000)
         
         # Reconstruct plan structure
         plan_type = plan_props.get("plan_type", "day")

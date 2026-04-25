@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # Add parent directory to path to enable imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
     import weaviate
@@ -145,8 +145,9 @@ def create_specific_collections(client, names: list[str]):
 def main():
     """CLI entry point."""
     ap = argparse.ArgumentParser(description="Manage Weaviate collections for MealAgent")
-    ap.add_argument("--drop", action="store_true", help="Drop all MealAgent collections")
-    ap.add_argument("--create", action="store_true", help="Create collections (drop existing first if --drop also specified)")
+    ap.add_argument("--drop", action="store_true", help="Drop all MealAgent collections. Requires --yes.")
+    ap.add_argument("--yes", action="store_true", help="Confirm destructive operations such as --drop")
+    ap.add_argument("--create", action="store_true", help="Create missing collections without dropping existing data")
     ap.add_argument("--list", action="store_true", help="List all existing collections")
     ap.add_argument("--drop-only", nargs="+", help="Drop only the specified collection names (space-separated)")
     ap.add_argument("--create-only", nargs="+", help="Create only the specified collection names (space-separated)")
@@ -159,6 +160,8 @@ def main():
         with connect(args.host, args.port, args.grpc_port) as client:
             # Targeted ops first
             if args.drop_only:
+                if not args.yes:
+                    raise SystemExit("Refusing to drop collections without --yes.")
                 existing = client.collections.list_all()
                 to_drop = [n for n in args.drop_only if n in existing]
                 if not to_drop:
@@ -180,6 +183,8 @@ def main():
                 return
 
             if args.drop:
+                if not args.yes:
+                    raise SystemExit("Refusing to drop all MealAgent collections without --yes.")
                 # Get all collection names from schemas
                 all_schemas = [
                     RECIPE_SCHEMA,
@@ -195,8 +200,7 @@ def main():
                     return
 
             if args.create or not any([args.drop, args.list]):
-                # Auto-drop existing collections with same names before creating
-                create_all_collections(client, drop_existing=True)
+                create_all_collections(client, drop_existing=False)
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback

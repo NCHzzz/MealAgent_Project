@@ -3563,8 +3563,8 @@ async def plan_week_e2e_tool(
                 # 2. Relaxed search
                 if not lunch_main:
                     lunch_main = _validate_and_select_main_dish(
-                         "lunch", day_index, None, available_recipes, excluded, 
-                         used_recipe_ids, used_dish_names, None, float('inf'), 5.0 # Relaxed caps
+                         "lunch", day_index, None, available_recipes, [],
+                         set(), set(), None, float('inf'), 5.0 # Relaxed caps
                     )
             
             if dinner_needs_main and not dinner_main:
@@ -3579,8 +3579,8 @@ async def plan_week_e2e_tool(
                 # 2. Relaxed search
                 if not dinner_main:
                     dinner_main = _validate_and_select_main_dish(
-                         "dinner", day_index, None, available_recipes, excluded, 
-                         used_recipe_ids, used_dish_names, None, float('inf'), 5.0 # Relaxed caps
+                         "dinner", day_index, None, available_recipes, [],
+                         set(), set(), None, float('inf'), 5.0 # Relaxed caps
                     )
             if not breakfast or not lunch_rice or not dinner_rice or (lunch_needs_main and not lunch_main) or (dinner_needs_main and not dinner_main):
                 logging.error(

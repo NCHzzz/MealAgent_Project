@@ -517,13 +517,15 @@ def select_meal_by_strategy(
     if not recipes:
         return None
     
-    # Build exclude IDs set
-    exclude_ids = {r.get("food_id") for r in (exclude or []) if r.get("food_id")}
+    # Build exclude sets. Some assembly fallbacks may pass None placeholders;
+    # ignore non-dict values instead of crashing the planner.
+    exclude_recipes = [r for r in (exclude or []) if isinstance(r, dict)]
+    exclude_ids = {r.get("food_id") for r in exclude_recipes if r.get("food_id")}
     if used_recipe_ids:
         exclude_ids.update(str(rid) for rid in used_recipe_ids)
     
     # Build exclude name set (lowercased) for variety across meals
-    exclude_names = {str(r.get("dish_name", "")).lower().strip() for r in (exclude or []) if r.get("dish_name")}
+    exclude_names = {str(r.get("dish_name", "")).lower().strip() for r in exclude_recipes if r.get("dish_name")}
     if used_recipe_names:
         exclude_names.update(str(n).lower().strip() for n in used_recipe_names)
     # Always allow white rice staples

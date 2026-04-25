@@ -17,6 +17,22 @@ def _hidden_env(tree_data: TreeData) -> dict:
     return getattr(tree_data.environment, "hidden_environment", {})
 
 
+def _first_environment_object(results: Any) -> dict | None:
+    """Return the first dict object from Environment.find-compatible results."""
+    if not results:
+        return None
+
+    first_result = results[0]
+    if isinstance(first_result, dict):
+        objects = first_result.get("objects")
+    else:
+        objects = getattr(first_result, "objects", None)
+
+    if isinstance(objects, list) and objects and isinstance(objects[0], dict):
+        return objects[0]
+    return None
+
+
 def resolve_user_id(tree_data: TreeData, explicit_user_id: str | None = None) -> str | None:
     """
     Resolve user_id from (priority):
@@ -79,11 +95,14 @@ async def ensure_profile_loaded(
     # If force_refresh, skip cache and Environment
     if not force_refresh:
         profile_results = tree_data.environment.find("profile_crud_tool", "profile")
-        if profile_results and profile_results[0]["objects"]:
-            profile = profile_results[0]["objects"][0]
+        profile = _first_environment_object(profile_results)
+        if profile is not None:
             # Still refresh from Weaviate to ensure we have latest data
             # (Environment may be stale if profile was updated elsewhere)
             resolved_user = profile.get("user_id") or resolve_user_id(tree_data, user_id)
+            if not resolved_user:
+                hidden["profile"] = profile
+                return profile, False
             if resolved_user:
                 try:
                     client = client_manager.get_client()
@@ -93,15 +112,18 @@ async def ensure_profile_loaded(
                         {"path": ["user_id"], "operator": "Equal", "valueString": str(resolved_user)}
                     )
                     fresh_results = collection.query.fetch_objects(filters=profile_filter, limit=1)
-                    if fresh_results.objects:
-                        fresh_profile = fresh_results.objects[0].properties
-                        hidden["profile"] = fresh_profile
-                        return fresh_profile, False
+                    fresh_objects = getattr(fresh_results, "objects", None)
+                    if isinstance(fresh_objects, list) and fresh_objects:
+                        fresh_profile = getattr(fresh_objects[0], "properties", None)
+                        if isinstance(fresh_profile, dict):
+                            hidden["profile"] = fresh_profile
+                            return fresh_profile, False
                 except Exception as refresh_exc:
                     logger.debug("Failed to refresh profile from Weaviate, using Environment data: %s", refresh_exc)
-                    # Fallback to Environment data if refresh fails
-                    hidden["profile"] = profile
-                    return profile, False
+            # Fallback to Environment data when refresh fails or a mocked/empty
+            # client does not return a real dict-shaped Weaviate object.
+            hidden["profile"] = profile
+            return profile, False
 
     resolved_user = resolve_user_id(tree_data, user_id)
     if not resolved_user:
