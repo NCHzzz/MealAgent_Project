@@ -1,14 +1,14 @@
 # Demo and thesis materials
 
-Large demo and thesis assets are not stored in normal Git history. The local folder `ThesisDocsAndVideo/` is ignored because it contains Office documents and MP4 recordings that are better distributed as release assets or external video links.
+Large thesis Office assets are not stored in normal Git history. Demo MP4 recordings that are useful for public readers are copied into `docs/assets/videos/` so GitHub can render or link them directly.
 
 The technical content from those assets is summarized in [Thesis overview](../thesis/README.md). This keeps the repository useful for readers without committing large `.docx`, `.pptx`, or `.mp4` files.
 
 ## Recommended publishing flow
 
-1. Export or upload final demo videos to GitHub Releases, YouTube, Vimeo, or another stable public location.
-2. Add the public URLs below.
-3. Keep only small screenshots, thumbnails, or SVG/PNG diagrams in `docs/assets/`.
+1. Keep source thesis Office files (`.docx`, `.pptx`) outside Git history.
+2. Keep public MP4 demos in `docs/assets/videos/` with stable lowercase names.
+3. If video size becomes a problem, move the MP4 files to GitHub Releases and replace the links below.
 
 ## Release asset inventory
 
@@ -16,14 +16,19 @@ Update these links after creating a GitHub Release:
 
 | Asset | Suggested public name | Link |
 | --- | --- | --- |
-| Full demo video | `demo-full.mp4` | TODO: add release/video URL |
-| Admin workflow video | `admin-flow.mp4` | TODO: add release/video URL |
-| Phase 1 video | `phase-1.mp4` | TODO: add release/video URL |
-| Phase 3 video | `phase-3.mp4` | TODO: add release/video URL |
-| Phase 4 video | `phase-4.mp4` | TODO: add release/video URL |
-| Meal day workflow video | `meal-day.mp4` | TODO: add release/video URL |
+| Full demo video | `demo-full.mp4` | [Open](../assets/videos/demo-full.mp4) |
+| Admin workflow video | `admin-flow.mp4` | [Open](../assets/videos/admin-flow.mp4) |
+| Phase 1 video | `phase-1.mp4` | [Open](../assets/videos/phase-1.mp4) |
+| Phase 3 video | `phase-3.mp4` | [Open](../assets/videos/phase-3.mp4) |
+| Phase 4 video | `phase-4.mp4` | [Open](../assets/videos/phase-4.mp4) |
+| Meal day workflow video | `meal-day.mp4` | [Open](../assets/videos/meal-day.mp4) |
+| Week plan workflow video | `week-plan.mp4` | [Open](../assets/videos/week-plan.mp4) |
 | Thesis document | `thesis.docx` or `thesis.pdf` | TODO: add release URL |
 | Thesis slides | `thesis-slides.pptx` | TODO: add release URL |
+
+## Embedded preview
+
+<video src="../assets/videos/demo-full.mp4" controls width="100%"></video>
 
 ## Local demo recordings
 
