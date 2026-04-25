@@ -39,14 +39,8 @@ Script để chạy từng phương pháp evaluation riêng lẻ.
 # Nutrition Error
 python -m evaluation.scripts.run_single_method nutrition_error
 
-# RAGAS
-python -m evaluation.scripts.run_single_method ragas
-
 # LLM Judge
 python -m evaluation.scripts.run_single_method llm_judge
-
-# BERTScore
-python -m evaluation.scripts.run_single_method bertscore
 ```
 
 ## Ví dụ

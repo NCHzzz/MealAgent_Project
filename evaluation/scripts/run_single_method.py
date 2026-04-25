@@ -11,6 +11,11 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Add parent directories to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -41,6 +46,45 @@ from evaluation.utils.weaviate_data_loader import (
 )
 from datetime import datetime, timezone
 import numpy as np
+
+
+def create_mock_nutrition_dataset() -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Create a tiny deterministic dataset for offline nutrition-error smoke tests."""
+    profile = {
+        "user_id": "mock-user-1",
+        "protein_g": 120.0,
+        "carb_g": 220.0,
+        "fat_g": 70.0,
+        "tdee_kcal": 2000.0,
+    }
+    plan = {
+        "plan_id": "mock-plan-1",
+        "user_id": profile["user_id"],
+        "plan_type": "day",
+        "source": "Mock",
+        "start_date": "2026-01-06",
+        "total_macros": {
+            "protein_g": 118.0,
+            "carb_g": 215.0,
+            "fat_g": 72.0,
+            "kcal": 1985.0,
+        },
+        "meals": {
+            "breakfast": {
+                "recipe": {"dish_name": "Balanced oatmeal bowl"},
+                "macros": {"protein_g": 30.0, "carb_g": 70.0, "fat_g": 20.0, "kcal": 580.0},
+            },
+            "lunch": {
+                "recipe": {"dish_name": "Grilled chicken rice plate"},
+                "macros": {"protein_g": 45.0, "carb_g": 80.0, "fat_g": 22.0, "kcal": 720.0},
+            },
+            "dinner": {
+                "recipe": {"dish_name": "Salmon vegetable dinner"},
+                "macros": {"protein_g": 43.0, "carb_g": 65.0, "fat_g": 30.0, "kcal": 685.0},
+            },
+        },
+    }
+    return [plan], [profile]
 
 
 def generate_nutrition_error_summary(output: Dict[str, Any], output_file: Path) -> None:
@@ -363,9 +407,8 @@ async def run_nutrition_error_test(
             use_weaviate = False
     
     if not use_weaviate:
-        print("\n❌ Weaviate is not available and mock data is not supported.")
-        print("   Please ensure Weaviate is configured or use --use-mock flag is removed.")
-        return None
+        print("\n📦 Using deterministic mock nutrition dataset.")
+        meal_plans, user_profiles = create_mock_nutrition_dataset()
     
     # Phân loại meal plans theo source và plan_type (sử dụng original plans trước khi expand)
     # MealPlan: Suggested plans (chưa được user chấp nhận)
@@ -393,18 +436,12 @@ async def run_nutrition_error_test(
     # Note: evaluate_batch sẽ expand week plans thành day plans
     print(f"\n⏳ Calculating nutrition errors...")
     print("⏳ Week plans will be split into individual day plans for evaluation...")
-    results = evaluator.evaluate_batch(meal_plans, user_profiles)
+    results, cleaned_plans, cleaned_profiles = evaluator.evaluate_batch(meal_plans, user_profiles)
     print(f"✅ Completed {len(results)} evaluations")
     
-    # Get expanded plans để match với results
-    # evaluate_batch đã expand week plans, nên ta cần expand lại để có đúng mapping
-    expanded_plans, expanded_profiles, original_indices = evaluator._expand_week_plans_to_days(
-        meal_plans, user_profiles
-    )
-    
-    # Sử dụng expanded_plans và expanded_profiles cho output
-    output_plans = expanded_plans
-    output_profiles = expanded_profiles
+    # Sử dụng cleaned_plans và cleaned_profiles cho output để đảm bảo consistency
+    output_plans = cleaned_plans
+    output_profiles = cleaned_profiles
     
     # Aggregate
     aggregated = evaluator.aggregate_results(results)
@@ -762,17 +799,16 @@ async def run_llm_judge_test(
         print("⏳ This may take a while (LLM API calls)...")
         print("⏳ Week plans will be split into individual day plans for evaluation...")
 
-        results = evaluator.evaluate_batch(meal_plans, user_profiles)
+        if len(meal_plans) > 0:
+            results, cleaned_plans, cleaned_profiles = evaluator.evaluate_batch(meal_plans, user_profiles)
+        else:
+            results, cleaned_plans, cleaned_profiles = [], [], []
+
         print(f"✅ Completed {len(results)} evaluations with model {model_name}")
 
-        # Get expanded plans để match với results
-        expanded_plans, expanded_profiles, original_indices = evaluator._expand_week_plans_to_days(
-            meal_plans, user_profiles
-        )
-
-        # Sử dụng expanded_plans và expanded_profiles cho output
-        output_plans = expanded_plans
-        output_profiles = expanded_profiles
+        # Sử dụng cleaned_plans và cleaned_profiles cho output để đảm bảo consistency
+        output_plans = cleaned_plans
+        output_profiles = cleaned_profiles
 
         # Aggregate results
         aggregated = evaluator.aggregate_results(results)
@@ -1195,10 +1231,100 @@ async def run_llm_judge_test(
                 f"Nutrition trung bình ~{nutrition:.1f}, Feasibility ~{feasibility:.1f}."
             )
 
-            extended = dict(m)
-            extended["rank"] = rank
-            extended["summary_vi"] = summary_vi
-            combined_payload["models"].append(extended)
+            # Sau khi chạy xong các models được yêu cầu, tiến hành tổng hợp TOÀN BỘ kết quả trong folder
+    # Điều này đảm bảo file summary luôn chứa đầy đủ các model đã chạy trước đó
+    print("\n🔄 Scanning for all existing evaluation results...")
+
+    results_dir = Path("evaluation/results")
+    all_summary_data = [] # List chứa thông tin tóm tắt của tất cả các model tìm thấy
+
+    # Pattern to match: llm_judge_test__{SANITIZED_MODEL_NAME}.json
+    for result_file in results_dir.glob("llm_judge_test__*.json"):
+        try:
+            with open(result_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            model_name = data.get("model_name")
+            if not model_name:
+                continue
+
+            # Calculate aggregate metrics if not present or just reuse logic
+            # Ở đây chúng ta load file test chi tiết, cần tính lại aggregate hoặc load từ file summary tương ứng
+            # Cách đơn giản: Load file summary tương ứng nếu có
+            sanitized_name = _sanitize_model_name(model_name)
+            summary_json_path = results_dir / f"llm_judge_summary__{sanitized_name}.json"
+
+            if summary_json_path.exists():
+                with open(summary_json_path, "r", encoding="utf-8") as f:
+                    summary_data = json.load(f)
+                    # summary_data structure: {"method":..., "model_name":..., "aggregated":..., ...}
+
+                    # Cần chuyển đổi sang format dùng cho bảng so sánh
+                    # Format mong đợi: giống `summary` (dict trả về bởi aggregate_results) + 'model_name'
+
+                    agg = summary_data.get("aggregated_scores", {}) # Changed from "aggregated" to "aggregated_scores"
+                    dist = summary_data.get("performance_distribution", {}) # Added to get distribution
+
+                    # Tạo cấu trúc summary cho model này
+                    model_summary_entry = {
+                        "model_name": model_name,
+                        "aggregated_scores": agg,
+                        "performance_distribution": dist, # Added
+                        # Tạo tóm tắt text (summary_vi) - có thể regenerate hoặc lấy từ đâu đó.
+                        # Đơn giản là tạo string từ metrics
+                        "overall_score": agg.get("overall_score", {}).get("mean", 0),
+                        "nutrition_score": agg.get("nutrition_score", {}).get("mean", 0),
+                        "variety_score": agg.get("variety_score", {}).get("mean", 0),
+                        "balance_score": agg.get("balance_score", {}).get("mean", 0),
+                        "feasibility_score": agg.get("feasibility_score", {}).get("mean", 0),
+                    }
+
+                    # Generate simple summary text if strictly needed for specific format
+                    # or just use metrics for the table
+
+                    all_summary_data.append(model_summary_entry)
+            else:
+                print(f"   ⚠️ Summary file not found for {model_name}, skipping in comparison table.")
+
+        except Exception as e:
+            print(f"   ❌ Error reading result file {result_file}: {e}")
+
+    # Sắp xếp tất cả kết quả theo overall score giảm dần
+    all_summary_data.sort(
+        key=lambda x: x.get("aggregated_scores", {}).get("overall_score", {}).get("mean", 0) or 0,
+        reverse=True
+    )
+
+    # Gán rank
+    for i, m in enumerate(all_summary_data, 1):
+        m["rank"] = i
+        # Tạo summary text đơn giản để tránh lỗi key error khi tạo file md
+        scores = m.get("aggregated_scores", {})
+        dist = m.get("performance_distribution", {}) # Added
+        overall = scores.get("overall_score", {}).get("mean", 0)
+        nutrition = scores.get("nutrition_score", {}).get("mean", 0)
+        feasibility = scores.get("feasibility_score", {}).get("mean", 0)
+
+        excellent = int(dist.get("excellent", 0) or 0)
+        good = int(dist.get("good", 0) or 0)
+        fair = int(dist.get("fair", 0) or 0)
+        poor = int(dist.get("poor", 0) or 0)
+        total = max(excellent + good + fair + poor, 1)
+
+        m["summary_vi"] = (
+            f"Model {m['model_name']} đứng hạng {i} với điểm overall trung bình ~{overall:.1f}. "
+            f"Tỷ lệ Excellent+Good chiếm khoảng "
+            f"{(excellent + good) / total * 100:.1f}% "
+            f"(Excellent: {excellent}, Good: {good}, Fair: {fair}, Poor: {poor}). "
+            f"Nutrition trung bình ~{nutrition:.1f}, Feasibility ~{feasibility:.1f}."
+        )
+
+    if all_summary_data:
+        # Create comparison artifacts
+        combined_payload = {
+            "generated_at": datetime.now().isoformat(),
+            "models": all_summary_data,
+        }
 
         combined_json_path = Path(
             "evaluation/results/llm_judge_all_models_summary.json"
@@ -1223,12 +1349,9 @@ async def run_llm_judge_test(
             "|-----:|-------|-------------:|---------------:|-------------:|-------------:|-----------------:|\n",
         ]
 
-        # Tạo map từ model_name → rank để dùng lại
-        rank_map = {m["model_name"]: m["rank"] for m in combined_payload["models"]}
-
-        for m in sorted_models:
-            agg = m.get("aggregated_scores", {}) or {}
-            rank = rank_map.get(m["model_name"], "")
+        for m in all_summary_data:
+            agg = m.get("aggregated_scores", {})
+            rank = m["rank"]
             overall = float(agg.get("overall_score", {}).get("mean", 0.0) or 0.0)
             nutrition = float(agg.get("nutrition_score", {}).get("mean", 0.0) or 0.0)
             variety = float(agg.get("variety_score", {}).get("mean", 0.0) or 0.0)
@@ -1258,98 +1381,6 @@ async def run_llm_judge_test(
 
     return {"models": all_model_summaries}
 
-
-
-    """Chạy test BERTScore."""
-    print("=" * 80)
-    print("BERTScore Evaluation Test")
-    print("=" * 80)
-    
-    if BERTScoreEvaluator is None:
-        print("❌ BERTScore not available. Install with: pip install bert-score")
-        return None
-    
-    try:
-        evaluator = BERTScoreEvaluator()
-    except Exception as e:
-        print(f"❌ Failed to initialize BERTScore: {e}")
-        return None
-    
-    # Get test data from Weaviate
-    print("\n📥 Loading data from Weaviate...")
-    try:
-        client_manager = create_client_manager()
-        if not client_manager.is_client:
-            print("❌ Weaviate client not available. Cannot run BERTScore test without data.")
-            return None
-        
-        # Load a small sample for BERTScore evaluation
-        user_ids = get_all_user_ids_from_weaviate(client_manager, limit=3)
-        if not user_ids:
-            print("❌ No users found in Weaviate.")
-            return None
-        
-        meal_plans, user_profiles = load_evaluation_data_from_weaviate(
-            user_ids, client_manager, plan_type="day", use_latest=True
-        )
-        print(f"✅ Loaded: {len(meal_plans)} meal plans, {len(user_profiles)} profiles")
-    except Exception as e:
-        print(f"❌ Error loading from Weaviate: {e}")
-        return None
-    
-    if not meal_plans or not user_profiles:
-        print("❌ No data available for evaluation.")
-        return None
-    
-    print(f"\n📊 Evaluating {len(meal_plans)} meal plans...")
-    print("⏳ This may take a while (BERTScore computation)...")
-    
-    # Run evaluation
-    results = evaluator.evaluate_batch(meal_plans, user_profiles)
-    
-    # Print results
-    print("\n" + "=" * 80)
-    print("RESULTS - BERTScore")
-    print("=" * 80)
-    
-    for i, result in enumerate(results, 1):
-        print(f"\n  Scenario {i}:")
-        print(f"    Precision: {result.precision:.4f}")
-        print(f"    Recall:    {result.recall:.4f}")
-        print(f"    F1 Score:  {result.f1:.4f}")
-    
-    # Calculate averages
-    avg_precision = sum(r.precision for r in results) / len(results)
-    avg_recall = sum(r.recall for r in results) / len(results)
-    avg_f1 = sum(r.f1 for r in results) / len(results)
-    
-    print(f"\n  Averages:")
-    print(f"    Precision: {avg_precision:.4f}")
-    print(f"    Recall:    {avg_recall:.4f}")
-    print(f"    F1 Score:  {avg_f1:.4f}")
-    
-    # Save results
-    output = {
-        "method": "bertscore",
-        "individual_results": [r.to_dict() for r in results],
-        "aggregated": {
-            "precision": {"mean": avg_precision},
-            "recall": {"mean": avg_recall},
-            "f1": {"mean": avg_f1},
-        },
-    }
-    
-    output_file = Path("evaluation/results/bertscore_test.json")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
-    
-    print(f"\n💾 Results saved to: {output_file}")
-    print("=" * 80)
-    
-    return output
-
-
 def main():
     """Main entry point."""
     import argparse
@@ -1372,14 +1403,13 @@ Examples:
   export GEMINI_API_KEY='your-key'
   python -m evaluation.scripts.run_single_method llm_judge
   
-  # Run BERTScore test
-  python -m evaluation.scripts.run_single_method bertscore
+  # Supported methods: nutrition_error, llm_judge
         """
     )
     
     parser.add_argument(
         "method",
-        choices=["nutrition_error", "llm_judge", "bertscore"],
+        choices=["nutrition_error", "llm_judge"],
         help="Evaluation method to run"
     )
     

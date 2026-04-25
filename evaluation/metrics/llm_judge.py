@@ -78,7 +78,7 @@ class LLMJudgeEvaluator:
                 "OpenRouter API key is required. "
                 "Set OPENROUTER_API_KEY environment variable or pass api_key parameter."
             )
-        
+
         self.model_name = model_name
         self.api_key = api_key
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
@@ -450,7 +450,7 @@ Lưu ý:
                 self.api_url,
                 headers=headers,
                 json=payload,
-                timeout=120  # 2 minutes timeout
+                timeout=300  # Tăng lên 5 phút để tránh timeout với GPT-5/Gemini
             )
             
             # Check for errors and show detailed error message
@@ -461,20 +461,25 @@ Lưu ý:
                     error_detail = f"\nError details: {json.dumps(error_data, indent=2)}"
                 except:
                     error_detail = f"\nResponse text: {response.text[:1000]}"
-                
+
                 raise requests.exceptions.HTTPError(
                     f"HTTP {response.status_code}: {response.reason}{error_detail}"
                 )
-            
+
             # Parse response
             response_data = response.json()
-            
+
             # Extract text from response
             if "choices" in response_data and len(response_data["choices"]) > 0:
+                # Check finish reason
+                finish_reason = response_data["choices"][0].get("finish_reason")
+                if finish_reason == "length":
+                     logger.warning("⚠️ Warning: Response was truncated due to length limit!")
+
                 response_text = response_data["choices"][0]["message"]["content"]
             else:
                 raise ValueError(f"Unexpected response format: {response_data}")
-            
+
             # Parse JSON response
             # Remove markdown code blocks if present
             response_text = response_text.strip()
@@ -488,7 +493,7 @@ Lưu ý:
             
             result = json.loads(response_text)
             return result
-            
+
         except requests.exceptions.HTTPError as e:
             error_msg = str(e)
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
@@ -502,13 +507,14 @@ Lưu ý:
         except json.JSONDecodeError as e:
             # Try to fix common JSON issues
             error_msg = f"Failed to parse LLM response as JSON: {e}\n"
-            error_msg += f"Response length: {len(response_text)} characters\n"
-            error_msg += f"Response preview (first 1000 chars): {response_text[:1000]}\n"
-            if len(response_text) > 1000:
-                error_msg += f"Response preview (last 1000 chars): {response_text[-1000:]}\n"
-            
+            error_msg += f"Response length: {len(response_text) if 'response_text' in locals() else 0} characters\n"
+            if 'response_text' in locals():
+                error_msg += f"Response preview (first 1000 chars): {response_text[:1000]}\n"
+                if len(response_text) > 1000:
+                     error_msg += f"Response preview (last 1000 chars): {response_text[-1000:]}\n"
+
             # Try to extract partial JSON if response was truncated
-            if '"results"' in response_text:
+            if 'response_text' in locals() and '"results"' in response_text:
                 try:
                     start_idx = response_text.find('"results"')
                     partial_json = response_text[start_idx:]
@@ -522,17 +528,18 @@ Lưu ý:
                                 partial_json = '{"results": ' + partial_json.split('"results":', 1)[1]
                             result = json.loads(partial_json)
                             error_msg += "\n⚠️  Response was truncated, but partial results extracted."
+                            print(f"   ⚠️  Recovered partial JSON from truncated response.")
                             return result
                 except (json.JSONDecodeError, ValueError):
                     pass
-            
+
             raise ValueError(error_msg)
         except Exception as e:
             error_msg = f"Error calling LLM API: {e}"
             if 'response_text' in locals() and response_text:
                 error_msg += f"\nResponse text: {response_text[:500]}"
             raise RuntimeError(error_msg)
-    
+
     def evaluate(
         self,
         meal_plan: Dict[str, Any],
@@ -540,45 +547,45 @@ Lưu ý:
     ) -> LLMJudgeResult:
         """
         Đánh giá một meal plan sử dụng LLM.
-        
+
         Args:
             meal_plan: Meal plan dictionary
             user_profile: User profile dictionary
-            
+
         Returns:
             LLMJudgeResult object
         """
         # Create prompt
         prompt = self._create_evaluation_prompt(meal_plan, user_profile)
-        
+
         # Call LLM
         llm_result = self._call_llm(prompt)
-        
+
         # Extract and validate scores
         overall_score = float(llm_result.get("overall_score", 0))
         nutrition_score = float(llm_result.get("nutrition_score", 0))
         variety_score = float(llm_result.get("variety_score", 0))
         balance_score = float(llm_result.get("balance_score", 0))
         feasibility_score = float(llm_result.get("feasibility_score", 0))
-        
+
         # Clamp scores to 0-100
         overall_score = max(0, min(100, overall_score))
         nutrition_score = max(0, min(100, nutrition_score))
         variety_score = max(0, min(100, variety_score))
         balance_score = max(0, min(100, balance_score))
         feasibility_score = max(0, min(100, feasibility_score))
-        
+
         # Extract feedback
         feedback = llm_result.get("feedback", "")
         strengths = llm_result.get("strengths", [])
         suggestions = llm_result.get("suggestions", [])
-        
+
         # Ensure lists
         if not isinstance(strengths, list):
             strengths = [strengths] if strengths else []
         if not isinstance(suggestions, list):
             suggestions = [suggestions] if suggestions else []
-        
+
         return LLMJudgeResult(
             overall_score=overall_score,
             nutrition_score=nutrition_score,
@@ -597,21 +604,21 @@ Lưu ý:
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[int]]:
         """
         Expand week plans thành các day plans riêng biệt.
-        
+
         Args:
             meal_plans: List of meal plan dictionaries
             user_profiles: List of user profile dictionaries
-        
+
         Returns:
             Tuple of (expanded_meal_plans, expanded_user_profiles, original_indices)
         """
         expanded_plans = []
         expanded_profiles = []
         original_indices = []  # Map từ expanded index về original index
-        
+
         for i, (plan, profile) in enumerate(zip(meal_plans, user_profiles)):
             plan_type = plan.get("plan_type", "day")
-            
+
             if plan_type == "week":
                 days = plan.get("days", {})
                 if days:
@@ -640,13 +647,13 @@ Lưu ý:
                 expanded_plans.append(plan)
                 expanded_profiles.append(profile)
                 original_indices.append(i)
-        
+
         return expanded_plans, expanded_profiles, original_indices
-    
+
     def _calculate_day_macros(self, meals: Dict[str, Any]) -> Dict[str, float]:
         """Tính tổng macros từ meals dict của một ngày."""
         total_macros = {"kcal": 0.0, "protein_g": 0.0, "fat_g": 0.0, "carb_g": 0.0}
-        
+
         for meal_type, meal_data in meals.items():
             meal_macros = meal_data.get("macros", {})
             if isinstance(meal_macros, dict):
@@ -654,104 +661,135 @@ Lưu ý:
                 total_macros["protein_g"] += float(meal_macros.get("protein_g", 0.0))
                 total_macros["fat_g"] += float(meal_macros.get("fat_g", 0.0))
                 total_macros["carb_g"] += float(meal_macros.get("carb_g", 0.0))
-        
+
         return total_macros
-    
+
+
     def evaluate_batch(
         self,
         meal_plans: List[Dict[str, Any]],
         user_profiles: List[Dict[str, Any]],
         batch_size: int = 15  # Chia nhỏ batch để tránh response quá dài
-    ) -> List[LLMJudgeResult]:
+    ) -> tuple[List[LLMJudgeResult], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Đánh giá nhiều meal plans, tự động chia nhỏ batch nếu cần.
         Week plans sẽ được expand thành các day plans riêng biệt và đánh giá từng ngày.
-        
+
         Args:
             meal_plans: List of meal plan dictionaries
             user_profiles: List of user profile dictionaries (must match meal_plans length)
-            batch_size: Số lượng plans mỗi batch (mặc định 15 để tránh response quá dài)
-        
+            batch_size: Số lượng plans mỗi batch
+
         Returns:
-            List of LLMJudgeResult objects
-            - Mỗi day plan (bao gồm cả day plans từ week plans) sẽ có 1 result riêng
+            Tuple: (results, cleaned_plans, cleaned_profiles)
         """
+        from datetime import datetime, date
+
         if len(meal_plans) != len(user_profiles):
             raise ValueError(
                 f"meal_plans ({len(meal_plans)}) and user_profiles "
                 f"({len(user_profiles)}) must have the same length"
             )
-        
+
         if not meal_plans:
-            return []
-        
+            return [], [], []
+
         # Expand week plans thành day plans
         expanded_plans, expanded_profiles, original_indices = self._expand_week_plans_to_days(
             meal_plans, user_profiles
         )
-        
+
         # Validate: Tất cả expanded plans phải có plan_type="day"
         for plan in expanded_plans:
             if plan.get("plan_type") == "week":
-                logger.error(
-                    f"Expanded plan still has plan_type='week'! "
-                    f"Plan ID: {plan.get('plan_id')}. Forcing to 'day'."
-                )
                 plan["plan_type"] = "day"
-        
-        # Lọc bỏ các kế hoạch có tổng kcal là outlier (thường là multi-day logs hoặc dữ liệu lỗi)
-        def _is_kcal_outlier(plan: Dict[str, Any], profile: Dict[str, Any]) -> bool:
-            """
-            Xác định xem plan có phải outlier về kcal hay không, dựa trên tỉ lệ so với tdee_kcal.
-            Dùng để loại bỏ các MealLogEntry bị gom nhiều ngày thành một record (kcal cực lớn).
-            """
+
+        # --- Strict Data Filtering (Synced with nutrition_error.py) ---
+        TEST_KEYWORDS = ["test", "tét", "demo", "mẫu", "fake", "abc", "xyz", "tạm", "thử"]
+        MIN_CALORIE_RATIO = 0.5
+        DATE_CUTOFF = date(2026, 1, 5)
+
+        cleaned_plans = []
+        cleaned_profiles = []
+        skipped_count = 0
+
+        for plan, profile in zip(expanded_plans, expanded_profiles):
+            # 1. Date Filter (Strictly >= 2026-01-05)
+            p_id = plan.get('plan_id', 'unknown')
+            raw_date_val = plan.get("start_date", "")
+            if not raw_date_val:
+                continue
+
+            raw_date_str = str(raw_date_val)
+            if "2026" not in raw_date_str:
+                continue
+
+            is_valid_date = False
+            try:
+                d_obj = None
+                if isinstance(raw_date_val, (datetime, date)):
+                    d_obj = raw_date_val
+                elif len(raw_date_str) >= 10:
+                     d_obj = datetime.fromisoformat(raw_date_str.replace("Z", "+00:00"))
+
+                if d_obj:
+                    check_date = d_obj.date() if isinstance(d_obj, datetime) else d_obj
+                    if check_date >= DATE_CUTOFF:
+                        is_valid_date = True
+            except:
+                pass
+
+            if not is_valid_date:
+                continue
+
+            # 2. Keyword Filter
+            is_test_name = False
+            meals = plan.get("meals", {})
+            for meal_type, meal_data in meals.items():
+                recipe = meal_data.get("recipe")
+                if recipe and isinstance(recipe, dict):
+                    name = recipe.get("dish_name", "").lower()
+                    if any(kw in name for kw in TEST_KEYWORDS):
+                        is_test_name = True
+                        break
+                accs = meal_data.get("accompaniments", [])
+                for acc in accs:
+                    r = acc.get("recipe", {})
+                    if r and isinstance(r, dict):
+                        n = r.get("dish_name", "").lower()
+                        if any(kw in n for kw in TEST_KEYWORDS):
+                            is_test_name = True
+                            break
+                if is_test_name: break
+
+            if is_test_name:
+                continue
+
+            # 3. Calorie Filter (< 50% target)
             total_macros = plan.get("total_macros", {}) or {}
             actual_kcal = float(total_macros.get("kcal", 0.0) or 0.0)
             target_kcal = float(profile.get("tdee_kcal", 0.0) or 0.0)
-            
-            # Nếu không có target hoặc actual, không coi là outlier (để tránh loại nhầm)
-            if actual_kcal <= 0 or target_kcal <= 0:
-                return False
-            
-            ratio = actual_kcal / target_kcal
-            
-            # Nếu kcal gấp >4 lần hoặc <0.25 lần mục tiêu thì coi là outlier
-            # (4x ~ nhiều ngày cộng dồn; 0.25x ~ thiếu năng lượng cực kỳ bất thường)
-            if ratio > 4.0 or ratio < 0.25:
-                logger.warning(
-                    "Detected kcal outlier for plan %s (source=%s): "
-                    "actual_kcal=%.1f, target_kcal=%.1f, ratio=%.2f",
-                    plan.get("plan_id"),
-                    plan.get("source"),
-                    actual_kcal,
-                    target_kcal,
-                    ratio,
-                )
-                return True
-            return False
+
+            if target_kcal > 0:
+                ratio = actual_kcal / target_kcal
+                if ratio < MIN_CALORIE_RATIO:
+                    # Skip low calorie plans
+                    continue
+
+            cleaned_plans.append(plan)
+            cleaned_profiles.append(profile)
+
+        print(f"   🧹 Filtered data: Dropped {len(expanded_plans) - len(cleaned_plans)} plans. Keeping {len(cleaned_plans)} valid plans.")
         
-        filtered_plans: List[Dict[str, Any]] = []
-        filtered_profiles: List[Dict[str, Any]] = []
-        skipped_count = 0
+        expanded_plans = cleaned_plans
+        expanded_profiles = cleaned_profiles
         
-        for plan, profile in zip(expanded_plans, expanded_profiles):
-            if _is_kcal_outlier(plan, profile):
-                skipped_count += 1
-                continue
-            filtered_plans.append(plan)
-            filtered_profiles.append(profile)
-        
-        if skipped_count > 0:
-            print(
-                f"   ⚠️  Skipped {skipped_count} plans with extreme kcal outliers "
-                f"(likely multi-day logs or bad data)"
-            )
-        
-        expanded_plans = filtered_plans
-        expanded_profiles = filtered_profiles
-        
+        if not expanded_plans:
+             print("   ⚠️  No valid plans remaining after filtering!")
+             return [], [], []
+
         if len(expanded_plans) > len(meal_plans):
-            print(f"   📅 Expanded {len(meal_plans)} plans to {len(expanded_plans)} day plans (week plans split into days)")
+            print(f"   📅 Expanded {len(meal_plans)} valid source plans to {len(expanded_plans)} day plans")
         
         # Đánh giá expanded plans
         if len(expanded_plans) <= batch_size:
@@ -759,7 +797,7 @@ Lưu ý:
         else:
             expanded_results = self._evaluate_batch_with_splitting(expanded_plans, expanded_profiles, batch_size)
         
-        return expanded_results
+        return expanded_results, expanded_plans, expanded_profiles
     
     def _evaluate_batch_with_splitting(
         self,
