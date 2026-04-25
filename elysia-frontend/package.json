@@ -5,13 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "cross-env NEXT_PUBLIC_IS_STATIC=true next build",
-    "build:clean": "rm -rf .next out && cross-env NEXT_PUBLIC_IS_STATIC=true next build",
-    "export": "chmod +x export.sh && ./export.sh",
-    "assemble": "cross-env NEXT_PUBLIC_IS_STATIC=true next build && chmod +x export.sh && ./export.sh",
-    "assemble:clean": "rm -rf .next out && cross-env NEXT_PUBLIC_IS_STATIC=true next build && chmod +x export.sh && ./export.sh",
+    "build:clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true});require('fs').rmSync('out',{recursive:true,force:true})\" && cross-env NEXT_PUBLIC_IS_STATIC=true next build",
+    "export": "node scripts/export-static.mjs",
+    "assemble": "cross-env NEXT_PUBLIC_IS_STATIC=true next build && node scripts/export-static.mjs",
+    "assemble:clean": "npm run build:clean && node scripts/export-static.mjs",
     "start": "next start",
     "lint": "next lint",
-    "test": "npm run lint"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run lint && npm run typecheck"
   },
   "dependencies": {
     "@fingerprintjs/fingerprintjs": "^4.6.2",
@@ -78,6 +79,8 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@typescript-eslint/eslint-plugin": "^8.59.0",
+    "@typescript-eslint/parser": "^8.59.0",
     "babel-plugin-glsl": "^1.0.0",
     "cross-env": "^7.0.3",
     "eslint": "^8",
