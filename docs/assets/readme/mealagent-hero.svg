@@ -1,0 +1,92 @@
+<svg width="1280" height="420" viewBox="0 0 1280 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">MealAgent README hero banner</title>
+  <desc id="desc">A dark gradient banner for MealAgent showing agentic RAG meal planning, nutrition guidance, and evaluation.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#06111F"/>
+      <stop offset="0.46" stop-color="#0B172A"/>
+      <stop offset="1" stop-color="#08291E"/>
+    </linearGradient>
+    <radialGradient id="glowGreen" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1110 88) rotate(133) scale(404 246)">
+      <stop stop-color="#7DFFA4" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#7DFFA4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowBlue" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(130 345) rotate(-25) scale(440 260)">
+      <stop stop-color="#38BDF8" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#38BDF8" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#13233A" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#0B1E18" stop-opacity="0.98"/>
+    </linearGradient>
+    <style>
+      .title { font: 800 74px Inter, Segoe UI, Arial, sans-serif; letter-spacing: -2.5px; fill: #F8FAFC; }
+      .subtitle { font: 500 28px Inter, Segoe UI, Arial, sans-serif; fill: #BFE7D0; }
+      .caption { font: 600 18px Inter, Segoe UI, Arial, sans-serif; fill: #D1FAE5; }
+      .small { font: 500 15px Inter, Segoe UI, Arial, sans-serif; fill: #9FB7C8; }
+      .chip { font: 700 14px Inter, Segoe UI, Arial, sans-serif; fill: #ECFDF5; }
+      .muted { fill: #94A3B8; }
+      .line { stroke: #38BDF8; stroke-width: 3; stroke-linecap: round; stroke-opacity: 0.8; }
+      .greenLine { stroke: #34D399; stroke-width: 3; stroke-linecap: round; stroke-opacity: 0.85; }
+      .pinkLine { stroke: #F472B6; stroke-width: 3; stroke-linecap: round; stroke-opacity: 0.72; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="420" rx="34" fill="url(#bg)"/>
+  <rect width="1280" height="420" rx="34" fill="url(#glowGreen)"/>
+  <rect width="1280" height="420" rx="34" fill="url(#glowBlue)"/>
+  <path d="M0 338C160 300 260 383 408 334C545 289 620 142 762 125C909 107 1020 225 1280 154" stroke="#34D399" stroke-opacity="0.18" stroke-width="2"/>
+  <path d="M0 92C149 144 270 23 424 73C585 125 626 248 780 260C935 273 1034 149 1280 228" stroke="#38BDF8" stroke-opacity="0.13" stroke-width="2"/>
+
+  <g transform="translate(72 66)">
+    <rect x="0" y="0" width="88" height="88" rx="24" fill="#0F2A1D" stroke="#34D399" stroke-width="2"/>
+    <circle cx="44" cy="44" r="27" fill="#22C55E" fill-opacity="0.16"/>
+    <path d="M31 52C40 56 54 56 63 46C52 45 42 39 36 29C27 37 24 45 31 52Z" fill="#86EFAC"/>
+    <path d="M44 60C44 45 50 35 63 27" stroke="#ECFDF5" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <text x="184" y="118" class="title">MealAgent</text>
+  <text x="188" y="162" class="subtitle">Agentic RAG for personalized meal planning &amp; nutrition guidance</text>
+  <text x="188" y="204" class="small">FastAPI · Next.js · Weaviate · Elysia decision trees · Thesis-backed evaluation</text>
+
+  <g transform="translate(188 242)">
+    <rect width="145" height="38" rx="19" fill="#063D2B" stroke="#34D399" stroke-opacity="0.65"/>
+    <text x="22" y="25" class="chip">🍱 meal plans</text>
+    <rect x="160" width="143" height="38" rx="19" fill="#102A43" stroke="#38BDF8" stroke-opacity="0.65"/>
+    <text x="184" y="25" class="chip">🔎 hybrid RAG</text>
+    <rect x="318" width="154" height="38" rx="19" fill="#3B1231" stroke="#F472B6" stroke-opacity="0.62"/>
+    <text x="342" y="25" class="chip">📊 evaluation</text>
+  </g>
+
+  <g transform="translate(740 64)" filter="url(#softShadow)">
+    <rect width="448" height="292" rx="26" fill="url(#card)" stroke="#2DD4BF" stroke-opacity="0.32"/>
+    <text x="32" y="48" class="caption">Planning pipeline</text>
+    <text x="32" y="76" class="small">profile + pantry + nutrition targets</text>
+
+    <g transform="translate(32 106)">
+      <rect width="128" height="58" rx="14" fill="#0B1220" stroke="#38BDF8" stroke-width="2"/>
+      <text x="24" y="35" class="caption">User</text>
+      <line x1="136" y1="29" x2="188" y2="29" class="line"/>
+      <path d="M188 21L204 29L188 37Z" fill="#38BDF8"/>
+      <rect x="212" width="148" height="58" rx="14" fill="#0B1220" stroke="#34D399" stroke-width="2"/>
+      <text x="238" y="35" class="caption">Elysia tree</text>
+    </g>
+
+    <g transform="translate(32 188)">
+      <rect width="128" height="58" rx="14" fill="#0B1220" stroke="#F472B6" stroke-width="2"/>
+      <text x="26" y="35" class="caption">Recipes</text>
+      <line x1="136" y1="29" x2="188" y2="29" class="pinkLine"/>
+      <path d="M188 21L204 29L188 37Z" fill="#F472B6"/>
+      <rect x="212" width="148" height="58" rx="14" fill="#0B1220" stroke="#34D399" stroke-width="2"/>
+      <text x="245" y="35" class="caption">Plan</text>
+    </g>
+
+    <line x1="392" y1="135" x2="392" y2="217" class="greenLine"/>
+    <path d="M384 217L392 233L400 217Z" fill="#34D399"/>
+    <circle cx="392" cy="135" r="9" fill="#34D399"/>
+    <circle cx="392" cy="233" r="9" fill="#34D399"/>
+  </g>
+</svg>

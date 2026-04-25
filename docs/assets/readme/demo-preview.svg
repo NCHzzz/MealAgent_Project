@@ -1,0 +1,55 @@
+<svg width="960" height="540" viewBox="0 0 960 540" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">MealAgent demo preview</title>
+  <desc id="desc">A static preview card linking to the MealAgent full system demo video.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="960" y2="540" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08111F"/>
+      <stop offset="0.55" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0F2F24"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(720 108) rotate(139) scale(420 260)">
+      <stop stop-color="#34D399" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#34D399" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000" flood-opacity="0.38"/>
+    </filter>
+    <style>
+      .title { font: 800 50px Inter, Segoe UI, Arial, sans-serif; letter-spacing: -1.4px; fill: #F8FAFC; }
+      .sub { font: 500 22px Inter, Segoe UI, Arial, sans-serif; fill: #BFE7D0; }
+      .label { font: 700 19px Inter, Segoe UI, Arial, sans-serif; fill: #ECFDF5; }
+      .small { font: 500 16px Inter, Segoe UI, Arial, sans-serif; fill: #A7B8C8; }
+      .tiny { font: 700 13px Inter, Segoe UI, Arial, sans-serif; fill: #D1FAE5; }
+    </style>
+  </defs>
+  <rect width="960" height="540" rx="32" fill="url(#bg)"/>
+  <rect width="960" height="540" rx="32" fill="url(#glow)"/>
+  <path d="M70 424C192 358 277 445 398 382C493 332 508 225 631 210C750 195 820 279 910 233" stroke="#38BDF8" stroke-opacity="0.18" stroke-width="3"/>
+
+  <g filter="url(#shadow)">
+    <rect x="64" y="72" width="832" height="396" rx="28" fill="#0B1220" stroke="#2DD4BF" stroke-opacity="0.35"/>
+    <rect x="92" y="104" width="776" height="54" rx="18" fill="#111C2E"/>
+    <circle cx="122" cy="131" r="8" fill="#EF4444"/>
+    <circle cx="150" cy="131" r="8" fill="#F59E0B"/>
+    <circle cx="178" cy="131" r="8" fill="#22C55E"/>
+    <text x="214" y="137" class="small">MealAgent · full system demo</text>
+
+    <text x="114" y="226" class="title">Watch MealAgent plan a day</text>
+    <text x="116" y="266" class="sub">Profile → pantry → recipe retrieval → nutrition validation → explainable plan</text>
+
+    <g transform="translate(116 318)">
+      <rect width="142" height="48" rx="24" fill="#063D2B" stroke="#34D399" stroke-opacity="0.65"/>
+      <text x="24" y="31" class="tiny">daily plan</text>
+      <rect x="158" width="150" height="48" rx="24" fill="#102A43" stroke="#38BDF8" stroke-opacity="0.65"/>
+      <text x="181" y="31" class="tiny">pantry-aware</text>
+      <rect x="324" width="168" height="48" rx="24" fill="#3B1231" stroke="#F472B6" stroke-opacity="0.62"/>
+      <text x="350" y="31" class="tiny">thesis metrics</text>
+    </g>
+
+    <g transform="translate(720 306)">
+      <circle cx="58" cy="58" r="58" fill="#34D399" fill-opacity="0.2" stroke="#34D399" stroke-width="3"/>
+      <path d="M45 34L88 58L45 82V34Z" fill="#ECFDF5"/>
+      <text x="-6" y="146" class="label">Open demo</text>
+    </g>
+  </g>
+</svg>

@@ -1,78 +1,137 @@
-<div align="center">
+<p align="center">
+  <img src="docs/assets/readme/mealagent-hero.svg" alt="MealAgent hero banner" width="100%" />
+</p>
 
-# MealAgent
+<h1 align="center">MealAgent</h1>
 
-### An Agentic RAG meal-planning assistant for personalized nutrition guidance
+<p align="center">
+  <b>Agentic RAG for personalized meal planning, pantry-aware recommendations, and nutrition evaluation.</b>
+</p>
 
-MealAgent turns nutrition targets, dietary constraints, pantry inventory, recipe knowledge, and meal history into explainable daily and weekly meal plans.
+<p align="center">
+  <a href="#demo-showcase">Demo</a> ·
+  <a href="#what-makes-it-interesting">Why it matters</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/thesis/README.md">Thesis</a>
+</p>
 
-[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Next.js 14](https://img.shields.io/badge/Next.js-14-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
-[![Weaviate](https://img.shields.io/badge/Weaviate-Vector_DB-FFCF00?style=for-the-badge&logo=weaviate&logoColor=black)](https://weaviate.io/)
-[![Docker](https://img.shields.io/badge/Docker-Local_Stack-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+<p align="center">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" />
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-backend-009688?style=flat-square&logo=fastapi&logoColor=white" />
+  <img alt="Next.js 14" src="https://img.shields.io/badge/Next.js-14-000000?style=flat-square&logo=nextdotjs&logoColor=white" />
+  <img alt="Weaviate" src="https://img.shields.io/badge/Weaviate-hybrid%20search-FFCF00?style=flat-square&logo=weaviate&logoColor=black" />
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-22C55E?style=flat-square" /></a>
+</p>
 
-[Watch demo](#demo-videos) • [Quick start](#quick-start-on-windows) • [Architecture](#architecture) • [Docs](#documentation-map) • [Thesis](docs/thesis/README.md)
-
-</div>
+<p align="center">
+  <img alt="Python" src="https://cdn.simpleicons.org/python/3776AB" height="28" />&nbsp;&nbsp;
+  <img alt="FastAPI" src="https://cdn.simpleicons.org/fastapi/009688" height="28" />&nbsp;&nbsp;
+  <img alt="Next.js" src="https://cdn.simpleicons.org/nextdotjs/000000" height="28" />&nbsp;&nbsp;
+  <img alt="React" src="https://cdn.simpleicons.org/react/61DAFB" height="28" />&nbsp;&nbsp;
+  <img alt="Tailwind CSS" src="https://cdn.simpleicons.org/tailwindcss/06B6D4" height="28" />&nbsp;&nbsp;
+  <img alt="Docker" src="https://cdn.simpleicons.org/docker/2496ED" height="28" />
+</p>
 
 ---
 
-## Table of contents
+## At a glance
 
-- [Why MealAgent?](#why-mealagent)
-- [What it can do](#what-it-can-do)
-- [Repository map](#repository-map)
-- [Architecture](#architecture)
-- [Demo videos](#demo-videos)
-- [Quick start on Windows](#quick-start-on-windows)
-- [Manual commands](#manual-commands)
-- [Configuration](#configuration)
-- [Testing and verification](#testing-and-verification)
-- [Thesis-derived highlights](#thesis-derived-highlights)
-- [Documentation map](#documentation-map)
-- [Security, contributing, and license](#security-contributing-and-license)
+<table>
+  <tr>
+    <td align="center"><b>58</b><br/>thesis eval outputs</td>
+    <td align="center"><b>6.94%</b><br/>mean nutrition error</td>
+    <td align="center"><b>100%</b><br/>Excellent / Good in thesis eval</td>
+    <td align="center"><b>4.44 / 5</b><br/>20-person UX study</td>
+  </tr>
+</table>
 
-## Why MealAgent?
+MealAgent is an open-source research prototype for healthy users. It combines a **FastAPI + Elysia backend**, a **Next.js frontend**, **Weaviate hybrid retrieval**, and domain-specific MealAgent tools for planning, constraints, recipes, pantry state, meal logs, shopping lists, and evaluation.
 
-Many meal-planning apps can track calories or store recipes, but personalized planning needs more than a static list. MealAgent explores how an **Agentic RAG** system can coordinate retrieval, tool execution, nutrition validation, and user-facing explanations to produce practical meal plans for healthy users.
+> MealAgent is not a clinical diagnosis tool or medical diet prescription system. The metrics above are thesis-derived prototype evaluation results.
 
-This repository is also the implementation artifact for the thesis **"AI-Assisted Platform for Personalized Meal Planning and Nutrition Guidance"**. The project combines:
+## Demo showcase
 
-- **Reasoning:** an Elysia decision-tree agent framework for structured tool orchestration.
-- **Retrieval:** Weaviate-backed hybrid semantic and keyword search over food and recipe data.
-- **Nutrition logic:** MealAgent tools for targets, constraints, portions, pantry state, meal logs, and shopping lists.
-- **Experience:** a Next.js frontend for chat, profile/configuration, planning workflows, data views, and evaluation.
-- **Evaluation:** nutrition error, semantic evaluation, and LLM-as-a-judge tooling.
+<p align="center">
+  <a href="docs/assets/videos/demo-full.mp4">
+    <img src="docs/assets/readme/demo-preview.svg" alt="Open the full MealAgent demo video" width="72%" />
+  </a>
+</p>
 
-> MealAgent is a research/prototype system for healthy users. It is **not** a clinical diagnosis tool or medical diet prescription system.
+<p align="center">
+  <b>Click the preview above to open the full system demo.</b><br/>
+  GitHub may also render the embedded MP4 below, depending on browser and repository rendering behavior.
+</p>
 
-## What it can do
+<video src="docs/assets/videos/demo-full.mp4" controls width="100%"></video>
 
-| Capability | What it means |
-| --- | --- |
-| Personalized daily plans | Generate breakfast, lunch, and dinner around profile data, calories, macros, preferences, and constraints. |
-| Weekly planning | Extend daily planning across multiple days while balancing variety and reuse. |
-| Pantry-aware recommendations | Include available ingredients and generate shopping-list style follow-ups when items are missing. |
-| Recipe + nutrition retrieval | Combine USDA FoodData Central nutrition references with a Vietnamese recipe knowledge base. |
-| Meal logging | Persist accepted/consumed meals so future planning can account for history. |
-| Explainable outputs | Return user-facing explanations instead of only raw generated text. |
-| Evaluation workflows | Run nutrition-target compliance checks and LLM-as-a-judge experiments. |
+<table>
+  <tr>
+    <td><b>Profile setup</b><br/><a href="docs/assets/videos/phase-1.mp4">phase-1.mp4</a></td>
+    <td><b>Daily planning</b><br/><a href="docs/assets/videos/meal-day.mp4">meal-day.mp4</a></td>
+    <td><b>Weekly planning</b><br/><a href="docs/assets/videos/week-plan.mp4">week-plan.mp4</a></td>
+  </tr>
+  <tr>
+    <td><b>Feature flow</b><br/><a href="docs/assets/videos/phase-3.mp4">phase-3.mp4</a></td>
+    <td><b>Evaluation flow</b><br/><a href="docs/assets/videos/phase-4.mp4">phase-4.mp4</a></td>
+    <td><b>Admin review</b><br/><a href="docs/assets/videos/admin-flow.mp4">admin-flow.mp4</a></td>
+  </tr>
+</table>
 
-## Repository map
+## What makes it interesting
 
-| Path | Purpose |
-| --- | --- |
-| [`MealAgent/`](MealAgent/) | Meal-planning tools, schemas, migrations, scripts, and domain workflows. |
-| [`elysia/`](elysia/) | FastAPI backend, Elysia framework integration, API routes, CLI, and static hosting. |
-| [`elysia-frontend/`](elysia-frontend/) | Next.js 14 frontend with React, TypeScript, Tailwind, Radix UI, and static export support. |
-| [`Docker/`](Docker/) | Local Weaviate + transformer inference compose stack. |
-| [`evaluation/`](evaluation/) | Nutrition error, semantic evaluation, and LLM-as-a-judge tooling. |
-| [`docs/`](docs/) | Public docs plus AI-devkit design, testing, deployment, and thesis notes. |
-| [`scripts/`](scripts/) | Windows PowerShell helpers for setup, start, status, and shutdown. |
+| Area | What MealAgent does | Why it matters |
+| --- | --- | --- |
+| Personalized planning | Builds daily and weekly meal plans around profile, calories, macros, preferences, allergies, and diet constraints. | Moves beyond static recipes toward contextual planning. |
+| Pantry-aware flow | Uses pantry state and missing ingredients to support practical recommendations and shopping-list follow-ups. | Helps plans feel usable in real kitchens. |
+| Hybrid recipe retrieval | Combines structured USDA nutrition references with a Vietnamese recipe knowledge base through Weaviate. | Grounds generation in searchable food and recipe data. |
+| Agentic orchestration | Uses Elysia decision trees and MealAgent tools rather than one-shot text generation. | Makes the workflow easier to inspect, validate, and extend. |
+| Evaluation loop | Includes nutrition error, semantic evaluation, and LLM-as-a-judge tooling. | Treats meal planning as an evaluable system, not just a chat demo. |
+
+## Product map
+
+<table>
+  <tr>
+    <td width="50%">
+      <h3>App experience</h3>
+      <ul>
+        <li><a href="elysia-frontend/">Next.js 14 frontend</a></li>
+        <li>Chat, profile/configuration, planning workflows, data views, and evaluation UI</li>
+        <li>React, TypeScript, Tailwind, Radix UI, Framer Motion, Recharts, XYFlow</li>
+      </ul>
+    </td>
+    <td width="50%">
+      <h3>Agent backend</h3>
+      <ul>
+        <li><a href="elysia/">FastAPI + Elysia backend</a></li>
+        <li>Decision-tree tool orchestration and static app hosting</li>
+        <li>Configurable LLM providers and Weaviate connections</li>
+      </ul>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>MealAgent domain</h3>
+      <ul>
+        <li><a href="MealAgent/">Planning tools, schemas, migrations, scripts</a></li>
+        <li>Targets, constraints, recipe search, pantry, meal logs, shopping lists</li>
+        <li><a href="MealAgent/docs/PLAN_DAY_WORKFLOW.md">Daily planning workflow</a></li>
+      </ul>
+    </td>
+    <td width="50%">
+      <h3>Evaluation & docs</h3>
+      <ul>
+        <li><a href="evaluation/">Nutrition and LLM-as-a-judge evaluation</a></li>
+        <li><a href="docs/thesis/README.md">Thesis overview</a></li>
+        <li><a href="docs/ai/deployment/README.md">Deployment notes</a></li>
+      </ul>
+    </td>
+  </tr>
+</table>
 
 ## Architecture
+
+The system is intentionally split into an interactive UI, an agentic API layer, domain-specific tools, vector retrieval, and evaluation scripts.
 
 ```mermaid
 flowchart LR
@@ -85,9 +144,17 @@ flowchart LR
     Tools --> Data[(Profiles, plans, pantry, logs)]
     Evaluation[Evaluation scripts] --> Search
     Evaluation --> Reports[Local reports]
+
+    style User fill:#0f172a,stroke:#38bdf8,color:#fff
+    style Web fill:#111827,stroke:#61dafb,color:#fff
+    style API fill:#0f2f2a,stroke:#34d399,color:#fff
+    style Tools fill:#14213d,stroke:#fbbf24,color:#fff
+    style Search fill:#33220f,stroke:#facc15,color:#fff
+    style Reports fill:#3b1231,stroke:#f472b6,color:#fff
 ```
 
-### Planning flow at a glance
+<details>
+<summary><b>View planning sequence</b></summary>
 
 ```mermaid
 sequenceDiagram
@@ -108,81 +175,48 @@ sequenceDiagram
     API-->>UI: Render plan, logs, and follow-ups
 ```
 
-## Demo videos
+</details>
 
-GitHub may render the MP4 files below directly from [`docs/assets/videos/`](docs/assets/videos/). If an embedded preview does not load in your browser, open the linked file instead.
-
-### Full system demo
-
-<video src="docs/assets/videos/demo-full.mp4" controls width="100%"></video>
-
-[Open full demo video](docs/assets/videos/demo-full.mp4)
-
-### Workflow gallery
-
-| Workflow | Video |
-| --- | --- |
-| Initial setup, profile, and configuration | [phase-1.mp4](docs/assets/videos/phase-1.mp4) |
-| Daily meal planning | [meal-day.mp4](docs/assets/videos/meal-day.mp4) |
-| Weekly meal planning | [week-plan.mp4](docs/assets/videos/week-plan.mp4) |
-| Intermediate MealAgent feature flow | [phase-3.mp4](docs/assets/videos/phase-3.mp4) |
-| Final integration and evaluation flow | [phase-4.mp4](docs/assets/videos/phase-4.mp4) |
-| Admin / review workflow | [admin-flow.mp4](docs/assets/videos/admin-flow.mp4) |
-
-## Quick start on Windows
+## Quick start
 
 ### Prerequisites
 
-- Windows PowerShell 5.1+ or PowerShell 7+
-- Python 3.12.x
-- Node.js 18+
-- Docker Desktop
-- NVIDIA GPU support is required by the default transformer inference service in [`Docker/docker-compose.yml`](Docker/docker-compose.yml). For CPU-only machines, remove the NVIDIA device reservation and CUDA environment variables from the compose file before starting the stack.
+| Requirement | Notes |
+| --- | --- |
+| Windows PowerShell 5.1+ or PowerShell 7+ | Helper scripts are PowerShell-first. |
+| Python 3.12.x | Backend and MealAgent editable packages target Python 3.12. |
+| Node.js 18+ | Required for the Next.js frontend. |
+| Docker Desktop | Runs the local Weaviate stack. |
+| NVIDIA GPU support | Required by the default transformer inference service in [`Docker/docker-compose.yml`](Docker/docker-compose.yml). For CPU-only machines, remove the NVIDIA device reservation and CUDA environment variables before starting the stack. |
 
-### Run the local stack
+```powershell
+# 1) Copy environment templates and add your local secrets
+Copy-Item .env.example .env
+Copy-Item elysia-frontend\.env.example elysia-frontend\.env.local
 
-1. Copy environment examples and add your real local secrets:
+# 2) Install backend + frontend dependencies
+powershell -ExecutionPolicy Bypass -File scripts/setup-dev.ps1
 
-   ```powershell
-   Copy-Item .env.example .env
-   Copy-Item elysia-frontend\.env.example elysia-frontend\.env.local
-   ```
+# 3) Start Weaviate, backend, and frontend
+powershell -ExecutionPolicy Bypass -File scripts/start-system.ps1
+```
 
-2. Install backend and frontend dependencies:
+| Service | URL |
+| --- | --- |
+| Frontend dev app | <http://127.0.0.1:3000> |
+| Backend health | <http://127.0.0.1:8000/api/health> |
+| Weaviate readiness | <http://localhost:8078/v1/.well-known/ready> |
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts/setup-dev.ps1
-   ```
+```powershell
+# Check status
+powershell -ExecutionPolicy Bypass -File scripts/status-system.ps1
 
-3. Start Weaviate, backend, and frontend:
+# Stop all services
+powershell -ExecutionPolicy Bypass -File scripts/stop-system.ps1
+```
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts/start-system.ps1
-   ```
-
-4. Check status:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts/status-system.ps1
-   ```
-
-5. Open the app:
-
-   | Service | URL |
-   | --- | --- |
-   | Frontend dev app | <http://127.0.0.1:3000> |
-   | Backend health | <http://127.0.0.1:8000/api/health> |
-   | Weaviate readiness | <http://localhost:8078/v1/.well-known/ready> |
-
-6. Stop all local services:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts/stop-system.ps1
-   ```
-
-## Manual commands
-
-Use these commands if you want to start each layer yourself instead of using the helper scripts.
+<details>
+<summary><b>Manual start commands</b></summary>
 
 ```powershell
 # Python environment
@@ -201,7 +235,10 @@ npm ci
 npm run dev -- --hostname 127.0.0.1 --port 3000
 ```
 
-## Configuration
+</details>
+
+<details>
+<summary><b>Configuration variables</b></summary>
 
 Use [`.env.example`](.env.example), [`elysia/.env.example`](elysia/.env.example), and [`elysia-frontend/.env.example`](elysia-frontend/.env.example) as templates.
 
@@ -215,6 +252,8 @@ Use [`.env.example`](.env.example), [`elysia/.env.example`](elysia/.env.example)
 | `NEXT_PUBLIC_BACKEND_URL` | Browser-visible backend URL for frontend dev mode. |
 
 Never commit real `.env` files or API keys. Rotate any credentials that were ever shared or committed accidentally.
+
+</details>
 
 ## Testing and verification
 
@@ -235,32 +274,31 @@ cd ..
 
 Generated evaluation outputs are ignored under `evaluation/results/`.
 
-## Thesis-derived highlights
+## Thesis notes
 
-These figures summarize the thesis materials and should be read as research/prototype evaluation results, not clinical guarantees.
+This repository is the implementation artifact for **"AI-Assisted Platform for Personalized Meal Planning and Nutrition Guidance"**.
 
-| Area | Summary |
+| Thesis item | Summary |
 | --- | --- |
-| Problem | Users need daily/weekly meal plans that satisfy nutrition targets while respecting diet type, allergies, preferences, and pantry inventory. |
-| Approach | Agentic RAG coordinates an Elysia decision tree, MealAgent tools, Weaviate hybrid search, and configurable LLM providers. |
+| Research gap | Planning needs personalization, reasoning, cultural food adaptation, constraint handling, and explainability. |
 | Knowledge base | USDA FoodData Central (~8,200 food items) plus a Vietnamese recipe dataset (~4,000 recipes). |
-| Nutritional compliance | 58 evaluated meal outputs achieved 100% Excellent/Good classification, with mean overall nutritional error of 6.94%. |
-| User study | 20 non-clinical participants rated overall user experience at 4.44/5.0. |
+| Evaluation setup | Nutrition compliance over 58 meal-related outputs; user-experience feedback from 20 non-clinical participants. |
+| Scope | Healthy-user meal planning prototype; not clinical diagnosis or disease-specific diet treatment. |
 
-Read the full Markdown summary in [Thesis overview](docs/thesis/README.md).
+Read the full thesis summary in [docs/thesis/README.md](docs/thesis/README.md).
 
 ## Documentation map
 
-| Topic | Link |
+| I want to... | Start here |
 | --- | --- |
-| Local development | [Getting started](docs/getting-started/local-development.md) |
-| Environment variables | [Configuration](docs/getting-started/configuration.md) |
-| Demo and thesis assets | [Demo and thesis materials](docs/demo/README.md) |
-| Thesis summary | [Thesis overview](docs/thesis/README.md) |
-| MealAgent data pipeline | [MealAgent data pipeline](MealAgent/docs/DATA_PIPELINE.md) |
-| Daily planning workflow | [Plan-day workflow](MealAgent/docs/PLAN_DAY_WORKFLOW.md) |
-| Evaluation framework | [Evaluation README](evaluation/README.md) |
-| Deployment | [Deployment notes](docs/ai/deployment/README.md) |
+| Run the project locally | [Getting started](docs/getting-started/local-development.md) |
+| Configure providers and URLs | [Configuration](docs/getting-started/configuration.md) |
+| Understand demo assets | [Demo and thesis materials](docs/demo/README.md) |
+| Read the thesis summary | [Thesis overview](docs/thesis/README.md) |
+| Inspect the MealAgent data pipeline | [MealAgent data pipeline](MealAgent/docs/DATA_PIPELINE.md) |
+| Understand daily planning | [Plan-day workflow](MealAgent/docs/PLAN_DAY_WORKFLOW.md) |
+| Run evaluation tooling | [Evaluation README](evaluation/README.md) |
+| Deploy the system | [Deployment notes](docs/ai/deployment/README.md) |
 
 ## Security, contributing, and license
 
@@ -270,8 +308,6 @@ Read the full Markdown summary in [Thesis overview](docs/thesis/README.md).
 
 ---
 
-<div align="center">
-
-Built as a research prototype for explainable, personalized meal planning.
-
-</div>
+<p align="center">
+  <b>MealAgent turns retrieval, nutrition constraints, and agentic planning into explainable meal plans.</b>
+</p>
