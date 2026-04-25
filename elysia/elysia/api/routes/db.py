@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, Query, Body
+from fastapi import APIRouter, Depends, Query, Body, Header
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 import json
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -13,6 +14,7 @@ from weaviate.classes.query import Filter, Sort
 from MealAgent.tools.meal_logging.accept_plan import log_plan_to_meal_log
 from MealAgent.tools.utils.plan_loader import load_plan_from_weaviate
 from MealAgent.tools.utils.planning_helpers import ensure_rfc3339_datetime
+from elysia.api.routes.auth import require_matching_user_id
 
 # Logging
 from elysia.api.core.log import logger
@@ -23,6 +25,33 @@ class AcceptPlanPayload(BaseModel):
 
 
 router = APIRouter()
+
+
+def _enforce_user_auth(user_id: str, authorization: str | None) -> str:
+    return require_matching_user_id(user_id, authorization)
+
+
+async def _shopping_list_owned_by_user(list_collection, list_id: str, user_id: str) -> bool:
+    results = await list_collection.query.fetch_objects(
+        filters=Filter.all_of(
+            [
+                Filter.by_property("list_id").equal(list_id),
+                Filter.by_property("user_id").equal(user_id),
+            ]
+        ),
+        limit=1,
+    )
+    return bool(results.objects)
+
+
+def _shopping_item_filter(list_id: str, user_id: str, ingredient_name: str | None = None):
+    operands = [
+        Filter.by_property("list_id").equal(list_id),
+        Filter.by_property("user_id").equal(user_id),
+    ]
+    if ingredient_name is not None:
+        operands.append(Filter.by_property("ingredient_name").equal(ingredient_name))
+    return Filter.all_of(operands)
 
 
 def _logged_at_to_iso(value) -> str:
@@ -63,8 +92,11 @@ def _json_safe(value: Any) -> Any:
 @router.get("/{user_id}/saved_trees")
 async def get_saved_trees(
     user_id: str,
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
+
+    _enforce_user_auth(user_id, authorization)
 
     headers = {"Cache-Control": "no-cache"}
 
@@ -101,8 +133,11 @@ async def get_saved_trees(
 async def load_tree(
     user_id: str,
     conversation_id: str,
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
+
+    _enforce_user_auth(user_id, authorization)
 
     headers = {"Cache-Control": "no-cache"}
 
@@ -126,8 +161,10 @@ async def load_tree(
 async def save_tree(
     user_id: str,
     conversation_id: str,
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
+    _enforce_user_auth(user_id, authorization)
     try:
         await user_manager.save_tree(user_id, conversation_id)
         return JSONResponse(content={"error": ""}, status_code=200)
@@ -140,8 +177,10 @@ async def save_tree(
 async def delete_tree(
     user_id: str,
     conversation_id: str,
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
+    _enforce_user_auth(user_id, authorization)
     try:
         await user_manager.delete_tree(user_id, conversation_id)
         return JSONResponse(content={"error": ""}, status_code=200)
@@ -154,9 +193,11 @@ async def delete_tree(
 async def accept_plan(
     user_id: str,
     payload: AcceptPlanPayload = Body(...),
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
     headers = {"Cache-Control": "no-cache"}
+    _enforce_user_auth(user_id, authorization)
 
     try:
         user_local = await user_manager.get_user_local(user_id)
@@ -245,6 +286,7 @@ async def get_meal_history(
     end_date: str | None = Query(None, description="End date in YYYY-MM-DD format"),
     days: int = Query(30, description="Number of days to look back (used if start_date not provided)"),
     limit: int = Query(50, description="Maximum number of logs to return"),
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
     """
@@ -269,6 +311,7 @@ async def get_meal_history(
             - error: Error message if any, otherwise empty string
     """
     headers = {"Cache-Control": "no-cache"}
+    _enforce_user_auth(user_id, authorization)
     
     try:
         # Calculate date range if not provided
@@ -435,6 +478,7 @@ async def pantry_crud(
     user_id: str,
     action: str = Query("read", description="Action: read, create, update, or delete"),
     payload: PantryPayload | None = Body(None),
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
     """
@@ -443,6 +487,7 @@ async def pantry_crud(
     POST: Create, update, or delete pantry items (based on action query param)
     """
     headers = {"Cache-Control": "no-cache"}
+    _enforce_user_auth(user_id, authorization)
     
     try:
         user_local = await user_manager.get_user_local(user_id)
@@ -545,8 +590,10 @@ async def pantry_crud(
                 unit = (it.get("unit") or "g").strip() or "g"
                 fdc_id = it.get("fdc_id")
                 expiry_date = it.get("expiry_date")
+                supplied_pantry_item_id = str(it.get("pantry_item_id") or "").strip()
                 normalized_items.append(
                     {
+                        "pantry_item_id": supplied_pantry_item_id,
                         "user_id": user_id,
                         "ingredient_name": name,
                         "quantity": qty,
@@ -558,17 +605,28 @@ async def pantry_crud(
 
             if action == "create":
                 for it in normalized_items:
+                    it["pantry_item_id"] = it.get("pantry_item_id") or str(uuid4())
                     await item_collection.data.insert(it)
 
             elif action == "update":
                 for it in normalized_items:
-                    item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.all_of(
+                    pantry_item_id = str(it.get("pantry_item_id") or "").strip()
+                    if pantry_item_id:
+                        filters = Filter.all_of(
+                            [
+                                Filter.by_property("user_id").equal(user_id),
+                                Filter.by_property("pantry_item_id").equal(pantry_item_id),
+                            ]
+                        )
+                    else:
+                        filters = Filter.all_of(
                             [
                                 Filter.by_property("user_id").equal(user_id),
                                 Filter.by_property("ingredient_name").equal(it["ingredient_name"]),
                             ]
-                        ),
+                        )
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=filters,
                         limit=1,
                     )
                     if item_results.objects:
@@ -576,6 +634,8 @@ async def pantry_crud(
                         props = dict(obj.properties)
                         props.update(
                             {
+                                "pantry_item_id": props.get("pantry_item_id") or it["pantry_item_id"],
+                                "ingredient_name": it["ingredient_name"],
                                 "quantity": it["quantity"],
                                 "unit": it["unit"],
                                 "fdc_id": it.get("fdc_id"),
@@ -589,13 +649,23 @@ async def pantry_crud(
 
             elif action == "delete":
                 for it in normalized_items:
-                    item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.all_of(
+                    pantry_item_id = str(it.get("pantry_item_id") or "").strip()
+                    if pantry_item_id:
+                        filters = Filter.all_of(
+                            [
+                                Filter.by_property("user_id").equal(user_id),
+                                Filter.by_property("pantry_item_id").equal(pantry_item_id),
+                            ]
+                        )
+                    else:
+                        filters = Filter.all_of(
                             [
                                 Filter.by_property("user_id").equal(user_id),
                                 Filter.by_property("ingredient_name").equal(it["ingredient_name"]),
                             ]
-                        ),
+                        )
+                    item_results = await item_collection.query.fetch_objects(
+                        filters=filters,
                         limit=10,
                     )
                     for obj in item_results.objects:
@@ -642,6 +712,7 @@ async def shopping_crud(
     action: str = Query("read", description="Action: read, create, update, delete, or toggle_purchased"),
     list_id: str | None = Query(None, description="Shopping list ID (required for read/update/delete)"),
     payload: ShoppingListPayload | None = Body(None),
+    authorization: str | None = Header(default=None),
     user_manager: UserManager = Depends(get_user_manager),
 ):
     """
@@ -650,6 +721,7 @@ async def shopping_crud(
     POST: Create, update, delete shopping items, or toggle purchased status
     """
     headers = {"Cache-Control": "no-cache"}
+    _enforce_user_auth(user_id, authorization)
     
     try:
         user_local = await user_manager.get_user_local(user_id)
@@ -701,7 +773,7 @@ async def shopping_crud(
                     
                     # Get items for this list
                     item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.by_property("list_id").equal(list_id_val),
+                        filters=_shopping_item_filter(list_id_val, user_id),
                         limit=9999,
                     )
                     items = [_json_safe(obj.properties) for obj in item_results.objects]
@@ -743,6 +815,14 @@ async def shopping_crud(
             payload_list_id = (payload.list_id if payload else None) or list_id
             shopping_items = (payload.shopping_items if payload else None) or []
 
+            if action in {"update", "delete", "toggle_purchased"} and payload_list_id:
+                if not await _shopping_list_owned_by_user(list_collection, payload_list_id, user_id):
+                    return JSONResponse(
+                        content={"lists": [], "items": [], "error": f"Shopping list {payload_list_id} not found"},
+                        status_code=404,
+                        headers=headers,
+                    )
+
             if action == "create":
                 if not payload_list_id:
                     return JSONResponse(
@@ -753,7 +833,12 @@ async def shopping_crud(
                 
                 # Create shopping list if it doesn't exist
                 existing_lists = await list_collection.query.fetch_objects(
-                    filters=Filter.by_property("list_id").equal(payload_list_id),
+                    filters=Filter.all_of(
+                        [
+                            Filter.by_property("list_id").equal(payload_list_id),
+                            Filter.by_property("user_id").equal(user_id),
+                        ]
+                    ),
                     limit=1,
                 )
                 if not existing_lists.objects:
@@ -774,6 +859,7 @@ async def shopping_crud(
                             continue
                         await item_collection.data.insert({
                             "list_id": payload_list_id,
+                            "user_id": user_id,
                             "ingredient_name": name,
                             "quantity": float(it.get("quantity", 0.0)),
                             "unit": (it.get("unit") or "g").strip() or "g",
@@ -805,10 +891,7 @@ async def shopping_crud(
                     
                     # Find existing item
                     item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.all_of([
-                            Filter.by_property("list_id").equal(payload_list_id),
-                            Filter.by_property("ingredient_name").equal(name),
-                        ]),
+                        filters=_shopping_item_filter(payload_list_id, user_id, name),
                         limit=1,
                     )
                     
@@ -826,6 +909,7 @@ async def shopping_crud(
                         # Upsert: create if not found
                         await item_collection.data.insert({
                             "list_id": payload_list_id,
+                            "user_id": user_id,
                             "ingredient_name": name,
                             "quantity": float(it.get("quantity", 0.0)),
                             "unit": (it.get("unit") or "g").strip() or "g",
@@ -851,10 +935,7 @@ async def shopping_crud(
                             continue
                         
                         item_results = await item_collection.query.fetch_objects(
-                            filters=Filter.all_of([
-                                Filter.by_property("list_id").equal(payload_list_id),
-                                Filter.by_property("ingredient_name").equal(name),
-                            ]),
+                            filters=_shopping_item_filter(payload_list_id, user_id, name),
                             limit=10,
                         )
                         for obj in item_results.objects:
@@ -862,14 +943,19 @@ async def shopping_crud(
                 else:
                     # Delete entire list and all its items
                     item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.by_property("list_id").equal(payload_list_id),
+                        filters=_shopping_item_filter(payload_list_id, user_id),
                         limit=9999,
                     )
                     for obj in item_results.objects:
                         await item_collection.data.delete_by_id(obj.uuid)
                     
                     list_results = await list_collection.query.fetch_objects(
-                        filters=Filter.by_property("list_id").equal(payload_list_id),
+                        filters=Filter.all_of(
+                            [
+                                Filter.by_property("list_id").equal(payload_list_id),
+                                Filter.by_property("user_id").equal(user_id),
+                            ]
+                        ),
                         limit=1,
                     )
                     for obj in list_results.objects:
@@ -898,10 +984,7 @@ async def shopping_crud(
                         continue
                     
                     item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.all_of([
-                            Filter.by_property("list_id").equal(payload_list_id),
-                            Filter.by_property("ingredient_name").equal(name),
-                        ]),
+                        filters=_shopping_item_filter(payload_list_id, user_id, name),
                         limit=1,
                     )
                     
@@ -914,13 +997,18 @@ async def shopping_crud(
             # Return latest state
             if payload_list_id:
                 list_results = await list_collection.query.fetch_objects(
-                    filters=Filter.by_property("list_id").equal(payload_list_id),
+                    filters=Filter.all_of(
+                        [
+                            Filter.by_property("list_id").equal(payload_list_id),
+                            Filter.by_property("user_id").equal(user_id),
+                        ]
+                    ),
                     limit=1,
                 )
                 if list_results.objects:
                     list_props = _json_safe(list_results.objects[0].properties)
                     item_results = await item_collection.query.fetch_objects(
-                        filters=Filter.by_property("list_id").equal(payload_list_id),
+                        filters=_shopping_item_filter(payload_list_id, user_id),
                         limit=9999,
                     )
                     items = [_json_safe(obj.properties) for obj in item_results.objects]
@@ -941,7 +1029,7 @@ async def shopping_crud(
                 list_props = _json_safe(list_obj.properties)
                 list_id_val = list_props.get("list_id")
                 item_results = await item_collection.query.fetch_objects(
-                    filters=Filter.by_property("list_id").equal(list_id_val),
+                    filters=_shopping_item_filter(list_id_val, user_id),
                     limit=9999,
                 )
                 items = [_json_safe(obj.properties) for obj in item_results.objects]

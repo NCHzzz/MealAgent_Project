@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
 from elysia.tree.tree import Tree
@@ -12,6 +12,7 @@ from elysia.api.utils.websocket import help_websocket
 from elysia.api.utils.ner import named_entity_recognition
 from elysia.util.collection import retrieve_all_collection_names
 from elysia.api.utils.default_payloads import error_payload
+from elysia.api.routes.auth import _validate_token
 
 router = APIRouter()
 
@@ -60,9 +61,20 @@ async def format_title_response(
         }
 
 
-async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
+async def process(data: dict, websocket: WebSocket, user_manager: UserManager, authenticated_user_id: str | None = None):
     logger.debug(f"/query API request received")
-    logger.debug(f"User ID: {data['user_id']}")
+    request_user_id = data.get("user_id")
+    user_id = authenticated_user_id or request_user_id
+    if authenticated_user_id and request_user_id and request_user_id != authenticated_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user does not match query payload user",
+        )
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authenticated user")
+    data["user_id"] = user_id
+
+    logger.debug(f"User ID: {user_id}")
     logger.debug(f"Conversation ID: {data['conversation_id']}")
     logger.debug(f"Query: {data['query']}")
     logger.debug(f"Query ID: {data['query_id']}")
@@ -70,7 +82,7 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
     logger.debug(f"Training mimick model: {data['mimick']}")
     logger.debug(f"Collection names: {data['collection_names']}")
 
-    user = await user_manager.get_user_local(user_id=data["user_id"])
+    user = await user_manager.get_user_local(user_id=user_id)
 
     try:
         # optional arguments
@@ -83,14 +95,14 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
         await websocket.send_json(
             format_ner_response(
                 text=data["query"],
-                user_id=data["user_id"],
+                user_id=user_id,
                 conversation_id=data["conversation_id"],
                 query_id=data["query_id"],
             )
         )
 
         async for yielded_result in user_manager.process_tree(
-            user_id=data["user_id"],
+            user_id=user_id,
             conversation_id=data["conversation_id"],
             query=data["query"],
             query_id=data["query_id"],
@@ -116,7 +128,7 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
                     and yielded_result["type"] == "completed"
                 ):
                     tree: Tree = await user_manager.get_tree(
-                        user_id=data["user_id"],
+                        user_id=user_id,
                         conversation_id=data["conversation_id"],
                     )
 
@@ -125,7 +137,7 @@ async def process(data: dict, websocket: WebSocket, user_manager: UserManager):
                         await websocket.send_json(
                             await format_title_response(
                                 tree=tree,
-                                user_id=data["user_id"],
+                                user_id=user_id,
                                 conversation_id=data["conversation_id"],
                                 query_id=data["query_id"],
                             )
@@ -199,5 +211,17 @@ async def query_websocket(
     WebSocket endpoint for processing pipelines.
     Handles real-time communication for pipeline execution and status updates.
     """
+    authorization = websocket.headers.get("authorization")
+    token = websocket.query_params.get("token")
+    if not authorization and token:
+        authorization = f"Bearer {token}"
+    try:
+        authenticated_user_id, _ = _validate_token(authorization)
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason=str(exc.detail))
+        return
 
-    await help_websocket(websocket, lambda data, ws: process(data, ws, user_manager))
+    await help_websocket(
+        websocket,
+        lambda data, ws: process(data, ws, user_manager, authenticated_user_id=authenticated_user_id),
+    )

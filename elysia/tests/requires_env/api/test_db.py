@@ -15,6 +15,7 @@ from elysia.api.routes.db import (
     get_saved_trees,
     delete_tree,
 )
+from elysia.api.routes.auth import _issue_token
 
 from fastapi.responses import JSONResponse
 import json
@@ -38,6 +39,10 @@ class fake_websocket:
 
     async def send_json(self, data: dict):
         self.results.append(data)
+
+
+def auth_header(user_id: str) -> str:
+    return f"Bearer {_issue_token(user_id)}"
 
 
 async def initialise_user_and_tree(user_id: str, conversation_id: str):
@@ -103,6 +108,7 @@ class TestSaveLoad:
             # check that the tree is not saved to weaviate (automatic saving turned off)
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -111,6 +117,7 @@ class TestSaveLoad:
             response = await save_tree(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -118,6 +125,7 @@ class TestSaveLoad:
             response = await load_tree(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -132,6 +140,7 @@ class TestSaveLoad:
 
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -144,12 +153,14 @@ class TestSaveLoad:
             response = await delete_tree(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
 
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -197,6 +208,7 @@ class TestSaveLoad:
 
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -209,6 +221,7 @@ class TestSaveLoad:
             response = await load_tree(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -224,12 +237,14 @@ class TestSaveLoad:
             response = await delete_tree(
                 user_id=user_id,
                 conversation_id=conversation_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
 
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -273,6 +288,7 @@ class TestSaveLoad:
             # the tree should be saved to weaviate
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -354,6 +370,7 @@ class TestSaveLoad:
             # check that the trees exist in two separate places
             response = await get_saved_trees(
                 user_id=user_id,
+                authorization=auth_header(user_id),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""
@@ -365,6 +382,7 @@ class TestSaveLoad:
             # check that the trees exist in two separate places
             response = await get_saved_trees(
                 user_id=user_id_2,
+                authorization=auth_header(user_id_2),
                 user_manager=user_manager,
             )
             assert read_response(response)["error"] == ""

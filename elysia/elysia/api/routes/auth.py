@@ -116,6 +116,17 @@ def _validate_token(authorization: Optional[str]) -> Tuple[str, str]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
+def require_matching_user_id(expected_user_id: str, authorization: Optional[str]) -> str:
+    """Validate bearer auth and ensure the token user matches the requested user."""
+    token_user_id, _ = _validate_token(authorization)
+    if token_user_id != expected_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user does not match requested user",
+        )
+    return token_user_id
+
+
 def _get_cached_profile_from_token(authorization: Optional[str]) -> Optional[dict]:
     """Extract cached profile from JWT token if available."""
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -440,4 +451,3 @@ async def update_profile(
             "profile": _serialise_profile(existing),
         }
     )
-
