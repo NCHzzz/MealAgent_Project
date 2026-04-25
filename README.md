@@ -40,6 +40,27 @@ flowchart LR
     Evaluation --> Reports[Local generated reports]
 ```
 
+## Demo videos
+
+GitHub renders the MP4 files below directly from `docs/assets/videos/`. If a preview does not load in your browser, open the linked file.
+
+### Full system demo
+
+<video src="docs/assets/videos/demo-full.mp4" controls width="100%"></video>
+
+[Open full demo video](docs/assets/videos/demo-full.mp4)
+
+### Workflow videos
+
+| Workflow | Video |
+| --- | --- |
+| Initial setup/profile/configuration | [phase-1.mp4](docs/assets/videos/phase-1.mp4) |
+| Daily meal planning | [meal-day.mp4](docs/assets/videos/meal-day.mp4) |
+| Weekly meal planning | [week-plan.mp4](docs/assets/videos/week-plan.mp4) |
+| Intermediate MealAgent feature flow | [phase-3.mp4](docs/assets/videos/phase-3.mp4) |
+| Final integration/evaluation flow | [phase-4.mp4](docs/assets/videos/phase-4.mp4) |
+| Admin/review workflow | [admin-flow.mp4](docs/assets/videos/admin-flow.mp4) |
+
 ## Prerequisites
 
 - Windows PowerShell 5.1+ or PowerShell 7+
@@ -152,7 +173,7 @@ Generated evaluation outputs are ignored under `evaluation/results/`.
 
 ## Demo and thesis assets
 
-Large thesis files and demo videos are intentionally not tracked in the Git repository. Publish them as GitHub Release assets or external video links, then add the URLs to `docs/demo/README.md`.
+Demo videos are tracked under `docs/assets/videos/` so they render on GitHub. Large thesis Office files remain intentionally untracked; use [docs/thesis/README.md](docs/thesis/README.md) for the Markdown thesis summary.
 
 ## Security
 
