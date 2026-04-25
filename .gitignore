@@ -32,12 +32,17 @@ MANIFEST
 *.manifest
 *.spec
 
-# Ignore all dotfiles except .gitignore and workflows
-.*
-!.gitignore
+# Local/editor dotfiles. Keep useful project config files visible in Git.
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+.env
+.env.*
+!.env.example
+!**/.env.example
 !.github/
-!.github/workflows/
-!.github/workflows/**
+!.github/**
 
 # Installer logs
 pip-log.txt
@@ -110,7 +115,6 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
 .venv
 env/
 venv/
@@ -155,11 +159,11 @@ __pycache__/
 uv.lock
 
 # Frontend
-# Remove these ignore rules if frontend should be tracked inside this repo.
-# elysia-frontend
-# elysia-frontend/
-# elysia-frontend/*
-# elysia-frontend/.git/*
+elysia-frontend/.next/
+elysia-frontend/out/
+elysia-frontend/.vercel/
+elysia-frontend/node_modules/
+**/*.tsbuildinfo
 
 # elysia/api/static/*
 
@@ -167,8 +171,8 @@ uv.lock
 resources.txt
 
 # local user configs
-elysia/api/user_configs/*
-!elysia/api/user_configs/__init__.py
+elysia/elysia/api/user_configs/*
+!elysia/elysia/api/user_configs/__init__.py
 
 # profiling
 *.prof
@@ -180,5 +184,25 @@ rundocs.sh
 runpy.sh
 
 
+# Runtime logs / process IDs
+.runlogs/
+.runpids/
+
+# Generated evaluation outputs
+evaluation/results/
+
+# Large/private research and demo assets should be published as release assets.
+ThesisDocsAndVideo/
+
+# Backup/archive artifacts
 weaviate_backup.tar
+Docker/*.tar
 *.tar
+*.zip
+*.7z
+*.rar
+*.mp4
+*.mov
+*.avi
+*.pptx
+*.docx
