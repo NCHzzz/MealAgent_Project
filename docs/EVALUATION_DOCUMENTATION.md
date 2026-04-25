@@ -43,6 +43,18 @@ The documentation covers three main areas:
 2. LLM Judge evaluation prompt template
 3. A detailed user case demonstrating the evaluation process
 
+This page is aligned with the thesis **"AI-Assisted Platform for Personalized Meal Planning and Nutrition Guidance"**. The thesis evaluates the system from three perspectives: automated LLM-as-a-Judge scoring, nutritional target compliance, and user experience.
+
+### 1.1 Thesis evaluation snapshot
+
+| Evaluation track | Setup | Key result |
+| --- | --- | --- |
+| LLM-as-a-Judge | 41 daily meal plans: 32 AI-generated plans and 9 accepted meal logs | Overall scores ranged from 74.05 to 78.66 across judge models |
+| Nutritional compliance | 58 meal-related outputs: 41 generated plans and 17 accepted meal logs | Mean overall nutritional error of 6.94%; 100% Excellent/Good |
+| User experience | 20 non-clinical participants | Overall score 4.44/5.0; usefulness/adoption 4.74/5.0 |
+
+See [Thesis overview](thesis/README.md) for the public Markdown summary of the thesis materials.
+
 ---
 
 ## 2. System Prompt Templates

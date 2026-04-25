@@ -4,12 +4,21 @@
 
 Quy trình thu thập và xử lý dữ liệu (Data Pipeline) là thành phần nền tảng của hệ thống MealAgent, chịu trách nhiệm chuyển đổi dữ liệu thô từ các nguồn khác nhau thành cơ sở tri thức phục vụ cho việc lập kế hoạch bữa ăn thông minh. Quy trình này kết hợp ba công nghệ chính: tiền xử lý Python để chuẩn hóa dữ liệu, cơ sở dữ liệu vector Weaviate để lưu trữ và truy xuất ngữ nghĩa, và Elysia framework để sinh metadata hỗ trợ truy vấn.
 
+Theo tài liệu thesis, pipeline dữ liệu được thiết kế để kết hợp hai nguồn tri thức bổ trợ nhau: USDA FoodData Central làm nguồn tham chiếu dinh dưỡng chuẩn hóa và bộ công thức món ăn Việt Nam làm nguồn khuyến nghị phù hợp ngữ cảnh văn hóa. Bản tóm tắt public của thesis được đặt tại [docs/thesis/README.md](../../docs/thesis/README.md).
+
 Quy trình được thiết kế dựa trên các nguyên tắc sau:
 
 - **Tính linh hoạt**: Hệ thống có khả năng xử lý nhiều định dạng CSV với cấu trúc cột khác nhau thông qua cơ chế ánh xạ synonym.
 - **Tính nhất quán**: Định danh UUID được sinh xác định (deterministic) cho phép thực hiện upsert idempotent, tránh tạo bản ghi trùng lặp.
 - **Tính mở rộng**: Kiến trúc batch processing cho phép xử lý hiệu quả với bộ dữ liệu lớn.
 - **Tính ngữ nghĩa**: Cơ chế vector embedding cho phép tìm kiếm dựa trên ý nghĩa thay vì chỉ khớp từ khóa.
+
+## 1.1. Thesis dataset summary
+
+| Dataset | Quy mô xấp xỉ | Kiểu dữ liệu | Vai trò trong hệ thống |
+| --- | ---: | --- | --- |
+| USDA FoodData Central | ~8,200 food items | Numeric + text | Tham chiếu dinh dưỡng và nutrient mapping |
+| Vietnamese foods dataset | ~4,000 recipes | Text + images | Cá nhân hóa theo ẩm thực Việt Nam và truy xuất công thức |
 
 ## 2. Kiến trúc Tổng thể
 

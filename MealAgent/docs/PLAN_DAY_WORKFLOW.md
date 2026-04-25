@@ -4,12 +4,29 @@
 
 Chức năng lập kế hoạch bữa ăn trong ngày (Plan Day) là thành phần cốt lõi của hệ thống MealAgent, cho phép tự động tạo kế hoạch ba bữa ăn (sáng, trưa, tối) được cá nhân hóa theo nhu cầu dinh dưỡng của người dùng. Quy trình này kết hợp ba công nghệ chính: Mô hình ngôn ngữ lớn (LLM) để sinh gợi ý thông minh, cơ sở dữ liệu vector Weaviate để truy xuất công thức nấu ăn, và thuật toán tối ưu hóa dinh dưỡng để cân bằng macronutrient.
 
+Trong thesis, workflow này là minh chứng chính cho cách Agentic RAG xử lý bài toán lập kế hoạch nhiều bước: hệ thống không chỉ sinh văn bản, mà còn tải hồ sơ, đọc lịch sử, kiểm tra ràng buộc, truy xuất công thức thật, điều chỉnh khẩu phần, xác thực macro, và lưu lại kết quả để cải thiện các lần lập kế hoạch sau.
+
 Quy trình lập kế hoạch bữa ăn được thiết kế dựa trên các nguyên tắc sau:
 
 - **Cá nhân hóa**: Mỗi kế hoạch được điều chỉnh theo hồ sơ dinh dưỡng cá nhân bao gồm tuổi, giới tính, cân nặng, chiều cao, mức độ hoạt động và mục tiêu sức khỏe.
 - **Đa dạng hóa**: Hệ thống theo dõi lịch sử bữa ăn để tránh lặp lại món ăn trong khoảng thời gian 7 ngày.
 - **Tuân thủ ràng buộc**: Kế hoạch tự động loại trừ các thực phẩm gây dị ứng hoặc không phù hợp với chế độ ăn kiêng của người dùng.
 - **Tối ưu hóa dinh dưỡng**: Thuật toán điều chỉnh khẩu phần để đạt mục tiêu về calories, protein, carbohydrate và chất béo.
+
+## 1.1. Thesis workflow summary
+
+Daily planning is framed as an eight-phase pipeline:
+
+1. Prepare data: profile, meal history, constraints, and pantry state.
+2. Generate a structured draft with an LLM.
+3. Map draft ideas to real recipes through Weaviate hybrid search.
+4. Assemble meals and adjust portions.
+5. Validate macro targets and dietary constraints.
+6. Generate critique/explanations through LLM assistance.
+7. Stream the user-facing response.
+8. Persist plans/logs for future personalization.
+
+The weekly planner reuses the same principles across multiple days while balancing variety and allowing fallback reuse only when necessary to keep the plan complete.
 
 ## 2. Kiến trúc Tổng thể
 
