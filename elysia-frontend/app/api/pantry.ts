@@ -1,6 +1,8 @@
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export interface PantryItem {
+  pantry_item_id?: string;
   ingredient_name: string;
   quantity: number;
   unit: string;
@@ -31,7 +33,7 @@ export async function getPantry(
 
     const response = await fetch(`${host}/db/${user_id}/pantry?action=read`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
     });
 
     if (!response.ok) {
@@ -72,7 +74,7 @@ export async function createPantryItems(
 
     const response = await fetch(`${host}/db/${user_id}/pantry?action=create`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ pantry_items: items }),
     });
 
@@ -108,7 +110,7 @@ export async function updatePantryItems(
 
     const response = await fetch(`${host}/db/${user_id}/pantry?action=update`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ pantry_items: items }),
     });
 
@@ -144,7 +146,7 @@ export async function deletePantryItems(
 
     const response = await fetch(`${host}/db/${user_id}/pantry?action=delete`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ pantry_items: items }),
     });
 

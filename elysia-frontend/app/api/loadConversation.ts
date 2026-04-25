@@ -1,5 +1,6 @@
 import { ConversationPayload } from "@/app/types/payloads";
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export async function loadConversation(
   user_id: string,
@@ -11,6 +12,7 @@ export async function loadConversation(
       `${host}/db/${user_id}/load_tree/${conversation_id}`,
       {
         method: "GET",
+        headers: authHeaders(),
       },
     );
 

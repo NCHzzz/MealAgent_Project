@@ -1,4 +1,5 @@
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export interface AcceptPlanResponse {
   success: boolean;
@@ -17,7 +18,7 @@ export async function acceptPlan(
   try {
     const response = await fetch(`${host}/db/${userId}/accept_plan`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ plan_id: planId }),
     });
 

@@ -11,7 +11,7 @@
     "assemble:clean": "npm run build:clean && node scripts/export-static.mjs",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "npm run lint && npm run typecheck"
   },
   "dependencies": {

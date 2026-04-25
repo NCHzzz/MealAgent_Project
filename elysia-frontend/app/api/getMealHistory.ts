@@ -1,4 +1,5 @@
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export interface MealHistoryResponse {
   user_id: string;
@@ -67,7 +68,7 @@ export async function getMealHistory(
 
     const response = await fetch(`${host}/db/${user_id}/meal_history?${params.toString()}`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
     });
 
     if (!response.ok) {

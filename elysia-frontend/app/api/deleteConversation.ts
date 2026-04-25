@@ -1,5 +1,6 @@
 import { BasePayload } from "@/app/types/payloads";
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export async function deleteConversation(
   user_id: string,
@@ -12,6 +13,7 @@ export async function deleteConversation(
       `${host}/db/${user_id}/delete_tree/${conversation_id}`,
       {
         method: "DELETE",
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({}),
       },
     );

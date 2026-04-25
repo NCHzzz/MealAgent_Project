@@ -1,4 +1,5 @@
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export interface ShoppingItem {
   list_id: string;
@@ -41,7 +42,7 @@ export async function getShoppingLists(
 
     const response = await fetch(url, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
     });
 
     if (!response.ok) {
@@ -85,7 +86,7 @@ export async function createShoppingItems(
       `${host}/db/${user_id}/shopping?action=create&list_id=${encodeURIComponent(list_id)}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ list_id, shopping_items: items }),
       },
     );
@@ -125,7 +126,7 @@ export async function updateShoppingItems(
       `${host}/db/${user_id}/shopping?action=update&list_id=${encodeURIComponent(list_id)}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ list_id, shopping_items: items }),
       },
     );
@@ -165,7 +166,7 @@ export async function deleteShoppingItems(
       `${host}/db/${user_id}/shopping?action=delete&list_id=${encodeURIComponent(list_id)}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ list_id, shopping_items: items || [] }),
       },
     );
@@ -205,7 +206,7 @@ export async function togglePurchased(
       `${host}/db/${user_id}/shopping?action=toggle_purchased&list_id=${encodeURIComponent(list_id)}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ list_id, shopping_items: items }),
       },
     );

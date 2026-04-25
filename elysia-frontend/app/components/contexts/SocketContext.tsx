@@ -6,6 +6,7 @@ import { getWebsocketHost } from "../host";
 import { useContext, useRef } from "react";
 import { ConversationContext } from "./ConversationContext";
 import { ToastContext } from "./ToastContext";
+import { appendAuthToken } from "@/app/api/authHeaders";
 
 export const SocketContext = createContext<{
   socketOnline: boolean;
@@ -65,7 +66,7 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
 
     initialRef.current = true;
 
-    const socketHost = getWebsocketHost() + "query";
+    const socketHost = appendAuthToken(getWebsocketHost() + "query");
     const localSocket = new WebSocket(socketHost);
 
     localSocket.onopen = () => {

@@ -1,11 +1,13 @@
 import { SavedConversationPayload } from "@/app/types/payloads";
 import { host } from "@/app/components/host";
+import { authHeaders } from "./authHeaders";
 
 export async function loadConversations(user_id: string) {
   const startTime = performance.now();
   try {
     const response = await fetch(`${host}/db/${user_id}/saved_trees`, {
       method: "GET",
+      headers: authHeaders(),
     });
 
     if (!response.ok) {
