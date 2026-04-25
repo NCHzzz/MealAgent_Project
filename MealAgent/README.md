@@ -35,6 +35,13 @@ Create missing collections without dropping existing data:
 .\.venv\Scripts\python.exe MealAgent\migrations\create_collections.py --create
 ```
 
+Upgrade existing collections after hardening releases add new non-destructive
+properties:
+
+```powershell
+.\.venv\Scripts\python.exe MealAgent\migrations\add_mealagent_hardening_fields.py --apply
+```
+
 Destructive operations require explicit confirmation:
 
 ```powershell

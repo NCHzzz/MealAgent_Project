@@ -2,6 +2,7 @@ from typing import AsyncGenerator, Dict, Any
 import json
 import logging
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -167,13 +168,21 @@ def _log_plan_meal(
     macros: Dict[str, Any],
     ingredients: list[Dict[str, Any]] | None = None,
     logged_at: str | None = None,
+    recipe_id: str = "",
+    dish_name: str = "",
+    source_plan_id: str = "",
+    meal_type: str = "",
 ) -> None:
     log_entry = {
-        "log_id": f"log_{user_id}_{int(datetime.now().timestamp())}",
+        "log_id": f"log_{user_id}_{uuid4().hex}",
         "user_id": user_id,
         "logged_at": logged_at or _now_iso(),
         "meal_description": meal_desc,
-        "parsed_dish": meal_desc,
+        "parsed_dish": dish_name or meal_desc,
+        "recipe_id": str(recipe_id or ""),
+        "dish_name": str(dish_name or meal_desc).strip(),
+        "source_plan_id": str(source_plan_id or ""),
+        "meal_type": str(meal_type or ""),
         "ingredients": json.dumps(ingredients or []),
         "portion_size": 1.0,
         "calculated_macros": _serialize_macros(macros),
@@ -382,6 +391,8 @@ def log_plan_to_meal_log(
             )
             scaled_macros = recomputed_macros
 
+        recipe_id = str(recipe.get("food_id") or recipe.get("recipe_id") or "")
+
         # Collect all ingredients from main dish and accompaniments
         all_ingredients = recipe.get("ingredients_with_qty") or recipe.get("ingredients") or []
         for acc in accompaniments:
@@ -405,23 +416,14 @@ def log_plan_to_meal_log(
             macros=scaled_macros,
             ingredients=all_ingredients if isinstance(all_ingredients, list) else [],
             logged_at=logged_at,
+            recipe_id=recipe_id,
+            dish_name=dish_name,
+            source_plan_id=str(plan_id or ""),
+            meal_type=meal_label,
         )
-        logged.append({"meal": meal_label, "dish": meal_desc, "macros": scaled_macros})
+        logged.append({"meal": meal_label, "dish": meal_desc, "recipe_id": recipe_id, "dish_name": dish_name, "macros": scaled_macros})
 
     if plan_type == "day":
-        # CRITICAL: Delete ALL old MealLogEntry for the same date BEFORE logging new plan
-        # This ensures only ONE accepted plan per day (the latest one)
-        deleted_count = 0
-        if plan_start_date:
-            logger.info(f"accept_plan_tool: Attempting to delete old MealLogEntry entries for date {plan_start_date} before logging new plan")
-            deleted_count = _delete_logs_for_date(log_collection, user_id, plan_start_date)
-            if deleted_count > 0:
-                logger.info(f"accept_plan_tool: Deleted {deleted_count} old MealLogEntry entries for date {plan_start_date} before logging new plan")
-            else:
-                logger.debug(f"accept_plan_tool: No old MealLogEntry entries found for date {plan_start_date} (this is OK if it's the first plan for this date)")
-        else:
-            logger.warning(f"accept_plan_tool: plan_start_date is None, cannot delete old entries. Plan start_date: {plan.get('start_date')}")
-        
         # Log only the meals from the accepted plan (breakfast, lunch, dinner)
         # Each meal includes main dish + all accompaniments in a single entry
         meals_logged = 0
@@ -436,8 +438,8 @@ def log_plan_to_meal_log(
                 _log_meal(meal_obj, meal_key, logged_at)
                 meals_logged += 1
                 logger.debug(f"accept_plan_tool: Logged {meal_key} (main + {len(meal_obj.get('accompaniments', []))} accompaniments)")
-        
-        logger.info(f"accept_plan_tool: Successfully logged {meals_logged} meals for plan {plan_id} (replaced {deleted_count} old entries)")
+
+        logger.info(f"accept_plan_tool: Successfully logged {meals_logged} meals for plan {plan_id}")
     elif plan_type == "week":
         logger.info("accept_plan_tool: Logging weekly plan %s for user %s", plan_id, user_id)
         days = plan.get("days", {})
@@ -460,9 +462,6 @@ def log_plan_to_meal_log(
 
             # logged_at is always anchored to day_date at noon UTC
             
-
-            if day_date:
-                _delete_logs_for_date(log_collection, user_id, day_date)
 
             for meal_key, meal_obj in meals.items():
                 logger.debug(

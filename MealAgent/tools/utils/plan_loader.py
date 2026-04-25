@@ -30,6 +30,30 @@ def _is_carb_dish(recipe: Dict[str, Any]) -> bool:
 logger = logging.getLogger(__name__)
 
 
+def _parse_actual_macros(value: Any, recipe_id: str | None = None) -> Dict[str, float] | None:
+    """Parse MealPlanItem.actual_macros from the schema's JSON-string format."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse actual_macros JSON for item {recipe_id}")
+            return None
+    if not isinstance(value, dict):
+        return None
+    try:
+        return {
+            "kcal": float(value.get("kcal", 0.0)),
+            "protein_g": float(value.get("protein_g", 0.0)),
+            "fat_g": float(value.get("fat_g", 0.0)),
+            "carb_g": float(value.get("carb_g", 0.0)),
+        }
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid actual_macros values for item {recipe_id}: {value}")
+        return None
+
+
 def load_plan_from_weaviate(
     plan_id: str,
     client_manager,
@@ -146,6 +170,7 @@ def load_plan_from_weaviate(
                             continue
                         
                         recipe = recipe_results.objects[0].properties
+                    item_actual_macros = _parse_actual_macros(item.get("actual_macros"), str(recipe_id))
                     recipe_macros = _get_meal_macros(recipe)
                     
                     # Determine if it's main recipe or accompaniment
@@ -182,28 +207,12 @@ def load_plan_from_weaviate(
                     
                     # Add to meal macros
                     for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
-                        meal_data["macros"][macro] += recipe_macros.get(macro, 0.0) * servings
+                        if item_actual_macros is not None:
+                            meal_data["macros"][macro] += item_actual_macros.get(macro, 0.0)
+                        else:
+                            meal_data["macros"][macro] += recipe_macros.get(macro, 0.0) * servings
 
-                    # If the plan item already stored aggregated macros (actual_macros), prefer it
-                    actual_macros = item.get("actual_macros")
-                    if actual_macros:
-                        # Parse JSON string if needed
-                        if isinstance(actual_macros, str):
-                            try:
-                                actual_macros = json.loads(actual_macros)
-                            except json.JSONDecodeError:
-                                logger.warning(f"Failed to parse actual_macros JSON for item {item.get('recipe_id')}")
-                                actual_macros = None
-                        
-                        if isinstance(actual_macros, dict) and actual_macros:
-                            # Override macros with server-side saved totals (already includes accompaniments)
-                            meal_data["macros"] = {
-                                "kcal": float(actual_macros.get("kcal", meal_data["macros"]["kcal"])),
-                                "protein_g": float(actual_macros.get("protein_g", meal_data["macros"]["protein_g"])),
-                                "fat_g": float(actual_macros.get("fat_g", meal_data["macros"]["fat_g"])),
-                                "carb_g": float(actual_macros.get("carb_g", meal_data["macros"]["carb_g"])),
-                            }
-                            meal_data["macros_total"] = meal_data["macros"]
+                    meal_data["macros_total"] = meal_data["macros"]
                 
                 plan["meals"][meal_type] = meal_data
                 
@@ -293,6 +302,7 @@ def load_plan_from_weaviate(
                                 continue
                             recipe = recipe_results.objects[0].properties
 
+                        item_actual_macros = _parse_actual_macros(item.get("actual_macros"), str(recipe_id))
                         recipe_macros = _get_meal_macros(recipe)
 
                         # Determine if it's main recipe or accompaniment (aligned with daily loader)
@@ -346,7 +356,10 @@ def load_plan_from_weaviate(
 
                         # Aggregate macros for the meal
                         for macro in ["kcal", "protein_g", "fat_g", "carb_g"]:
-                            meal_data["macros"][macro] += recipe_macros.get(macro, 0.0) * servings
+                            if item_actual_macros is not None:
+                                meal_data["macros"][macro] += item_actual_macros.get(macro, 0.0)
+                            else:
+                                meal_data["macros"][macro] += recipe_macros.get(macro, 0.0) * servings
 
                     day_plan["meals"][mt] = meal_data
 

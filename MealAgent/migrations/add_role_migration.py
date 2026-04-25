@@ -2,6 +2,20 @@ import weaviate
 from weaviate.classes.config import Property, DataType
 import argparse
 
+
+def iter_objects(collection, page_size: int = 1000):
+    offset = 0
+    while True:
+        page = collection.query.fetch_objects(limit=page_size, offset=offset)
+        objects = list(page.objects or [])
+        if not objects:
+            break
+        for obj in objects:
+            yield obj
+        if len(objects) < page_size:
+            break
+        offset += page_size
+
 def migrate(apply: bool = False):
     print("🚀 Starting migration: Adding 'role' to UserProfile...")
     if not apply:
@@ -39,11 +53,10 @@ def migrate(apply: bool = False):
 
         # 2. Migrate Data
         print("🔍 Searching for users without a role...")
-        # Get all users
-        users = collection.query.fetch_objects(limit=1000)
-        
         updated_count = 0
-        for user in users.objects:
+        scanned_count = 0
+        for user in iter_objects(collection):
+            scanned_count += 1
             # We check if role is missing or None
             if not user.properties.get("role"):
                 if apply:
@@ -54,7 +67,7 @@ def migrate(apply: bool = False):
                 updated_count += 1
         
         verb = "Updated" if apply else "Would update"
-        print(f"✅ Migration complete. {verb} {updated_count} users to role 'user'.")
+        print(f"✅ Migration complete. Scanned {scanned_count} users. {verb} {updated_count} users to role 'user'.")
 
     except Exception as e:
         print(f"❌ Error during migration: {e}")

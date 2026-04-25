@@ -8,6 +8,7 @@ Tests for:
 """
 
 import pytest
+import json
 from MealAgent.tools.utils.planning_helpers import (
     _get_meal_macros,
     _validate_macro_targets,
@@ -17,6 +18,7 @@ from MealAgent.tools.utils.planning_helpers import (
     _scale_carb_by_kcal,
     _calculate_total_deviation_score,
     _try_swap_alternatives,
+    _build_plan_items,
 )
 
 
@@ -188,6 +190,36 @@ def test_validate_constraints_allergen_violation():
     assert validation["valid"] is False
     assert len(validation["violations"]) > 0
     assert any(v["type"] == "allergen_violation" for v in validation["violations"])
+
+
+def test_validate_constraints_checks_accompaniments():
+    """Allergen/diet validation must include side dishes, not only main recipes."""
+    plan = {
+        "meals": {
+            "lunch": {
+                "recipe": {
+                    "food_id": "main_001",
+                    "dish_name": "Rice bowl",
+                    "allergens": [],
+                },
+                "accompaniments": [
+                    {
+                        "recipe": {
+                            "food_id": "side_001",
+                            "dish_name": "Peanut sauce",
+                            "allergens": ["peanuts"],
+                        },
+                        "servings": 1.0,
+                    }
+                ],
+            }
+        }
+    }
+
+    validation = _validate_constraints(plan, exclude_allergens=["peanuts"])
+
+    assert validation["valid"] is False
+    assert any(v["meal"] == "lunch.accompaniment[0]" for v in validation["violations"])
 
 
 def test_validate_constraints_no_violations():
@@ -634,6 +666,74 @@ def test_try_swap_alternatives_finds_better():
     assert best_recipe is not None
     assert best_recipe["food_id"] == "main_002"
     assert best_score < float('inf')
+
+
+def test_try_swap_alternatives_preserves_scaled_serving():
+    """Regression: optimal serving scale must not be overwritten back to 1.0."""
+    current_recipe = {
+        "food_id": "main_001",
+        "dish_name": "Small protein",
+        "macros_per_serving": {"kcal": 100.0, "protein_g": 10.0, "fat_g": 1.0, "carb_g": 0.0},
+    }
+    alternatives = [
+        {
+            "food_id": "main_002",
+            "dish_name": "Lean fish",
+            "macros_per_serving": {"kcal": 150.0, "protein_g": 25.0, "fat_g": 2.0, "carb_g": 0.0},
+        }
+    ]
+    target_macros = {"kcal": 180.0, "protein_g": 30.0, "fat_g": 2.4, "carb_g": 0.0}
+
+    best_recipe, best_scale, _ = _try_swap_alternatives(
+        current_recipe,
+        alternatives,
+        target_macros,
+        "main",
+        current_servings=1.0,
+        max_alternatives=1,
+    )
+
+    assert best_recipe is not None
+    assert best_recipe["food_id"] == "main_002"
+    assert best_scale == 1.2
+
+
+def test_build_plan_items_serializes_actual_macros_json():
+    plan = {
+        "plan_type": "day",
+        "meals": {
+            "lunch": {
+                "recipe": {
+                    "food_id": "main_001",
+                    "dish_name": "Main Dish",
+                    "macros_per_serving": {"kcal": 200.0, "protein_g": 20.0, "fat_g": 5.0, "carb_g": 10.0},
+                },
+                "servings": 1.5,
+                "accompaniments": [
+                    {
+                        "recipe": {
+                            "food_id": "side_001",
+                            "dish_name": "Side Dish",
+                            "macros_per_serving": {"kcal": 50.0, "protein_g": 2.0, "fat_g": 1.0, "carb_g": 8.0},
+                        },
+                        "servings": 2.0,
+                    }
+                ],
+            }
+        },
+    }
+
+    items = _build_plan_items(plan)
+
+    assert len(items) == 2
+    for item in items:
+        assert isinstance(item["actual_macros"], str)
+        parsed = json.loads(item["actual_macros"])
+        assert set(parsed) == {"kcal", "protein_g", "fat_g", "carb_g"}
+    assert items[0]["dish_name"] == "Main Dish"
+    assert json.loads(items[0]["actual_macros"])["kcal"] == 300.0
+    assert items[1]["dish_name"] == "Side Dish"
+    assert json.loads(items[1]["actual_macros"])["kcal"] == 100.0
 
 
 def test_try_swap_alternatives_empty_list():

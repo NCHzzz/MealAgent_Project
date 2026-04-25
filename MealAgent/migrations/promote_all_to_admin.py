@@ -2,6 +2,20 @@ import weaviate
 from weaviate.classes.config import Property, DataType
 import argparse
 
+
+def iter_objects(collection, page_size: int = 1000):
+    offset = 0
+    while True:
+        page = collection.query.fetch_objects(limit=page_size, offset=offset)
+        objects = list(page.objects or [])
+        if not objects:
+            break
+        for obj in objects:
+            yield obj
+        if len(objects) < page_size:
+            break
+        offset += page_size
+
 def migrate_to_admin(user_ids: list[str], apply: bool = False):
     print("🚀 Starting migration: Promoting selected users to 'admin'...")
     if not user_ids:
@@ -40,21 +54,25 @@ def migrate_to_admin(user_ids: list[str], apply: bool = False):
 
         # 2. Promote selected users
         print("🔍 Scanning selected users...")
-        users = collection.query.fetch_objects(limit=1000)
-        
         updated_count = 0
-        for user in users.objects:
+        scanned_count = 0
+        pending_user_ids = set(user_ids)
+        for user in iter_objects(collection):
+            scanned_count += 1
             user_id = user.properties.get("user_id") or user.properties.get("id")
-            if user_id in user_ids:
+            if user_id in pending_user_ids:
                 if apply:
                     collection.data.update(
                         uuid=user.uuid,
                         properties={"role": "admin"}
                     )
                 updated_count += 1
+                pending_user_ids.discard(user_id)
         
         verb = "Promoted" if apply else "Would promote"
-        print(f"✅ Migration complete. {verb} {updated_count} selected users to role 'admin'.")
+        print(f"✅ Migration complete. Scanned {scanned_count} users. {verb} {updated_count} selected users to role 'admin'.")
+        if pending_user_ids:
+            print(f"⚠️  User IDs not found: {', '.join(sorted(pending_user_ids))}")
 
     except Exception as e:
         print(f"❌ Error during migration: {e}")

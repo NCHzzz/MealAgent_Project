@@ -21,6 +21,7 @@ PANTRY_SCHEMA = {
 PANTRY_ITEM_SCHEMA = {
     "name": "PantryItem",
     "properties": [
+        Property(name="pantry_item_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="user_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="ingredient_name", data_type=DataType.TEXT),
         Property(name="quantity", data_type=DataType.NUMBER),

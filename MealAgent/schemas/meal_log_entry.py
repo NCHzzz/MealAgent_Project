@@ -18,6 +18,10 @@ MEAL_LOG_ENTRY_SCHEMA = {
         Property(name="logged_at", data_type=DataType.DATE),
         Property(name="meal_description", data_type=DataType.TEXT),  # Original user input (e.g., "I ate chicken salad")
         Property(name="parsed_dish", data_type=DataType.TEXT),  # LLM-parsed dish name
+        Property(name="recipe_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),  # Canonical recipe/FDC id when known
+        Property(name="dish_name", data_type=DataType.TEXT),  # Human-readable dish name for personalization/variety
+        Property(name="source_plan_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),  # MealPlan accepted into this log
+        Property(name="meal_type", data_type=DataType.TEXT),  # breakfast/lunch/dinner/snack
         Property(name="ingredients", data_type=DataType.TEXT),  # JSON string: [{"name": str, "amount": float, "unit": str, "fdc_id": int?}]
         Property(name="portion_size", data_type=DataType.NUMBER),  # Portion multiplier
         Property(name="calculated_macros", data_type=DataType.TEXT),  # JSON string: {"kcal": float, "protein_g": float, "fat_g": float, "carb_g": float}

@@ -9,6 +9,7 @@ Tests for:
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from MealAgent.tools.pantry.pantry_crud import pantry_crud_tool
+from MealAgent.tools.pantry.pantry_crud import _pantry_item_filter
 from MealAgent.tools.shopping.pantry_diff import pantry_diff_tool
 from elysia.objects import Result, Response, Error
 
@@ -196,6 +197,35 @@ async def test_pantry_crud_delete(
     # So we should check delete_by_id.called.
 
     assert collection.data.delete_by_id.called
+
+
+def test_pantry_item_filter_prefers_stable_id():
+    where = _pantry_item_filter(
+        "user_123",
+        {"pantry_item_id": "item_abc", "ingredient_name": "chicken breast"},
+    )
+
+    assert where is not None
+    operands = where["operands"]
+    assert {operand["path"][0] for operand in operands} == {"user_id", "pantry_item_id"}
+    assert all(operand["path"][0] != "ingredient_name" for operand in operands)
+
+
+def test_pantry_item_filter_falls_back_to_legacy_name():
+    where = _pantry_item_filter("user_123", {"ingredient_name": "chicken breast"})
+
+    assert where is not None
+    assert {operand["path"][0] for operand in where["operands"]} == {"user_id", "ingredient_name"}
+
+
+def test_pantry_item_filter_ignores_empty_generated_ids_for_legacy_payloads():
+    where = _pantry_item_filter(
+        "user_123",
+        {"pantry_item_id": "", "ingredient_name": "chicken breast"},
+    )
+
+    assert where is not None
+    assert {operand["path"][0] for operand in where["operands"]} == {"user_id", "ingredient_name"}
 
 
 @pytest.mark.asyncio

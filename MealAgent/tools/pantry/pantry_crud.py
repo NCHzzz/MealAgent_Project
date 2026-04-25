@@ -3,6 +3,7 @@ CRUD operations for Pantry and PantryItem collections.
 """
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response
@@ -59,6 +60,29 @@ def _validate_pantry_item(item: Dict[str, Any]) -> tuple[bool, str]:
             return False, "expiry_date must be in ISO format if provided"
     
     return True, ""
+
+
+def _pantry_item_filter(user_id: str, item: Dict[str, Any]) -> Dict[str, Any] | None:
+    pantry_item_id = str(item.get("pantry_item_id") or "").strip()
+    if pantry_item_id:
+        return {
+            "operator": "And",
+            "operands": [
+                {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+                {"path": ["pantry_item_id"], "operator": "Equal", "valueString": pantry_item_id},
+            ],
+        }
+
+    ingredient_name = str(item.get("ingredient_name") or "").strip()
+    if not ingredient_name:
+        return None
+    return {
+        "operator": "And",
+        "operands": [
+            {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
+            {"path": ["ingredient_name"], "operator": "Equal", "valueString": ingredient_name},
+        ],
+    }
 
 
 @tool
@@ -244,6 +268,7 @@ async def pantry_crud_tool(
                     return
                 
                 item_data = {
+                    "pantry_item_id": str(item.get("pantry_item_id") or uuid4()),
                     "user_id": user_id,
                     "ingredient_name": item.get("ingredient_name", "").strip(),
                     "quantity": float(item.get("quantity", 0.0)),
@@ -288,7 +313,8 @@ async def pantry_crud_tool(
                 yield Error("pantry_items is required for update action")
                 return
 
-            # Update items (by ingredient_name + user_id) with validation
+            # Update items by stable pantry_item_id when provided. Fallback to
+            # ingredient_name + user_id supports legacy items created before IDs existed.
             updated_count = 0
             for idx, item in enumerate(pantry_items):
                 is_valid, error_msg = _validate_pantry_item(item)
@@ -296,26 +322,20 @@ async def pantry_crud_tool(
                     yield Error(f"Invalid pantry item at index {idx}: {error_msg}")
                     return
                 
-                ingredient_name = item.get("ingredient_name", "").strip()
-                if not ingredient_name:
+                item_where = _pantry_item_filter(user_id, item)
+                if not item_where:
                     continue
 
                 # Find existing item
-                item_filter = build_filters_from_where(
-                    {
-                        "operator": "And",
-                        "operands": [
-                            {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                            {"path": ["ingredient_name"], "operator": "Equal", "valueString": ingredient_name},
-                        ],
-                    }
-                )
+                item_filter = build_filters_from_where(item_where)
                 item_results = item_collection.query.fetch_objects(filters=item_filter, limit=1)
 
                 if item_results.objects:
                     # Update existing
                     item_obj = item_results.objects[0]
                     item_obj.properties.update({
+                        "pantry_item_id": item_obj.properties.get("pantry_item_id") or str(item.get("pantry_item_id") or uuid4()),
+                        "ingredient_name": item.get("ingredient_name", item_obj.properties.get("ingredient_name", "")),
                         "quantity": float(item.get("quantity", item_obj.properties.get("quantity", 0.0))),
                         "unit": item.get("unit", item_obj.properties.get("unit", "g")),
                         "fdc_id": item.get("fdc_id", item_obj.properties.get("fdc_id")),
@@ -356,28 +376,18 @@ async def pantry_crud_tool(
                 yield Error("pantry_items is required for delete action")
                 return
 
-            # Delete items (by ingredient_name + user_id)
+            # Delete items by stable pantry_item_id when provided. Fallback to
+            # ingredient_name + user_id supports legacy items created before IDs existed.
             deleted_count = 0
             for item in pantry_items:
                 if not isinstance(item, dict):
                     continue
-                ingredient_name = item.get("ingredient_name")
-                if not ingredient_name or not isinstance(ingredient_name, str):
-                    continue
-                ingredient_name = ingredient_name.strip()
-                if not ingredient_name:
+                item_where = _pantry_item_filter(user_id, item)
+                if not item_where:
                     continue
 
-                item_filter = build_filters_from_where(
-                    {
-                        "operator": "And",
-                        "operands": [
-                            {"path": ["user_id"], "operator": "Equal", "valueString": user_id},
-                            {"path": ["ingredient_name"], "operator": "Equal", "valueString": ingredient_name},
-                        ],
-                    }
-                )
-                item_results = item_collection.query.fetch_objects(filters=item_filter, limit=1)
+                item_filter = build_filters_from_where(item_where)
+                item_results = item_collection.query.fetch_objects(filters=item_filter, limit=10)
 
                 if item_results.objects:
                     item_collection.data.delete_by_id(item_results.objects[0].uuid)

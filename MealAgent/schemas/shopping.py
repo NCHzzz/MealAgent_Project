@@ -25,6 +25,7 @@ SHOPPING_ITEM_SCHEMA = {
     "name": "ShoppingItem",
     "properties": [
         Property(name="list_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
+        Property(name="user_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
         Property(name="ingredient_name", data_type=DataType.TEXT),
         Property(name="quantity", data_type=DataType.NUMBER),
         Property(name="unit", data_type=DataType.TEXT),

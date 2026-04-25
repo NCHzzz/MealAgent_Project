@@ -29,6 +29,7 @@ MEAL_PLAN_ITEM_SCHEMA = {
         Property(name="day_index", data_type=DataType.INT),  # 0-6 for weekly
         Property(name="meal_type", data_type=DataType.TEXT),  # "breakfast", "lunch", "dinner", "snack"
         Property(name="recipe_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD),
+        Property(name="dish_name", data_type=DataType.TEXT),  # Denormalized for variety filters and plan reload fallback
         Property(name="servings", data_type=DataType.NUMBER),  # Portion multiplier
         Property(name="actual_macros", data_type=DataType.TEXT),  # JSON string: {"kcal": float, "protein_g": float, ...}
     ],

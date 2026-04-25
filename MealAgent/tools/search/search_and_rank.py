@@ -7,6 +7,7 @@ from elysia.tree.objects import TreeData
 from elysia.objects import Result, Error, Response, Retrieval
 from elysia.util.client import ClientManager
 from elysia import tool
+from weaviate.classes.query import MetadataQuery
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
 from MealAgent.tools.utils.recipe_refresh import refresh_recipes
@@ -77,6 +78,34 @@ def _deduplicate_items(items: List[Dict[str, Any]], collection_name: str) -> Lis
             seen_names.add(name_field)
             deduped.append(item)
     return deduped
+
+
+def _extract_search_score(obj: Any) -> float | None:
+    """Return Weaviate search score from either legacy or v4 metadata shapes."""
+    additional = getattr(obj, "_additional", None)
+    if additional:
+        if isinstance(additional, dict):
+            score = additional.get("score")
+        else:
+            score = getattr(additional, "score", None)
+        if score is not None:
+            try:
+                return float(score)
+            except (TypeError, ValueError):
+                return None
+
+    metadata = getattr(obj, "metadata", None)
+    if metadata:
+        if isinstance(metadata, dict):
+            score = metadata.get("score")
+        else:
+            score = getattr(metadata, "score", None)
+        if score is not None:
+            try:
+                return float(score)
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 async def _search_with_elysia_query(
@@ -203,10 +232,16 @@ async def _search_with_custom_logic(
                 where=where if where else None,
                 limit=fetch_limit,
                 offset=offset,
+                return_metadata=MetadataQuery(score=True),
             )
 
         def _bm25():
-            return collection.query.bm25(query=query_text, limit=fetch_limit, offset=offset)
+            return collection.query.bm25(
+                query=query_text,
+                limit=fetch_limit,
+                offset=offset,
+                return_metadata=MetadataQuery(score=True),
+            )
 
         def _fetch():
             filters = build_filters_from_where(where) if where else None
@@ -251,13 +286,7 @@ async def _search_with_custom_logic(
         
         for obj in results.objects:
             item = obj.properties.copy()
-            # Try to get score from _additional metadata
-            score = None
-            if hasattr(obj, "_additional") and obj._additional:
-                try:
-                    score = getattr(obj._additional, "score", None)
-                except AttributeError:
-                    pass
+            score = _extract_search_score(obj)
             
             # If score is available and below threshold, skip
             if score is not None and score < threshold:
@@ -272,12 +301,14 @@ async def _search_with_custom_logic(
                 f"search_and_rank_tool: Filtered out {search_misses} result(s) below threshold {threshold}"
             )
         
-        # If no items pass threshold but we have results, return all (fallback)
+        # If no items pass threshold, fail closed instead of returning low-quality
+        # matches. Returning all results here made the threshold ineffective exactly
+        # when retrieval confidence was weakest, which can destabilize planning.
         if not filtered_items and results.objects:
             logging.debug(
-                f"search_and_rank_tool: No results above threshold {threshold}, returning all results as fallback"
+                f"search_and_rank_tool: No results above threshold {threshold}; rejecting low-confidence results"
             )
-        return [obj.properties for obj in results.objects]
+            return None
         
         return filtered_items
     except Exception as e:

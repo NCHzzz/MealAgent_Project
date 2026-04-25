@@ -530,9 +530,17 @@ async def pantry_diff_tool(
         # Check for existing shopping list for this plan_id FIRST
         # This prevents creating duplicate lists for the same plan
         existing_list_id = None
+        owner_user_id = plan_user_id or user_id
+
         if plan_id:
             existing_list_filter = build_filters_from_where(
-                {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id}
+                {
+                    "operator": "And",
+                    "operands": [
+                        {"path": ["plan_id"], "operator": "Equal", "valueString": plan_id},
+                        {"path": ["user_id"], "operator": "Equal", "valueString": owner_user_id},
+                    ],
+                }
             )
             existing_lists = shopping_list_collection.query.fetch_objects(
                 filters=existing_list_filter, limit=1
@@ -544,7 +552,13 @@ async def pantry_diff_tool(
                 
                 # Delete existing items to replace with new ones
                 list_filter = build_filters_from_where(
-                    {"path": ["list_id"], "operator": "Equal", "valueString": existing_list_id}
+                    {
+                        "operator": "And",
+                        "operands": [
+                            {"path": ["list_id"], "operator": "Equal", "valueString": existing_list_id},
+                            {"path": ["user_id"], "operator": "Equal", "valueString": owner_user_id},
+                        ],
+                    }
                 )
                 existing_items = shopping_item_collection.query.fetch_objects(
                     filters=list_filter, limit=256
@@ -591,6 +605,7 @@ async def pantry_diff_tool(
             shopping_item_collection.data.insert(
                 {
                     "list_id": list_id,
+                    "user_id": owner_user_id,
                     "ingredient_name": item.get("ingredient_name"),
                     "quantity": float(item.get("quantity", 0.0)),
                     "unit": item.get("unit", "g"),

@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from MealAgent.tools.meal_logging.log_meal_e2e import log_meal_e2e_tool
 from MealAgent.tools.meal_logging.meal_history import meal_history_tool
+from MealAgent.tools.meal_logging.accept_plan import log_plan_to_meal_log
 from elysia.objects import Result, Response, Error
 
 
@@ -168,4 +169,60 @@ async def test_meal_history_date_filtering(
     call_args = collection.query.fetch_objects.call_args
     assert call_args is not None
     assert "filters" in call_args.kwargs
+
+
+def test_accept_plan_logs_unique_ids_and_metadata():
+    """Accepted plans should preserve recipe identity and use collision-resistant IDs."""
+    log_collection = MagicMock()
+    plan_collection = MagicMock()
+    item_collection = MagicMock()
+
+    plan_collection.query.fetch_objects.return_value.objects = []
+    client = MagicMock()
+    client.collections.get.side_effect = lambda name: {
+        "MealLogEntry": log_collection,
+        "MealPlan": plan_collection,
+        "MealPlanItem": item_collection,
+    }[name]
+    client_manager = MagicMock()
+    client_manager.get_client.return_value = client
+
+    plan = {
+        "plan_id": "plan_123",
+        "plan_type": "day",
+        "start_date": "2026-04-25T00:00:00Z",
+        "meals": {
+            "breakfast": {
+                "recipe": {
+                    "food_id": "recipe_breakfast",
+                    "dish_name": "Breakfast Bowl",
+                    "macros_per_serving": {"kcal": 300.0, "protein_g": 20.0, "fat_g": 10.0, "carb_g": 30.0},
+                    "ingredients": ["oats"],
+                },
+                "servings": 1.0,
+                "macros": {"kcal": 300.0, "protein_g": 20.0, "fat_g": 10.0, "carb_g": 30.0},
+            },
+            "lunch": {
+                "recipe": {
+                    "food_id": "recipe_lunch",
+                    "dish_name": "Lunch Rice",
+                    "macros_per_serving": {"kcal": 500.0, "protein_g": 30.0, "fat_g": 15.0, "carb_g": 60.0},
+                    "ingredients": ["rice"],
+                },
+                "servings": 1.0,
+                "macros": {"kcal": 500.0, "protein_g": 30.0, "fat_g": 15.0, "carb_g": 60.0},
+            },
+        },
+    }
+
+    logged = log_plan_to_meal_log(plan, "user_123", client_manager)
+
+    assert len(logged) == 2
+    inserted = [call.args[0] for call in log_collection.data.insert.call_args_list]
+    log_ids = [entry["log_id"] for entry in inserted]
+    assert len(log_ids) == len(set(log_ids))
+    assert {entry["source_plan_id"] for entry in inserted} == {"plan_123"}
+    assert {entry["recipe_id"] for entry in inserted} == {"recipe_breakfast", "recipe_lunch"}
+    assert {entry["dish_name"] for entry in inserted} == {"Breakfast Bowl", "Lunch Rice"}
+    assert not log_collection.data.delete_by_id.called
 

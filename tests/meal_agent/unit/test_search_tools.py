@@ -7,8 +7,24 @@ Tests for:
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from MealAgent.tools.search.search_and_rank import search_and_rank_tool
+from MealAgent.tools.search.search_and_rank import _extract_search_score, search_and_rank_tool
 from elysia.objects import Result, Response, Error
+
+
+def test_extract_search_score_reads_v4_metadata_object():
+    obj = MagicMock()
+    obj._additional = None
+    obj.metadata = MagicMock(score=0.42)
+
+    assert _extract_search_score(obj) == 0.42
+
+
+def test_extract_search_score_reads_metadata_dict():
+    obj = MagicMock()
+    obj._additional = None
+    obj.metadata = {"score": "0.73"}
+
+    assert _extract_search_score(obj) == 0.73
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Iterable, Tuple
 from uuid import uuid4
 
 from MealAgent.tools.utils.weaviate_filters import build_filters_from_where
@@ -93,9 +93,31 @@ def _validate_constraints(
     """Validate that plan meals respect diet/allergen constraints."""
     violations = []
 
-    for meal_key, meal_data in plan.get("meals", {}).items():
-        recipe = meal_data.get("recipe", {})
-        recipe_id = recipe.get("food_id", "")
+    def _iter_meal_recipes() -> Iterable[Tuple[str, Dict[str, Any]]]:
+        for meal_key, meal_data in plan.get("meals", {}).items():
+            if not isinstance(meal_data, dict):
+                continue
+
+            recipe = meal_data.get("recipe", {})
+            if isinstance(recipe, dict) and recipe:
+                yield meal_key, recipe
+
+            for idx, accompaniment in enumerate(meal_data.get("accompaniments", []) or []):
+                if not isinstance(accompaniment, dict):
+                    continue
+                acc_recipe = accompaniment.get("recipe", {})
+                if isinstance(acc_recipe, dict) and acc_recipe:
+                    yield f"{meal_key}.accompaniment[{idx}]", acc_recipe
+
+        for idx, snack in enumerate(plan.get("snacks", []) or []):
+            if not isinstance(snack, dict):
+                continue
+            recipe = snack.get("recipe", snack)
+            if isinstance(recipe, dict) and recipe:
+                yield f"snack[{idx}]", recipe
+
+    for meal_key, recipe in _iter_meal_recipes():
+        recipe_id = recipe.get("food_id") or recipe.get("recipe_id", "")
 
         # Check diet type (if Recipe has diet_type field)
         if diet_types:
@@ -321,7 +343,9 @@ def _try_swap_alternatives(
     for alt_recipe in alternatives:
         alt_macros = _get_meal_macros(alt_recipe)
         
-        # Calculate optimal serving size
+        # Calculate optimal serving size. Do not overwrite this with a fixed
+        # 1.0 value: the whole purpose of this helper is to compare swaps using
+        # serving sizes that better fit the meal macro target.
         if dish_type == "main":
             # Scale by protein for main dishes
             target_protein = target_macros.get("protein_g", 0.0)
@@ -330,9 +354,6 @@ def _try_swap_alternatives(
             # Scale by kcal for carb dishes
             target_kcal = target_macros.get("kcal", 0.0)
             alt_servings = _scale_carb_by_kcal(alt_recipe, target_kcal, max_scale=1.5)
-        
-        # Always use 1.0 serving (user requirement)
-        alt_servings = 1.0
         
         # Calculate score for this alternative
         alt_meal_macros = {k: alt_macros[k] * alt_servings for k in alt_macros}
@@ -412,6 +433,13 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     plan_type = plan.get("plan_type", "day")
 
+    def _serialize_actual_macros(macros: Dict[str, Any]) -> str:
+        normalized = {
+            key: float(macros.get(key, 0.0))
+            for key in ["kcal", "protein_g", "fat_g", "carb_g"]
+        }
+        return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+
     def _append_meal_entries(meals: Dict[str, Any], day_index: int):
         for meal_key, meal_data in meals.items():
             meal_type = meal_data.get("meal_type", meal_key)
@@ -437,7 +465,7 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                             "dish_name": main_dish_name,
                             "servings": servings,
                             # Store main recipe macros only (not including accompaniments)
-                            "actual_macros": main_macros if isinstance(main_macros, dict) else {},
+                            "actual_macros": _serialize_actual_macros(main_macros),
                         }
                     )
                     logging.debug(
@@ -479,7 +507,7 @@ def _build_plan_items(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "dish_name": acc_dish_name,
                         "servings": acc_servings,
                         # Store accompaniment macros separately
-                        "actual_macros": acc_total_macros if isinstance(acc_total_macros, dict) else {},
+                        "actual_macros": _serialize_actual_macros(acc_total_macros),
                     }
                 )
                 logging.debug(
