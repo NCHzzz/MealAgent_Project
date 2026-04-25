@@ -2,6 +2,8 @@
 
 MealAgent is an open-source meal-planning assistant built on top of the Elysia decision-tree agent framework. It combines a FastAPI backend, a Next.js frontend, Weaviate vector storage, and domain-specific MealAgent tools for nutrition targets, pantry-aware planning, recipe search, meal logging, and evaluation.
 
+This repository is also the implementation artifact for the thesis **"AI-Assisted Platform for Personalized Meal Planning and Nutrition Guidance"**. The thesis studies how Agentic RAG, hybrid recipe retrieval, structured nutrition data, and tool orchestration can produce personalized and explainable meal plans for healthy users.
+
 ## What is in this repository?
 
 | Path | Purpose |
@@ -13,6 +15,16 @@ MealAgent is an open-source meal-planning assistant built on top of the Elysia d
 | `evaluation/` | Nutrition error, LLM-as-a-judge, and semantic evaluation tooling. |
 | `docs/` | Public docs plus internal AI-devkit design/testing/deployment notes. |
 | `scripts/` | Windows PowerShell setup/start/status/stop helpers. |
+
+## Thesis-derived highlights
+
+- **Problem:** users need daily/weekly meal plans that satisfy nutrition targets while respecting diet type, allergies, preferences, and pantry inventory.
+- **Approach:** Agentic RAG coordinates an Elysia decision tree, MealAgent tools, Weaviate hybrid search, and configurable LLM providers.
+- **Knowledge base:** USDA FoodData Central (~8,200 food items) plus a Vietnamese recipe dataset (~4,000 recipes).
+- **Evaluation:** thesis results report 100% Excellent/Good nutritional compliance on 58 evaluated meal outputs, with mean overall nutritional error of 6.94%.
+- **User study:** 20 non-clinical participants rated overall user experience at 4.44/5.0.
+
+See [Thesis overview](docs/thesis/README.md) for the Markdown summary extracted from the local thesis materials.
 
 ## Architecture
 
@@ -132,6 +144,7 @@ Generated evaluation outputs are ignored under `evaluation/results/`.
 - [Getting started](docs/getting-started/local-development.md)
 - [Configuration](docs/getting-started/configuration.md)
 - [Demo and thesis materials](docs/demo/README.md)
+- [Thesis overview](docs/thesis/README.md)
 - [MealAgent data pipeline](MealAgent/docs/DATA_PIPELINE.md)
 - [Plan-day workflow](MealAgent/docs/PLAN_DAY_WORKFLOW.md)
 - [Evaluation framework](evaluation/README.md)
