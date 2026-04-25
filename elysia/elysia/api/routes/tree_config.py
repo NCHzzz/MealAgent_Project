@@ -14,7 +14,7 @@ from elysia.api.dependencies.common import get_user_manager
 from elysia.api.services.user import UserManager
 from elysia.util.parsing import format_dict_to_serialisable
 from elysia.tree.tree import Tree
-from elysia.config import Settings, is_api_key
+from elysia.config import Settings, is_api_key, redact_sensitive_settings
 
 from weaviate.util import generate_uuid5
 
@@ -36,6 +36,15 @@ def rename_keys(config_item: dict):
     renamed_config["settings"] = renamed_settings
 
     return renamed_config
+
+
+def redacted_config(config: Config | dict):
+    if isinstance(config, Config):
+        return config.to_json(redact_sensitive=True)
+    copied = dict(config)
+    if isinstance(copied.get("settings"), dict):
+        copied["settings"] = redact_sensitive_settings(copied["settings"])
+    return copied
 
 
 router = APIRouter()
@@ -73,7 +82,7 @@ async def get_tree_config(
         return JSONResponse(content={"error": str(e), "config": {}}, headers=headers)
 
     return JSONResponse(
-        content={"error": "", "config": config.to_json()}, headers=headers
+        content={"error": "", "config": config.to_json(redact_sensitive=True)}, headers=headers
     )
 
 
@@ -136,7 +145,7 @@ async def new_tree_config(
         logger.exception(f"Error in /new_tree_config API")
         return JSONResponse(content={"error": str(e), "config": {}})
 
-    return JSONResponse(content={"error": "", "config": config.to_json()})
+    return JSONResponse(content={"error": "", "config": config.to_json(redact_sensitive=True)})
 
 
 @router.post("/{user_id}/{conversation_id}")
@@ -175,7 +184,7 @@ async def change_config_tree(
     logger.debug(f"/change_config_tree API request received")
     logger.debug(f"User ID: {user_id}")
     logger.debug(f"Conversation ID: {conversation_id}")
-    logger.debug(f"Settings: {data.settings}")
+    logger.debug("Tree settings update payload received")
     logger.debug(f"Style: {data.style}")
     logger.debug(f"Agent description: {data.agent_description}")
     logger.debug(f"End goal: {data.end_goal}")
@@ -222,7 +231,7 @@ async def change_config_tree(
         logger.exception(f"Error in /change_config_tree API")
         return JSONResponse(content={"error": str(e), "config": {}})
 
-    return JSONResponse(content={"error": "", "config": config.to_json()})
+    return JSONResponse(content={"error": "", "config": config.to_json(redact_sensitive=True)})
 
 
 @router.post("/{user_id}/{conversation_id}/{config_id}/load")
@@ -296,4 +305,4 @@ async def load_config_tree(
         logger.exception(f"Error in /load_config API")
         return JSONResponse(content={"error": str(e), "config": {}})
 
-    return JSONResponse(content={"error": "", "config": renamed_config})
+    return JSONResponse(content={"error": "", "config": redacted_config(renamed_config)})

@@ -18,10 +18,10 @@ from elysia.api.core.log import logger
 from elysia.api.dependencies.common import get_user_manager
 from elysia.api.services.user import UserManager
 from elysia.util.parsing import format_dict_to_serialisable, format_datetime
-from elysia.config import Settings
+from elysia.config import REDACTED_SECRET, Settings, redact_sensitive_settings
 from elysia.api.services.tree import TreeManager
 from elysia.api.utils.config import FrontendConfig
-from elysia.api.utils.encryption import encrypt_api_keys, decrypt_api_keys
+from elysia.api.utils.encryption import encrypt_api_keys, decrypt_api_keys, encrypt_secret_value
 from elysia.api.utils.models import models
 
 import weaviate.classes.config as wc
@@ -50,6 +50,24 @@ def rename_keys(config_item: dict):
     return renamed_config
 
 
+def redacted_config(config: Config | dict):
+    if isinstance(config, Config):
+        return config.to_json(redact_sensitive=True)
+    copied = dict(config)
+    if isinstance(copied.get("settings"), dict):
+        copied["settings"] = redact_sensitive_settings(copied["settings"])
+    return copied
+
+
+def redacted_frontend_config(frontend_config: FrontendConfig | dict):
+    if isinstance(frontend_config, FrontendConfig):
+        return frontend_config.to_json(redact_sensitive=True)
+    copied = dict(frontend_config)
+    if copied.get("save_location_wcd_api_key"):
+        copied["save_location_wcd_api_key"] = "***REDACTED***"
+    return copied
+
+
 router = APIRouter()
 
 
@@ -73,7 +91,7 @@ async def update_frontend_config(
     """
     logger.debug(f"/update_frontend_config API request received")
     logger.debug(f"User ID: {user_id}")
-    logger.debug(f"Config: {data.config}")
+    logger.debug("Frontend config update requested")
 
     try:
         await user_manager.update_frontend_config(user_id, data.config)
@@ -106,8 +124,8 @@ async def get_current_user_config(
 
     try:
         user = await user_manager.get_user_local(user_id)
-        config = user["tree_manager"].config.to_json()
-        frontend_config = user["frontend_config"].to_json()
+        config = user["tree_manager"].config.to_json(redact_sensitive=True)
+        frontend_config = user["frontend_config"].to_json(redact_sensitive=True)
 
     except Exception as e:
         logger.exception(f"Error in /get_current_user_config API")
@@ -196,8 +214,8 @@ async def load_a_config(
     return JSONResponse(
         content={
             "error": "",
-            "config": renamed_config,
-            "frontend_config": frontend_config.to_json(),
+            "config": redacted_config(renamed_config),
+            "frontend_config": frontend_config.to_json(redact_sensitive=True),
             "warnings": warnings,
         },
         headers=headers,
@@ -268,8 +286,8 @@ async def new_user_config(
     return JSONResponse(
         content={
             "error": "",
-            "config": config.to_json(),
-            "frontend_config": user["frontend_config"].to_json(),
+            "config": config.to_json(redact_sensitive=True),
+            "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
         }
     )
 
@@ -282,9 +300,17 @@ def save_frontend_config_to_file(user_id: str, frontend_config: dict):
         config_dir = elysia_package_dir / "api" / "user_configs"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / f"frontend_config_{user_id}.json"
+        config_to_save = dict(frontend_config)
+        wcd_api_key = config_to_save.get("save_location_wcd_api_key")
+        if (
+            wcd_api_key
+            and wcd_api_key != REDACTED_SECRET
+            and not str(wcd_api_key).startswith("fernet:")
+        ):
+            config_to_save["save_location_wcd_api_key"] = f"fernet:{encrypt_secret_value(wcd_api_key)}"
 
         with open(config_file, "w") as f:
-            json.dump(frontend_config, f)
+            json.dump(config_to_save, f)
         logger.debug(f"Frontend config saved to local file: {config_file}")
     except Exception as e:
         logger.error(f"Error in save_frontend_config_to_file: {str(e)}")
@@ -333,8 +359,7 @@ async def save_config_user(
     logger.debug(f"User ID: {user_id}")
     logger.debug(f"Config ID: {config_id}")
     logger.debug(f"Name: {data.name}")
-    logger.debug(f"Backend Config: {data.config}")
-    logger.debug(f"Frontend Config: {data.frontend_config}")
+    logger.debug("Backend and frontend config payloads received")
     logger.debug(f"Default: {data.default}")
 
     warnings = []
@@ -369,8 +394,8 @@ async def save_config_user(
             return JSONResponse(
                 content={
                     "error": str(e),
-                    "config": tree_manager.config.to_json(),
-                    "frontend_config": user["frontend_config"].to_json(),
+                    "config": tree_manager.config.to_json(redact_sensitive=True),
+                    "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
                     "warnings": warnings,
                 }
             )
@@ -390,8 +415,8 @@ async def save_config_user(
                     return JSONResponse(
                         content={
                             "error": "",
-                            "config": tree_manager.config.to_json(),
-                            "frontend_config": user["frontend_config"].to_json(),
+                            "config": tree_manager.config.to_json(redact_sensitive=True),
+                            "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
                             "warnings": warnings,
                         }
                     )
@@ -402,8 +427,8 @@ async def save_config_user(
                     return JSONResponse(
                         content={
                             "error": str(e),
-                            "config": tree_manager.config.to_json(),
-                            "frontend_config": user["frontend_config"].to_json(),
+                            "config": tree_manager.config.to_json(redact_sensitive=True),
+                            "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
                             "warnings": warnings,
                         }
                     )
@@ -412,8 +437,8 @@ async def save_config_user(
         return JSONResponse(
             content={
                 "error": "",
-                "config": tree_manager.config.to_json(),
-                "frontend_config": user["frontend_config"].to_json(),
+                "config": tree_manager.config.to_json(redact_sensitive=True),
+                "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
                 "warnings": warnings,
             }
         )
@@ -545,20 +570,19 @@ async def save_config_user(
         return JSONResponse(
             content={
                 "error": str(e),
-                "config": tree_manager.config.to_json(),
-                "frontend_config": user["frontend_config"].to_json(),
+                "config": tree_manager.config.to_json(redact_sensitive=True),
+                "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
                 "warnings": warnings,
             }
         )
 
-    logger.debug(f"Backend config returned: {tree_manager.config.to_json()}")
-    logger.debug(f"Frontend config returned: {user['frontend_config'].to_json()}")
+    logger.debug("Returning redacted backend and frontend config")
 
     return JSONResponse(
         content={
             "error": "",
-            "config": tree_manager.config.to_json(),
-            "frontend_config": user["frontend_config"].to_json(),
+            "config": tree_manager.config.to_json(redact_sensitive=True),
+            "frontend_config": user["frontend_config"].to_json(redact_sensitive=True),
             "warnings": warnings,
         }
     )
@@ -681,8 +705,8 @@ async def load_config_user(
         return JSONResponse(
             content={
                 "error": str(e),
-                "config": config.to_json(),
-                "frontend_config": frontend_config.to_json(),
+                "config": config.to_json(redact_sensitive=True),
+                "frontend_config": frontend_config.to_json(redact_sensitive=True),
                 "warnings": warnings,
             }
         )
@@ -693,8 +717,8 @@ async def load_config_user(
     return JSONResponse(
         content={
             "error": "",
-            "config": config.to_json(),
-            "frontend_config": frontend_config.to_json(),
+            "config": config.to_json(redact_sensitive=True),
+            "frontend_config": frontend_config.to_json(redact_sensitive=True),
             "warnings": warnings,
         }
     )

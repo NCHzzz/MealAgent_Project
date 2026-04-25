@@ -32,6 +32,14 @@ from elysia.api.utils.resources import print_resources
 from pathlib import Path
 
 
+def _parse_cors_origins() -> list[str]:
+    origins = os.getenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+    )
+    return [origin.strip() for origin in origins.split(",") if origin.strip()]
+
+
 async def check_timeouts():
     user_manager = get_user_manager()
     await user_manager.check_all_trees_timeout()
@@ -72,8 +80,8 @@ app = FastAPI(title="Elysia API", version="0.3.0", lifespan=lifespan)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_parse_cors_origins(),
+    allow_credentials=os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true",
     allow_methods=["*"],
     allow_headers=["*"],
 )

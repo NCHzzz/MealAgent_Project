@@ -9,7 +9,7 @@ from litellm import (
 )
 from litellm.utils import get_valid_models, check_valid_key
 from rich.logging import RichHandler
-from typing import Callable, Literal
+from typing import Callable, Literal, Any
 
 import spacy
 import random
@@ -117,6 +117,29 @@ def is_api_key(key: str) -> bool:
         or key.lower().endswith("_region_name")
         or key.lower().endswith("_token")
     )
+
+
+REDACTED_SECRET = "***REDACTED***"
+
+
+def redact_sensitive_value(value: Any) -> Any:
+    """Mask secret values before sending configuration data to clients."""
+    if isinstance(value, dict):
+        return {key: redact_sensitive_value(item) for key, item in value.items()}
+    if isinstance(value, str) and value:
+        return REDACTED_SECRET
+    return value
+
+
+def redact_sensitive_settings(settings_data: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of settings data with API credentials redacted."""
+    redacted = deepcopy(settings_data)
+    for key in list(redacted.keys()):
+        if key == "API_KEYS":
+            redacted[key] = redact_sensitive_value(redacted[key])
+        elif is_api_key(key):
+            redacted[key] = redact_sensitive_value(redacted[key])
+    return redacted
 
 
 class Settings:
@@ -464,7 +487,8 @@ class Settings:
             kwargs.pop("wcd_url")
 
         if "wcd_api_key" in kwargs:
-            self.WCD_API_KEY = kwargs["wcd_api_key"]
+            if kwargs["wcd_api_key"] != REDACTED_SECRET:
+                self.WCD_API_KEY = kwargs["wcd_api_key"]
             kwargs.pop("wcd_api_key")
 
         if "weaviate_is_local" in kwargs:
@@ -513,7 +537,8 @@ class Settings:
             kwargs.pop("weaviate_url")
 
         if "weaviate_api_key" in kwargs:
-            self.WCD_API_KEY = kwargs["weaviate_api_key"]
+            if kwargs["weaviate_api_key"] != REDACTED_SECRET:
+                self.WCD_API_KEY = kwargs["weaviate_api_key"]
             kwargs.pop("weaviate_api_key")
 
         if "logging_level" in kwargs or "logger_level" in kwargs:
@@ -573,14 +598,16 @@ class Settings:
 
         if "api_keys" in kwargs and isinstance(kwargs["api_keys"], dict):
             for key, value in kwargs["api_keys"].items():
-                self.set_api_key(value, key)
+                if value != REDACTED_SECRET:
+                    self.set_api_key(value, key)
             kwargs.pop("api_keys")
 
         # remainder of kwargs are API keys or saved there
         removed_kwargs = []
         for key, value in kwargs.items():
             if is_api_key(key):
-                self.set_api_key(value, key)
+                if value != REDACTED_SECRET:
+                    self.set_api_key(value, key)
                 removed_kwargs.append(key)
 
         for key in removed_kwargs:
@@ -621,14 +648,17 @@ class Settings:
                 out += f"Custom gRPC: {self.CUSTOM_GRPC_HOST}:{self.CUSTOM_GRPC_PORT} (secure: {self.CUSTOM_GRPC_SECURE})\n"
         return out
 
-    def to_json(self):
-        return {
+    def to_json(self, redact_sensitive: bool = False):
+        data = {
             item: getattr(self, item)
             for item in dir(self)
             if not item.startswith("_")
             and not isinstance(getattr(self, item), Callable)
             and item not in ["BASE_MODEL_LM", "COMPLEX_MODEL_LM", "logger"]
         }
+        if redact_sensitive:
+            return redact_sensitive_settings(data)
+        return data
 
     @classmethod
     def from_json(cls, json_data: dict):

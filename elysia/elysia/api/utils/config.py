@@ -4,7 +4,7 @@ import os
 from typing import Literal, Optional, Callable, Any
 from uuid import uuid4
 
-from elysia.config import Settings
+from elysia.config import REDACTED_SECRET, Settings
 from elysia.util.client import ClientManager
 
 BranchInitType = Literal["default", "one_branch", "multi_branch", "empty"]
@@ -97,11 +97,11 @@ class Config:
                 # MealAgent package not available; fall back to default Elysia tree
                 self.tree_builder = None
 
-    def to_json(self):
+    def to_json(self, redact_sensitive: bool = False):
         return {
             "id": self.id,
             "name": self.name,
-            "settings": self.settings.to_json(),
+            "settings": self.settings.to_json(redact_sensitive=redact_sensitive),
             "style": self.style,
             "agent_description": self.agent_description,
             "end_goal": self.end_goal,
@@ -210,12 +210,16 @@ class FrontendConfig:
             client_timeout=self.config["client_timeout"],
         )
 
-    def to_json(self):
+    def to_json(self, redact_sensitive: bool = False):
         return {
             "save_trees_to_weaviate": self.config["save_trees_to_weaviate"],
             "save_configs_to_weaviate": self.config["save_configs_to_weaviate"],
             "save_location_wcd_url": self.save_location_wcd_url,
-            "save_location_wcd_api_key": self.save_location_wcd_api_key,
+            "save_location_wcd_api_key": (
+                REDACTED_SECRET
+                if redact_sensitive and self.save_location_wcd_api_key
+                else self.save_location_wcd_api_key
+            ),
             "save_location_weaviate_is_local": self.save_location_weaviate_is_local,
             "save_location_local_weaviate_port": self.save_location_local_weaviate_port,
             "save_location_local_weaviate_grpc_port": self.save_location_local_weaviate_grpc_port,
@@ -287,8 +291,9 @@ class FrontendConfig:
             self.save_location_wcd_url = kwargs["save_location_wcd_url"]
             reload_client_manager = True
         if "save_location_wcd_api_key" in kwargs:
-            self.save_location_wcd_api_key = kwargs["save_location_wcd_api_key"]
-            reload_client_manager = True
+            if kwargs["save_location_wcd_api_key"] != REDACTED_SECRET:
+                self.save_location_wcd_api_key = kwargs["save_location_wcd_api_key"]
+                reload_client_manager = True
         if "save_location_weaviate_is_local" in kwargs:
             self.save_location_weaviate_is_local = kwargs[
                 "save_location_weaviate_is_local"

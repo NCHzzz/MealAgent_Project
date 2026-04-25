@@ -118,8 +118,8 @@ async def initialise_user(
 
         # if a user exists, get the existing configs
         user = await user_manager.get_user_local(user_id)
-        config = user["tree_manager"].config.to_json()
-        frontend_config = user["frontend_config"].to_json()
+        config = user["tree_manager"].config.to_json(redact_sensitive=True)
+        frontend_config = user["frontend_config"].to_json(redact_sensitive=True)
 
         correct_settings = user["tree_manager"].config.settings.check()
 
@@ -127,8 +127,7 @@ async def initialise_user(
         logger.debug(f"Output of init/user:")
         logger.debug(f"User ID: {user_id}")
         logger.debug(f"User exists: {user_exists}")
-        logger.debug(f"Config: {config}")
-        logger.debug(f"Frontend config: {frontend_config}")
+        logger.debug("Config and frontend config prepared for response with sensitive values redacted")
         logger.debug(f"Correct settings: {correct_settings}")
 
     except Exception as e:

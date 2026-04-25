@@ -16,6 +16,7 @@ from elysia.util.client import ClientManager
 from elysia.api.core.log import logger
 from elysia.api.utils.config import Config
 from elysia.api.utils.config import FrontendConfig
+from elysia.api.utils.encryption import decrypt_secret_value
 from elysia.tree.util import get_saved_trees_weaviate
 
 
@@ -52,7 +53,13 @@ async def load_frontend_config_from_file(
             return FrontendConfig(logger=logger)
 
         with open(config_file, "r") as f:
-            fe_config = await FrontendConfig.from_json(json.load(f), logger)
+            config_json = json.load(f)
+            wcd_api_key = config_json.get("save_location_wcd_api_key")
+            if isinstance(wcd_api_key, str) and wcd_api_key.startswith("fernet:"):
+                config_json["save_location_wcd_api_key"] = decrypt_secret_value(
+                    wcd_api_key.removeprefix("fernet:")
+                )
+            fe_config = await FrontendConfig.from_json(config_json, logger)
             return fe_config
 
     except Exception as e:

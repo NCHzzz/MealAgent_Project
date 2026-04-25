@@ -34,6 +34,32 @@ def encrypt_api_keys(settings_dict: dict):
     return settings_dict_copy
 
 
+def encrypt_secret_value(value: str) -> str:
+    """Encrypt a single secret value for local persistence."""
+    load_dotenv()
+
+    if "FERNET_KEY" in os.environ:
+        auth_key = os.environ["FERNET_KEY"]
+    else:
+        auth_key = Fernet.generate_key().decode("utf-8")
+        set_key(".env", "FERNET_KEY", auth_key)
+
+    return Fernet(auth_key.encode("utf-8")).encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_secret_value(value: str) -> str:
+    """Decrypt a single secret value from local persistence."""
+    load_dotenv()
+
+    if "FERNET_KEY" in os.environ:
+        auth_key = os.environ["FERNET_KEY"]
+    else:
+        auth_key = Fernet.generate_key().decode("utf-8")
+        set_key(".env", "FERNET_KEY", auth_key)
+
+    return Fernet(auth_key.encode("utf-8")).decrypt(value.encode("utf-8")).decode("utf-8")
+
+
 def decrypt_api_keys(settings_dict: dict):
 
     load_dotenv()

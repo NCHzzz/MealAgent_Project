@@ -2082,6 +2082,9 @@ class Tree:
         """
         settings = Settings.from_json(json_data["settings"])
         logger = settings.logger
+        # IMPORTANT: Always use low_memory=False when loading tree from JSON/Weaviate
+        # to ensure chat history and model cache are preserved for continued interaction.
+        # The original low_memory value from JSON is ignored to prevent loss of interaction capability.
         tree = cls(
             user_id=json_data["user_id"],
             conversation_id=json_data["conversation_id"],
@@ -2089,7 +2092,7 @@ class Tree:
             style=json_data["tree_data"]["atlas"]["style"],
             agent_description=json_data["tree_data"]["atlas"]["agent_description"],
             end_goal=json_data["tree_data"]["atlas"]["end_goal"],
-            low_memory=json_data["low_memory"],
+            low_memory=False,  # Always False to preserve chat interaction
             use_elysia_collections=json_data["use_elysia_collections"],
             settings=settings,
         )
