@@ -54,5 +54,8 @@ services:
     ports:
       - "9000:8080"    # optional: mở ra để test /health
 
+# volumes:
+  # weaviate_data_v2: {}
 volumes:
-  weaviate_data_v2: {}
+  weaviate_data_v2:
+    name: weaviate_data_v2
